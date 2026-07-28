@@ -104,6 +104,202 @@ function _batched_flat_gradient_cache(
     return BatchedFlatGradientCache(objective, config, vec(gradient_buffer))
 end
 
+# --- analytic-gradient chain-block threading (issue #143) -------------------
+#
+# The HOST batched analytic gradient (`_batched_backend_logjoint_and_gradient_unconstrained!`)
+# is per-column independent: the sufficient-statistics fusion and the observed-
+# loop reduction run per chain, so partitioning the batch columns into
+# contiguous blocks and writing disjoint slices of the totals/gradient buffers
+# is BITWISE identical to the serial pass. That makes threading over blocks a
+# free multi-core win for logistic-shaped models (per-observation covariate work
+# that cannot be sufficient-statistics-fused). The workspace scratch is NOT
+# thread-safe, so each block owns its own `BatchedBackendGradientCache`.
+#
+# Work-size gate: threading only helps when the per-call work stays >= ~ms;
+# task-spawn overhead dominates sub-ms gradients (a sufficient-statistics-fused
+# gauss gradient is ~0.27 ms at 512 chains and MUST stay serial). We gate on a
+# deterministic, machine-independent estimate of the NON-FUSED per-observation
+# gradient work:
+#
+#     work = batch_size * parameter_count * (sum of observation counts over
+#            observed-loop steps that did NOT take the sufficient-statistics
+#            fused tier)
+#
+# A sufficient-statistics-fused loop collapses to a few cached numbers, so it
+# contributes 0 -- gauss (fully fused) estimates 0 and always stays serial. The
+# fused/non-fused split is read once from the construction-time probe's staging
+# on the backend cache. The threshold below (50_000 work units) was tuned on the
+# crossppl logistic benchmark (n=500 observations, 9 parameters): it thresholds
+# logistic IN at batch_size >= 64 (64*9*500 = 288_000, a ~4 ms serial gradient)
+# while keeping genuinely small non-fused loops (and all fused models) serial.
+const _BATCHED_GRADIENT_THREAD_WORK_THRESHOLD = Ref(50_000)
+
+# Enumerate contiguous, disjoint column ranges partitioning 1:n into k blocks as
+# evenly as possible (leading blocks take the remainder).
+function _batched_gradient_block_ranges(n::Int, k::Int)
+    base, extra = divrem(n, k)
+    ranges = Vector{UnitRange{Int}}(undef, k)
+    start = 1
+    for b = 1:k
+        width = base + (b <= extra ? 1 : 0)
+        ranges[b] = start:(start+width-1)
+        start += width
+    end
+    return ranges
+end
+
+_batched_args_block(args::Tuple, ::UnitRange{Int}) = args
+_batched_args_block(args::AbstractVector, range::UnitRange{Int}) = args[range]
+
+_batched_constraints_block(constraints::ChoiceMap, ::UnitRange{Int}) = constraints
+_batched_constraints_block(constraints::AbstractVector, range::UnitRange{Int}) = constraints[range]
+
+# Non-fused per-observation gradient work estimate (see the gate note above).
+# Reads the construction-time probe staging: `observed_loop_values` holds the
+# gathered observation vector per loop step; `observed_loop_stats` holds a
+# non-`nothing` sufficient-statistics summary only for the fused loops. A loop
+# with a fused stats entry contributes 0; every other staged loop contributes
+# its observation count.
+function _batched_gradient_nonfused_obs(backend_cache::BatchedBackendGradientCache)
+    nonfused = 0
+    for (step, entry) in backend_cache.observed_loop_values
+        stats_entry = get(backend_cache.observed_loop_stats, step, nothing)
+        if stats_entry !== nothing && stats_entry[2] !== nothing
+            continue  # sufficient-statistics-fused loop: ~O(1) per chain
+        end
+        nonfused += length(entry[2])
+    end
+    return nonfused
+end
+
+# Build the chain-block threading plan, or return `nothing` when the work-size
+# gate keeps the problem serial (small/fused models, single-threaded runtimes,
+# or too few columns to block). This is construction-time work, done once.
+function _build_backend_gradient_thread_plan(
+    model::TeaModel,
+    backend_cache::BatchedBackendGradientCache,
+    gradient_buffer::AbstractMatrix,
+    params::AbstractMatrix,
+    batch_args,
+    batch_constraints,
+    batch_size::Int,
+    parameter_count::Int;
+    reject_invalid_parameters::Bool=false,
+)
+    Threads.nthreads() > 1 || return nothing
+    nonfused_obs = _batched_gradient_nonfused_obs(backend_cache)
+    work = batch_size * parameter_count * nonfused_obs
+    work >= _BATCHED_GRADIENT_THREAD_WORK_THRESHOLD[] || return nothing
+
+    # each block must own >= 2 columns so per-block scratch pays for the spawn
+    nblocks = min(Threads.nthreads(), fld(batch_size, 2))
+    nblocks >= 2 || return nothing
+
+    ranges = _batched_gradient_block_ranges(batch_size, nblocks)
+    caches = Vector{typeof(backend_cache)}(undef, length(ranges))
+    for (index, range) in enumerate(ranges)
+        block_cache = _batched_backend_gradient_cache(
+            model,
+            view(gradient_buffer, :, range),
+            view(params, :, range),
+            _batched_args_block(batch_args, range),
+            _batched_constraints_block(batch_constraints, range);
+            reject_invalid_parameters=reject_invalid_parameters,
+        )
+        # a per-block capability gap the full-batch probe did not hit degrades
+        # the whole cache to serial (correctness over parallelism)
+        isnothing(block_cache) && return nothing
+        caches[index] = block_cache
+    end
+    return BatchedGradientThreadPlan(ranges, caches, reject_invalid_parameters)
+end
+
+# Should a caught block error degrade the whole call to the serial path (a
+# `BatchedBackendFallback`, or -- in reject mode -- a per-lane parameter
+# validation throw), or is it a genuine bug to rethrow? Mirrors the serial
+# `_batched_backend_gradient_or_columns!` degradation predicate.
+function _batched_gradient_block_error_recoverable(err, reject_invalid_parameters::Bool)
+    return err isa BatchedBackendFallback ||
+           (reject_invalid_parameters && (err isa ArgumentError || err isa DomainError))
+end
+
+# Run each block's analytic gradient under `Threads.@threads`, writing disjoint
+# slices of `totals`/`gradient_buffer`. Returns `true` on success; returns
+# `false` if any block hit a recoverable fallback/reject error (the caller then
+# redoes the whole call serially -- partial block writes are overwritten). A
+# non-recoverable block error is rethrown.
+function _threaded_backend_gradient!(
+    totals::AbstractVector,
+    cache::BatchedLogjointGradientCache,
+    params::AbstractMatrix,
+    plan::BatchedGradientThreadPlan,
+)
+    ranges = plan.ranges
+    caches = plan.caches
+    nblocks = length(ranges)
+    errors = Vector{Any}(nothing, nblocks)
+    Threads.@threads for block = 1:nblocks
+        range = ranges[block]
+        try
+            _batched_backend_logjoint_and_gradient_unconstrained!(
+                view(totals, range),
+                view(cache.gradient_buffer, :, range),
+                cache.model,
+                caches[block],
+                view(params, :, range),
+            )
+        catch err
+            errors[block] = err
+        end
+    end
+    recoverable = false
+    for err in errors
+        isnothing(err) && continue
+        if _batched_gradient_block_error_recoverable(err, plan.reject_invalid_parameters)
+            recoverable = true
+        else
+            throw(err)
+        end
+    end
+    return !recoverable
+end
+
+# Threaded logjoint-only pass (no gradient): each block scores its column slice
+# through its own workspace. The per-workspace scorer self-recovers to its
+# per-column fallback, so blocks do not raise recoverable errors here; any
+# escape degrades the whole call to serial.
+function _threaded_backend_logjoint!(
+    destination::AbstractVector,
+    cache::BatchedLogjointGradientCache,
+    params::AbstractMatrix,
+    plan::BatchedGradientThreadPlan,
+)
+    ranges = plan.ranges
+    caches = plan.caches
+    nblocks = length(ranges)
+    errors = Vector{Any}(nothing, nblocks)
+    Threads.@threads for block = 1:nblocks
+        range = ranges[block]
+        block_cache = caches[block]
+        try
+            _batched_logjoint_unconstrained_with_workspace!(
+                view(destination, range),
+                cache.model,
+                block_cache.workspace,
+                view(params, :, range),
+                block_cache.args,
+                block_cache.constraints,
+            )
+        catch err
+            errors[block] = err
+        end
+    end
+    for err in errors
+        isnothing(err) || return false
+    end
+    return true
+end
+
 # `reject_invalid_parameters=true` selects Stan-style reject semantics for the
 # compiled-plan evaluation tiers of this cache (issue #157); samplers construct
 # their caches with it on, the public gradient APIs keep the throwing default.
@@ -120,7 +316,7 @@ function BatchedLogjointGradientCache(
     parameter_count = size(params, 1)
     gradient_buffer = Matrix{float(eltype(params))}(undef, parameter_count, batch_size)
     if batch_size == 0
-        return BatchedLogjointGradientCache(model, Any[], nothing, nothing, gradient_buffer, parameter_count, batch_size)
+        return BatchedLogjointGradientCache(model, Any[], nothing, nothing, gradient_buffer, parameter_count, batch_size, nothing)
     end
 
     backend_cache = _batched_backend_gradient_cache(
@@ -128,7 +324,13 @@ function BatchedLogjointGradientCache(
         reject_invalid_parameters=reject_invalid_parameters,
     )
     if !isnothing(backend_cache)
-        return BatchedLogjointGradientCache(model, Any[], backend_cache, nothing, gradient_buffer, parameter_count, batch_size)
+        thread_plan = _build_backend_gradient_thread_plan(
+            model, backend_cache, gradient_buffer, params, batch_args, batch_constraints,
+            batch_size, parameter_count; reject_invalid_parameters=reject_invalid_parameters,
+        )
+        return BatchedLogjointGradientCache(
+            model, Any[], backend_cache, nothing, gradient_buffer, parameter_count, batch_size, thread_plan,
+        )
     end
 
     flat_cache =
@@ -138,7 +340,16 @@ function BatchedLogjointGradientCache(
             reject_invalid_parameters=reject_invalid_parameters,
         )
     if !isnothing(flat_cache)
-        return BatchedLogjointGradientCache(model, Any[], nothing, flat_cache, gradient_buffer, parameter_count, batch_size)
+        return BatchedLogjointGradientCache(
+            model,
+            Any[],
+            nothing,
+            flat_cache,
+            gradient_buffer,
+            parameter_count,
+            batch_size,
+            nothing,
+        )
     end
 
     first_cache = _batched_gradient_column_cache(
@@ -159,7 +370,16 @@ function BatchedLogjointGradientCache(
         )
     end
 
-    return BatchedLogjointGradientCache(model, column_caches, nothing, nothing, gradient_buffer, parameter_count, batch_size)
+    return BatchedLogjointGradientCache(
+        model,
+        column_caches,
+        nothing,
+        nothing,
+        gradient_buffer,
+        parameter_count,
+        batch_size,
+        nothing,
+    )
 end
 
 # A cached analytic backend gradient can hit a runtime capability gap the
@@ -174,6 +394,14 @@ function _batched_backend_gradient_or_columns!(
     params::AbstractMatrix,
 )
     backend_cache = cache.backend_cache
+    # threaded chain-block path (issue #143): run per-block analytic gradients in
+    # parallel over disjoint column slices. A recoverable block error degrades to
+    # the serial body below (it recomputes the whole call, overwriting any
+    # partial block writes).
+    plan = cache.thread_plan
+    if !isnothing(plan) && _threaded_backend_gradient!(totals, cache, params, plan)
+        return totals, cache.gradient_buffer
+    end
     try
         _batched_backend_logjoint_and_gradient_unconstrained!(
             totals,
@@ -240,6 +468,19 @@ function batched_logjoint_gradient_unconstrained!(
         return cache.gradient_buffer
     end
 
+    # per-column ForwardDiff fallback (issue #143): each column cache owns an
+    # independent objective/workspace/config and writes a disjoint gradient-buffer
+    # slice, so the loop threads with no shared mutable state and no RNG -- the
+    # result is bitwise identical to the serial loop. This tier is inherently
+    # heavy per column, so thread whenever there is more than one column per
+    # thread; no work-size gate is needed.
+    if Threads.nthreads() > 1 && cache.batch_size >= 2 * Threads.nthreads()
+        Threads.@threads for batch_index = 1:cache.batch_size
+            column_cache = cache.column_caches[batch_index]
+            ForwardDiff.gradient!(column_cache.buffer, column_cache.objective, view(params, :, batch_index), column_cache.config)
+        end
+        return cache.gradient_buffer
+    end
     for batch_index = 1:cache.batch_size
         column_cache = cache.column_caches[batch_index]
         ForwardDiff.gradient!(column_cache.buffer, column_cache.objective, view(params, :, batch_index), column_cache.config)
@@ -256,6 +497,10 @@ function _batched_logjoint_unconstrained_from_gradient_cache!(
         throw(DimensionMismatch("expected $(cache.batch_size) batched values, got $(length(destination))"))
 
     if !isnothing(cache.backend_cache)
+        plan = cache.thread_plan
+        if !isnothing(plan) && _threaded_backend_logjoint!(destination, cache, params, plan)
+            return destination
+        end
         return _batched_logjoint_unconstrained_with_workspace!(
             destination,
             cache.model,

@@ -117,7 +117,21 @@ function _backend_gradient_seed_rows(layout::ParameterLayout)
     return seed_rows
 end
 
-struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix}
+# Chain-block threading plan for the analytic backend gradient (issue #143).
+# `ranges` partitions the batch columns into contiguous, disjoint blocks;
+# `caches` holds one INDEPENDENT `BatchedBackendGradientCache` per block, each
+# sized for its block width (its own workspace scratch, slot gradients, and
+# observation staging) so blocks can run under `Threads.@threads` writing
+# disjoint slices of the shared totals/gradient buffers. `nothing` on the
+# gradient cache means the work-size gate kept this problem serial. Built once
+# at construction; the partition is fixed for the cache's lifetime.
+struct BatchedGradientThreadPlan{C}
+    ranges::Vector{UnitRange{Int}}
+    caches::C
+    reject_invalid_parameters::Bool
+end
+
+struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix,T}
     model::TeaModel
     column_caches::C
     backend_cache::B
@@ -125,6 +139,9 @@ struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix}
     gradient_buffer::G
     parameter_count::Int
     batch_size::Int
+    # analytic-gradient chain-block threading plan, or `nothing` when serial
+    # (issue #143). Only the `backend_cache` tier is threaded.
+    thread_plan::T
 end
 
 # `reject_invalid_parameters=true` puts the workspace's compiled-plan walk in
