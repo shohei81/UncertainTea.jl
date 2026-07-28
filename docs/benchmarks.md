@@ -63,9 +63,12 @@ Rows marked FAIL keep their timings visible for context only.
    full-width work on finished lanes (#160); these are the levers to make the
    GPU genuinely win. The earlier `-pinned-init` diagnostic overstated the
    device story (best-case init, shorter trees) — the default numbers here are
-   the honest ones. Warmup cost also rose with per-chain adaptation (#158
-   tracks recovering it via pooled-mass — whose core machinery #176 already
-   built).
+   the honest ones. Per-chain adaptation also raised warmup cost; pooled-mass
+   is now the unified host+device default (improves R-hat, no regression), but
+   for small-P models the warmup cost is dominated by the per-chain
+   reasonable-step-size searches, not mass estimation — vectorizing those plus
+   nutpie-style gradient-based mass adaptation (both tracked in #158) are what
+   would cut warmup from 200 → ~50-100 iterations.
 4. **GLMs now ride the analytic path and win at low chain counts.** #150/#149
    backend-lower the logistic linear predictor `alpha + sum(beta .* X[:, i])`
    as a fused GLM node scored by a stable `bernoullilogit` family, so
@@ -82,11 +85,13 @@ Rows marked FAIL keep their timings visible for context only.
 
 Open issues from the audit still shaping these numbers: #135 (device GLM
 lowering — the remaining `logistic` high-chain gap), #151/#152/#153/#160
-(device engineering — the `batched-cpu`-vs-Metal gap), #158 (pooled-mass host
-default + nutpie, to recover warmup cost), #144 (generated type-stable scorer,
-the remaining single-chain gap vs Stan). #137 (per-chain step-size adaptation),
-#149/#150 (GLM analytic lowering), and #143 (batched-gradient threading) are
-now closed.
+(device engineering — the `batched-cpu`-vs-Metal gap), #158 (vectorized
+per-chain step search + nutpie mass adaptation, to actually cut warmup cost —
+its pooled-mass host default already landed), #144 (generated type-stable
+scorer, the remaining single-chain gap vs Stan). #137 (per-chain step-size
+adaptation), #149/#150 (GLM analytic lowering), #143 (batched-gradient
+threading), and #158 part 1 (pooled-mass host+device unification) are now
+closed.
 
 ## Scaling sweep — gauss (mean/scale, N=1000; 200 warmup + 500 draws)
 
