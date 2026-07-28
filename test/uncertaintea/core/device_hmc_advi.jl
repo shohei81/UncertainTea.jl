@@ -150,16 +150,23 @@ end
 @testset "devh_device_errors" begin
     backend = CPU()
     constraints = choicemap((:y, 0.3))
-    # Per-chain adaptation is unsupported on the device backend.
-    @test_throws ArgumentError batched_hmc(
+    # Per-chain adaptation is now SUPPORTED on the device backend (issue #137): it
+    # routes to the pooled-mass / per-chain-step device HMC path and converges.
+    per_chain_hmc = batched_hmc(
         devh_conjugate_gauss,
         (),
         constraints;
-        num_chains=2,
-        num_samples=10,
+        num_chains=4,
+        num_samples=300,
+        num_warmup=200,
+        num_leapfrog_steps=8,
         per_chain_adaptation=true,
         backend=backend,
+        rng=MersenneTwister(514),
     )
+    per_chain_hmc_draws = posterior_array(per_chain_hmc)
+    @test all(isfinite, per_chain_hmc_draws)
+    @test isapprox(devh_mean(vec(per_chain_hmc_draws)), 0.15; atol=0.1)
     # An unsupported (marginalized choice) model raises the lowering ArgumentError.
     marg_error = try
         batched_hmc(devh_marginalize_model, (), choicemap((:y, 0.4)); num_chains=2, num_samples=10, backend=backend)

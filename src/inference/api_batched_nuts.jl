@@ -26,15 +26,17 @@ function batched_nuts(
     tree_strategy in (:hybrid, :masked) ||
         throw(ArgumentError("batched_nuts tree_strategy must be :hybrid or :masked, got $(repr(tree_strategy))"))
 
-    # Per-chain step-size/mass adaptation is the DEFAULT on the host paths
-    # (issue #137): with shared adaptation, prior-draw initialization strands
-    # the chains whose initial curvature the shared step size never fits (~5%
-    # divergence on the gauss benchmark at every chain count), while per-chain
-    # warmup drivers recover all of them (0% in the issue's experiment). The
-    # device backend still requires shared adaptation, so an unspecified value
-    # resolves per call: `nothing` -> `backend === nothing`. An explicit user
-    # value is always respected (explicit true + backend errors below).
-    per_chain_adaptation = something(per_chain_adaptation, backend === nothing)
+    # Per-chain step-size adaptation is the DEFAULT everywhere (issue #137): with
+    # shared adaptation, prior-draw initialization strands the chains whose initial
+    # curvature the shared step size never fits (~5% divergence on the gauss
+    # benchmark at every chain count), while per-chain warmup drivers recover all of
+    # them (0% in the issue's experiment). The HOST path uses per-chain step + per-
+    # chain mass; the DEVICE path uses per-chain step + a SHARED (pooled) diagonal
+    # mass -- the device leapfrog kernels consume a single shared inverse_mass
+    # vector, so a per-chain mass is not device-representable, but per-chain step is
+    # the operative fix. An unset value resolves to per-chain on both; an explicit
+    # user value is always respected.
+    per_chain_adaptation = something(per_chain_adaptation, true)
 
     # Device-resident masked NUTS. When `backend` is given the masked doubling
     # trajectory runs device-resident (host-side RNG + O(num_chains) bookkeeping,
@@ -51,13 +53,9 @@ function batched_nuts(
             throw(ArgumentError("batched_nuts `backend` must be a KernelAbstractions.Backend or nothing, got $(typeof(backend))"))
         tree_strategy === :masked ||
             throw(ArgumentError("batched_nuts device backend requires tree_strategy=:masked, got $(repr(tree_strategy))"))
-        per_chain_adaptation && throw(
-            ArgumentError(
-                "batched_nuts per-chain adaptation is not supported on the device backend; " *
-                "run with backend=nothing, or leave per_chain_adaptation unset / pass " *
-                "per_chain_adaptation=false to use shared adaptation on the device",
-            ),
-        )
+        # Per-chain adaptation IS supported on the device (issue #137): it routes to
+        # the pooled-mass / per-chain-step driver (shared diagonal mass, per-chain
+        # step). per_chain_adaptation=false still selects shared adaptation.
         device_precision = precision === nothing ? default_device_precision(backend) : precision
     end
     # Signature-aware sizing (#95): per-chain position rows and constrained
@@ -128,7 +126,47 @@ function batched_nuts(
     nuts_target_accept = Float64(target_accept)
     nuts_max_delta_energy = Float64(max_delta_energy)
 
-    if per_chain_adaptation
+    if per_chain_adaptation && device_nuts_workspace !== nothing
+        return _batched_nuts_device_per_chain!(
+            device_nuts_workspace,
+            workspace,
+            model,
+            args,
+            constraints,
+            batch_args,
+            batch_constraints,
+            position,
+            current_logjoint,
+            current_gradient,
+            unconstrained_samples,
+            constrained_samples,
+            logjoint_values,
+            acceptance_stats,
+            energies,
+            energy_errors,
+            accepted,
+            divergent,
+            tree_depths,
+            integration_steps_values,
+            num_params,
+            num_chains,
+            num_samples,
+            num_warmup,
+            total_iterations,
+            nuts_step_size,
+            nuts_target_accept,
+            nuts_max_delta_energy,
+            max_tree_depth,
+            adapt_step_size,
+            adapt_mass_matrix,
+            find_reasonable_step_size,
+            mass_matrix_regularization,
+            mass_matrix_min_samples,
+            callback,
+            callback_every,
+            rng,
+        )
+    elseif per_chain_adaptation
         return _batched_nuts_per_chain!(
             workspace,
             model,
@@ -581,6 +619,215 @@ function _batched_nuts_per_chain!(
             vec(integration_steps_values[:, chain_index]),
             nuts_target_accept,
             copy(drivers[chain_index].mass_adaptation_windows),
+            nothing,
+        )
+    end
+
+    return HMCChains(model, args, constraints, chains)
+end
+
+# Pooled-mass / per-chain-step device masked NUTS (issue #137). The device leapfrog
+# kernels consume a single SHARED diagonal inverse-mass vector, so the host per-
+# chain-mass mode is not device-representable. This driver instead pools the mass
+# across all chains (one running-variance state fed the full P x C positions) while
+# giving each chain its own dual-averaged step size, uploaded to the device as a
+# C-length `step` vector each iteration. This removes the prior-draw stranding the
+# shared-step device path suffered (issue #137's gauss gate) without a per-chain
+# mass. Only the doubling ROUND loop runs on the device; init/finalize reuse the
+# host code (which already indexes a per-chain step vector).
+function _batched_nuts_device_per_chain!(
+    dws,
+    workspace::BatchedNUTSWorkspace,
+    model::TeaModel,
+    args,
+    constraints,
+    batch_args,
+    batch_constraints,
+    position::Matrix{Float64},
+    current_logjoint::Vector{Float64},
+    current_gradient::Matrix{Float64},
+    unconstrained_samples::Array{Float64,3},
+    constrained_samples::Array{Float64,3},
+    logjoint_values::Matrix{Float64},
+    acceptance_stats::Matrix{Float64},
+    energies::Matrix{Float64},
+    energy_errors::Matrix{Float64},
+    accepted::BitMatrix,
+    divergent::BitMatrix,
+    tree_depths::Matrix{Int},
+    integration_steps_values::Matrix{Int},
+    num_params::Int,
+    num_chains::Int,
+    num_samples::Int,
+    num_warmup::Int,
+    total_iterations::Int,
+    nuts_step_size::Float64,
+    nuts_target_accept::Float64,
+    nuts_max_delta_energy::Float64,
+    max_tree_depth::Int,
+    adapt_step_size::Bool,
+    adapt_mass_matrix::Bool,
+    find_reasonable_step_size::Bool,
+    mass_matrix_regularization::Real,
+    mass_matrix_min_samples::Int,
+    callback,
+    callback_every::Int,
+    rng::AbstractRNG,
+)
+    step_sizes = fill(nuts_step_size, num_chains)
+    if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
+        step_size_workspace = BatchedHMCWorkspace(
+            model, position, batch_args, batch_constraints, ones(num_params),
+        )
+        step_sizes = _find_reasonable_batched_step_size_per_chain(
+            step_size_workspace,
+            model,
+            position,
+            current_logjoint,
+            current_gradient,
+            ones(num_params, num_chains),
+            batch_args,
+            batch_constraints,
+            nuts_step_size,
+            rng,
+        )
+    end
+
+    driver = PooledMassPerChainStepDriver(
+        num_params,
+        num_warmup,
+        step_sizes,
+        nuts_target_accept;
+        adapt_step_size=adapt_step_size,
+        adapt_mass_matrix=adapt_mass_matrix,
+        mass_matrix_regularization=mass_matrix_regularization,
+        mass_matrix_min_samples=mass_matrix_min_samples,
+    )
+    # Per-chain window-end re-search: each chain re-runs the single-chain reasonable
+    # step-size search on its own column against the SHARED pooled mass (chain-major
+    # RNG at warmup window ends), mirroring the host per-chain refind.
+    refinds = [
+        ScalarStepSizeSearch(
+            model,
+            workspace.column_gradient_caches[chain_index],
+            _batched_args(batch_args, chain_index),
+            _batched_constraints(batch_constraints, chain_index),
+            rng,
+            collect(view(position, :, chain_index)),
+            current_logjoint[chain_index],
+        ) for chain_index = 1:num_chains
+    ]
+    accept_statistics = Vector{Float64}(undef, num_chains)
+
+    sample_index = 0
+    cumulative_divergences = 0
+    for iteration = 1:total_iterations
+        inverse_mass_matrix = driver.mass.inverse_mass_matrix
+        mean_step_size = sum(driver.step_sizes) / num_chains
+
+        _device_batched_nuts_proposals_masked!(
+            dws,
+            workspace,
+            model,
+            position,
+            current_logjoint,
+            current_gradient,
+            inverse_mass_matrix,
+            batch_args,
+            batch_constraints,
+            driver.step_sizes,
+            max_tree_depth,
+            nuts_max_delta_energy,
+            rng,
+        )
+
+        for chain_index = 1:num_chains
+            if workspace.control.accepted_step[chain_index]
+                copyto!(view(position, :, chain_index), view(workspace.proposal_position, :, chain_index))
+                copyto!(view(current_gradient, :, chain_index), view(workspace.proposal_gradient, :, chain_index))
+                current_logjoint[chain_index] = workspace.proposed_logjoint[chain_index]
+            end
+        end
+
+        cumulative_divergences += count(workspace.control.divergent_step)
+
+        if iteration <= num_warmup
+            @inbounds for chain_index = 1:num_chains
+                workspace.mass_adaptation_weights[chain_index] = _mass_adaptation_weight(
+                    driver.mass.variance_state,
+                    false,
+                    workspace.accept_prob[chain_index],
+                    workspace.control.divergent_step[chain_index],
+                )
+                accept_statistics[chain_index] =
+                    workspace.control.divergent_step[chain_index] ? 0.0 : workspace.accept_prob[chain_index]
+                refinds[chain_index].position = collect(view(position, :, chain_index))
+                refinds[chain_index].current_logjoint = current_logjoint[chain_index]
+            end
+            warmup_update!(
+                driver,
+                iteration,
+                accept_statistics,
+                position,
+                workspace.mass_adaptation_weights,
+                refinds,
+            )
+            if iteration == num_warmup
+                warmup_finalize!(driver)
+            end
+            isnothing(callback) || _invoke_progress_callback(
+                callback, callback_every, :warmup, iteration, num_warmup, mean_step_size, cumulative_divergences)
+        else
+            sample_index += 1
+            for chain_index = 1:num_chains
+                copyto!(view(unconstrained_samples, :, sample_index, chain_index), view(position, :, chain_index))
+                _write_signature_constrained_sample!(
+                    constrained_samples,
+                    model,
+                    view(position, :, chain_index),
+                    sample_index,
+                    _batched_args(batch_args, chain_index),
+                    _batched_constraints(batch_constraints, chain_index),
+                    chain_index,
+                )
+                logjoint_values[sample_index, chain_index] = current_logjoint[chain_index]
+                acceptance_stats[sample_index, chain_index] = workspace.accept_prob[chain_index]
+                energies[sample_index, chain_index] = workspace.proposed_energy[chain_index]
+                energy_errors[sample_index, chain_index] = workspace.energy_error[chain_index]
+                accepted[sample_index, chain_index] = workspace.control.accepted_step[chain_index]
+                divergent[sample_index, chain_index] = workspace.control.divergent_step[chain_index]
+                tree_depths[sample_index, chain_index] = workspace.control.tree_depths[chain_index]
+                integration_steps_values[sample_index, chain_index] = workspace.control.integration_steps[chain_index]
+            end
+            isnothing(callback) || _invoke_progress_callback(
+                callback, callback_every, :sample, sample_index, num_samples, mean_step_size, cumulative_divergences)
+        end
+    end
+
+    mass_matrix = copy(driver.mass.inverse_mass_matrix)
+    chains = Vector{HMCChain}(undef, num_chains)
+    for chain_index = 1:num_chains
+        chains[chain_index] = HMCChain(
+            :nuts,
+            model,
+            _batched_args(batch_args, chain_index),
+            _batched_constraints(batch_constraints, chain_index),
+            unconstrained_samples[:, :, chain_index],
+            constrained_samples[:, :, chain_index],
+            vec(logjoint_values[:, chain_index]),
+            vec(acceptance_stats[:, chain_index]),
+            vec(energies[:, chain_index]),
+            vec(energy_errors[:, chain_index]),
+            vec(accepted[:, chain_index]),
+            vec(divergent[:, chain_index]),
+            driver.step_sizes[chain_index],
+            copy(mass_matrix),
+            0,
+            max_tree_depth,
+            vec(tree_depths[:, chain_index]),
+            vec(integration_steps_values[:, chain_index]),
+            nuts_target_accept,
+            copy(driver.mass.mass_adaptation_windows),
             nothing,
         )
     end

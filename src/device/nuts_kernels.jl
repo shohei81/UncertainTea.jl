@@ -60,6 +60,31 @@ end
     end
 end
 
+# Per-chain-step variants (issue #137): the step size is a C-length device vector
+# `step[b]` instead of a scalar. `scale` folds the leapfrog half-factor into the
+# kick (0.5 for a half-kick). The shared `inverse_mass` P-vector is unchanged, and
+# the `signed_step * (inverse_mass * p)` association is preserved per chain. These
+# power ONLY the pooled-mass / per-chain-step device path; the scalar kernels above
+# still drive the bitwise-oracle-pinned shared path untouched.
+@kernel function _device_nuts_kick_perchain!(p, @Const(grad), @Const(active), @Const(sign), @Const(step), scale)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(active[b]) != 0x00
+        @inbounds p[pidx, b] += sign[b] * (scale * step[b]) * grad[pidx, b]
+    end
+end
+
+@kernel function _device_nuts_drift_perchain!(q, @Const(p), @Const(inverse_mass), @Const(active), @Const(sign), @Const(step))
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(active[b]) != 0x00
+        signed = sign[b] * step[b]
+        @inbounds q[pidx, b] += signed * (inverse_mass[pidx] * p[pidx, b])
+    end
+end
+
 # Masked column copy of a (position, momentum, gradient) triple: for each chain
 # whose UInt8 mask is set, copy the whole column from source to destination.
 @kernel function _device_nuts_copy_columns!(
@@ -210,6 +235,7 @@ mutable struct DeviceNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     max_tree_depth::Int
     inverse_mass::Any        # P
     sign::Any                # C   per-chain direction (+/-1) as T
+    step::Any                # C   per-chain step size (pooled-mass/per-chain-step mode)
     working_momentum::Any    # P x C   leaf tree_next momentum (p)
     # subtree buffers
     tree_current_position::Any
@@ -250,6 +276,7 @@ mutable struct DeviceNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     host_u8::Vector{UInt8}
     host_energy::Vector{T}
     sign_host::Vector{T}
+    step_host::Vector{T}
     inverse_mass_host::Vector{T}
     kinetic_host::Vector{Float64}
     advanced_scratch::Vector{Bool}
@@ -260,6 +287,11 @@ mutable struct DeviceNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     # Reusable P x C host staging buffer for the once-per-iteration frontier
     # upload / accepted-proposal download, so those transfers do not allocate.
     host_mat::Matrix{T}
+    # Reusable P x C Float64 buffer holding the SHARED diagonal mass broadcast into
+    # per-chain columns, for the pooled-mass / per-chain-step host init (whose
+    # per-chain leapfrog overload requires a per-chain mass matrix). The device
+    # rounds still consume the shared `inverse_mass` P-vector.
+    inverse_mass_cols::Matrix{Float64}
 end
 
 function DeviceNUTSWorkspace(
@@ -293,6 +325,7 @@ function DeviceNUTSWorkspace(
         inner, backend, P, C, D,
         fill!(KernelAbstractions.allocate(backend, T, P), zero(T)),
         vecT(),
+        vecT(),
         mat(),
         mat(), mat(), mat(),
         mat(), mat(), mat(),
@@ -308,6 +341,7 @@ function DeviceNUTSWorkspace(
         Vector{UInt8}(undef, C),
         Vector{T}(undef, C),
         Vector{T}(undef, C),
+        Vector{T}(undef, C),
         Vector{T}(undef, P),
         Vector{Float64}(undef, C),
         Vector{Bool}(undef, C),
@@ -315,6 +349,7 @@ function DeviceNUTSWorkspace(
         mat(),
         vecU8(),
         Matrix{T}(undef, P, C),
+        Matrix{Float64}(undef, P, C),
     )
 end
 
@@ -405,6 +440,46 @@ function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, step_size::Real) wh
     _device_launch_gradient!(inner)
     _device_hmc_validity_update_final!(be)(dws.valid, grad, logj, P; ndrange=C)
     _device_nuts_kick!(be)(p, grad, dws.valid, dws.sign, half; ndrange=(P, C))
+    _device_hmc_hamiltonian!(be)(dws.proposed_energy, p, dws.inverse_mass, logj, P; ndrange=C)
+    KernelAbstractions.synchronize(be)
+
+    _download_bits!(ws.control.step_valid, dws.valid, dws.host_u8)
+    _download_reals!(ws.subtree_proposed_energy, dws.proposed_energy, dws.host_energy)
+    _download_reals!(ws.proposed_logjoint, logj, dws.host_energy)
+    return dws
+end
+
+# Per-chain-step leaf (issue #137): identical to `_device_nuts_leaf!` above except
+# the half-kick / drift use the per-chain `dws.step` device vector instead of a
+# scalar. Selected by passing `nothing` as the step to the doubling round. The
+# shared `dws.inverse_mass` P-vector is unchanged.
+function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, ::Nothing) where {T}
+    be = dws.backend
+    P = dws.num_params
+    C = dws.num_chains
+    inner = dws.inner
+    q = inner.params_device
+    grad = inner.gradients_device
+    logj = inner.totals_device
+    p = dws.working_momentum
+    half = convert(T, 0.5)
+
+    _upload_mask!(dws.active, ws.subtree_active, dws.host_u8)
+    copyto!(dws.valid, dws.active)
+    _device_nuts_copy_columns_all!(be)(
+        q,
+        p,
+        grad,
+        dws.tree_current_position,
+        dws.tree_current_momentum,
+        dws.tree_current_gradient;
+        ndrange=(P, C),
+    )
+    _device_nuts_kick_perchain!(be)(p, dws.tree_current_gradient, dws.active, dws.sign, dws.step, half; ndrange=(P, C))
+    _device_nuts_drift_perchain!(be)(q, p, dws.inverse_mass, dws.active, dws.sign, dws.step; ndrange=(P, C))
+    _device_launch_gradient!(inner)
+    _device_hmc_validity_update_final!(be)(dws.valid, grad, logj, P; ndrange=C)
+    _device_nuts_kick_perchain!(be)(p, grad, dws.valid, dws.sign, dws.step, half; ndrange=(P, C))
     _device_hmc_hamiltonian!(be)(dws.proposed_energy, p, dws.inverse_mass, logj, P; ndrange=C)
     KernelAbstractions.synchronize(be)
 
@@ -721,7 +796,7 @@ function _device_masked_nuts_doubling_round!(
     ws,
     max_tree_depth::Int,
     max_delta_energy::Float64,
-    step_size::Real,
+    step_size,
     rng::AbstractRNG,
 ) where {T}
     _reset_batched_nuts_subtree_scratch!(ws)
@@ -791,14 +866,40 @@ function _device_batched_nuts_proposals_masked!(
     rng::AbstractRNG,
 ) where {T}
     # init on host (one host gradient + RNG draws in the CPU masked path order).
+    # `step_size` may be a scalar (shared adaptation) or a C-length per-chain vector
+    # (pooled-mass / per-chain-step mode, issue #137); the host init/first-step and
+    # the device round loop both index it per chain when it is a vector. With a
+    # per-chain step the host per-chain leapfrog overload requires a per-chain mass
+    # matrix, so broadcast the SHARED diagonal into columns for the init (the device
+    # rounds still consume the shared `inverse_mass` P-vector uploaded below).
+    if step_size isa AbstractVector
+        @inbounds for c in axes(dws.inverse_mass_cols, 2)
+            for pidx in axes(dws.inverse_mass_cols, 1)
+                dws.inverse_mass_cols[pidx, c] = inverse_mass_matrix[pidx]
+            end
+        end
+        init_mass = dws.inverse_mass_cols
+    else
+        init_mass = inverse_mass_matrix
+    end
     _initialize_batched_nuts_continuations!(
         ws, model, position, current_logjoint, current_gradient,
-        inverse_mass_matrix, args, constraints, step_size, max_delta_energy, rng,
+        init_mass, args, constraints, step_size, max_delta_energy, rng,
     )
 
     # upload the continuation frontier + diagonal mass to the device.
     dws.inverse_mass_host .= convert.(T, inverse_mass_matrix)
     copyto!(dws.inverse_mass, dws.inverse_mass_host)
+    # Per-chain step: stage the C-length step vector onto the device and signal the
+    # round loop (via `round_step === nothing`) to run the per-chain-step leaf.
+    round_step = step_size
+    if step_size isa AbstractVector
+        @inbounds for c in eachindex(step_size)
+            dws.step_host[c] = convert(T, step_size[c])
+        end
+        copyto!(dws.step, dws.step_host)
+        round_step = nothing
+    end
     # A device-precision copy of the current position, for precision-robust movement
     # detection after the rounds (see the accepted_step override below).
     _upload_matrix!(dws.current_position, position, dws.host_mat)
@@ -812,7 +913,7 @@ function _device_batched_nuts_proposals_masked!(
     _upload_matrix!(dws.proposal_momentum, ws.proposal_momentum, dws.host_mat)
     _upload_matrix!(dws.proposal_gradient, ws.proposal_gradient, dws.host_mat)
 
-    while _device_masked_nuts_doubling_round!(dws, ws, max_tree_depth, max_delta_energy, step_size, rng)
+    while _device_masked_nuts_doubling_round!(dws, ws, max_tree_depth, max_delta_energy, round_step, rng)
     end
 
     # download the accepted continuation proposal for host finalize + recording.

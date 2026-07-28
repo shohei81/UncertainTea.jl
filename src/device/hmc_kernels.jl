@@ -46,6 +46,38 @@ end
     end
 end
 
+# Per-chain-step variants (issue #137): the leapfrog step size is a C-length device
+# vector `step[b]` instead of a scalar, while the diagonal `inverse_mass` P-vector
+# stays shared. `scale` folds the half-factor into the kick. These power ONLY the
+# pooled-mass / per-chain-step device HMC path; the scalar kernels above are
+# untouched.
+@kernel function _device_hmc_kick_perchain!(p, @Const(grad), @Const(valid), @Const(step), scale)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(valid[b]) != 0x00
+        @inbounds p[pidx, b] += (scale * step[b]) * grad[pidx, b]
+    end
+end
+
+@kernel function _device_hmc_drift_perchain!(q, @Const(p), @Const(inverse_mass), @Const(valid), @Const(step))
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(valid[b]) != 0x00
+        @inbounds q[pidx, b] += step[b] * inverse_mass[pidx] * p[pidx, b]
+    end
+end
+
+@kernel function _device_hmc_final_halfkick_perchain!(p, @Const(grad), @Const(valid), @Const(step), scale)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(valid[b]) != 0x00
+        @inbounds p[pidx, b] = -(p[pidx, b] + (scale * step[b]) * grad[pidx, b])
+    end
+end
+
 # Per-chain validity seed: valid[b] = all finite over the current gradient column.
 # `ndrange = num_chains`, in-thread loop over parameters.
 @kernel function _device_hmc_validity_init!(valid, @Const(grad), num_params::Int)
@@ -130,6 +162,7 @@ mutable struct DeviceHMCWorkspace{T,B<:KernelAbstractions.Backend}
     working_momentum::Any    # P x C  momentum integrated in place
     current_gradient::Any    # P x C  gradient at the current position
     inverse_mass::Any        # P      diagonal inverse mass
+    step::Any                # C      per-chain step size (pooled-mass/per-chain-step mode)
     valid::Any               # C      UInt8 per-chain validity
     accept_mask::Any         # C      UInt8 per-chain accept flag
     current_logjoint::Any    # C      logjoint at the current position
@@ -164,6 +197,7 @@ function DeviceHMCWorkspace(
         mat(),
         mat(),
         KernelAbstractions.allocate(backend, T, P),
+        vec_t(),
         KernelAbstractions.allocate(backend, UInt8, C),
         KernelAbstractions.allocate(backend, UInt8, C),
         vec_t(),
@@ -231,6 +265,43 @@ function _device_leapfrog_integrate!(ws::DeviceHMCWorkspace{T}, step_size::Real,
     return nothing
 end
 
+# Per-chain-step leapfrog (issue #137): identical to `_device_leapfrog_integrate!`
+# except every kick/drift/halfkick reads the per-chain `ws.step` device vector
+# instead of a scalar. The shared `ws.inverse_mass` P-vector is unchanged.
+function _device_leapfrog_integrate_perchain!(ws::DeviceHMCWorkspace{T}, num_steps::Int) where {T}
+    be = ws.backend
+    P = ws.num_params
+    C = ws.num_chains
+    inner = ws.inner
+    q = inner.params_device
+    grad = inner.gradients_device
+    logj = inner.totals_device
+    p = ws.working_momentum
+    half = convert(T, 0.5)
+    full = convert(T, 1.0)
+
+    copyto!(q, ws.position)
+    copyto!(p, ws.momentum)
+
+    _device_hmc_validity_init!(be)(ws.valid, ws.current_gradient, P; ndrange=C)
+    _device_hmc_kick_perchain!(be)(p, ws.current_gradient, ws.valid, ws.step, half; ndrange=(P, C))
+
+    for leapfrog_step = 1:num_steps
+        _device_hmc_drift_perchain!(be)(q, p, ws.inverse_mass, ws.valid, ws.step; ndrange=(P, C))
+        _device_launch_gradient!(inner)
+        if leapfrog_step < num_steps
+            _device_hmc_validity_update!(be)(ws.valid, grad, P; ndrange=C)
+            _device_hmc_kick_perchain!(be)(p, grad, ws.valid, ws.step, full; ndrange=(P, C))
+        else
+            _device_hmc_validity_update_final!(be)(ws.valid, grad, logj, P; ndrange=C)
+        end
+    end
+
+    _device_hmc_final_halfkick_perchain!(be)(p, grad, ws.valid, ws.step, half; ndrange=(P, C))
+    KernelAbstractions.synchronize(be)
+    return nothing
+end
+
 # ---- device HMC driver ---------------------------------------------------------
 
 # Device-resident shared-adaptation batched HMC. Mirrors the shared-mode CPU
@@ -261,6 +332,7 @@ function _run_device_batched_hmc(
     target_accept::Real,
     adapt_step_size::Bool,
     adapt_mass_matrix::Bool,
+    per_chain_adaptation::Bool=false,
     find_reasonable_step_size::Bool,
     divergence_threshold::Real,
     mass_matrix_regularization::Real,
@@ -344,50 +416,106 @@ function _run_device_batched_hmc(
     hmc_target_accept = Float64(target_accept)
     hmc_divergence_threshold = Float64(divergence_threshold)
 
-    if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
-        hmc_step_size = _find_reasonable_batched_step_size(
+    # Two adaptation modes share this device loop:
+    #   shared    -> one WarmupDriver (scalar step + shared mass), scalar leapfrog.
+    #   per-chain -> a PooledMassPerChainStepDriver (per-chain step + pooled shared
+    #                mass, issue #137), per-chain leapfrog with a C-length step vector.
+    local driver
+    local refind
+    if per_chain_adaptation
+        per_chain_step_sizes = fill(hmc_step_size, num_chains)
+        if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
+            per_chain_step_sizes = _find_reasonable_batched_step_size_per_chain(
+                host_workspace,
+                model,
+                position,
+                current_logjoint,
+                current_gradient,
+                ones(num_params, num_chains),
+                batch_args,
+                batch_constraints,
+                hmc_step_size,
+                rng,
+            )
+        end
+        driver = PooledMassPerChainStepDriver(
+            num_params,
+            num_warmup,
+            per_chain_step_sizes,
+            hmc_target_accept;
+            adapt_step_size=adapt_step_size,
+            adapt_mass_matrix=adapt_mass_matrix,
+            mass_matrix_regularization=mass_matrix_regularization,
+            mass_matrix_min_samples=mass_matrix_min_samples,
+        )
+        # Per-chain window-end re-search on each chain's own column gradient cache,
+        # against the shared pooled mass. Positions/logjoints refreshed each warmup
+        # iteration from the host mirrors.
+        refind = [
+            ScalarStepSizeSearch(
+                model,
+                _logjoint_gradient_cache(
+                    model,
+                    collect(view(position, :, chain_index)),
+                    _batched_args(batch_args, chain_index),
+                    _batched_constraints(batch_constraints, chain_index);
+                    reject_invalid_parameters=true,
+                ),
+                _batched_args(batch_args, chain_index),
+                _batched_constraints(batch_constraints, chain_index),
+                rng,
+                collect(view(position, :, chain_index)),
+                current_logjoint[chain_index],
+            ) for chain_index = 1:num_chains
+        ]
+    else
+        if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
+            hmc_step_size = _find_reasonable_batched_step_size(
+                host_workspace,
+                model,
+                position,
+                current_logjoint,
+                current_gradient,
+                inverse_mass_matrix,
+                batch_args,
+                batch_constraints,
+                hmc_step_size,
+                hmc_divergence_threshold,
+                rng,
+            )
+        end
+        driver = WarmupDriver(
+            num_params,
+            num_warmup,
+            hmc_step_size,
+            hmc_target_accept;
+            adapt_step_size=adapt_step_size,
+            adapt_mass_matrix=adapt_mass_matrix,
+            mass_matrix_regularization=mass_matrix_regularization,
+            mass_matrix_min_samples=mass_matrix_min_samples,
+        )
+        # The re-search reads these host mirrors, which we refresh (download) each
+        # warmup iteration; passing the same array objects keeps the search current.
+        refind = BatchedStepSizeSearch(
             host_workspace,
             model,
             position,
             current_logjoint,
             current_gradient,
-            inverse_mass_matrix,
             batch_args,
             batch_constraints,
-            hmc_step_size,
             hmc_divergence_threshold,
             rng,
         )
     end
-    driver = WarmupDriver(
-        num_params,
-        num_warmup,
-        hmc_step_size,
-        hmc_target_accept;
-        adapt_step_size=adapt_step_size,
-        adapt_mass_matrix=adapt_mass_matrix,
-        mass_matrix_regularization=mass_matrix_regularization,
-        mass_matrix_min_samples=mass_matrix_min_samples,
-    )
-    # The re-search reads these host mirrors, which we refresh (download) each warmup
-    # iteration; passing the same array objects keeps the search current.
-    refind = BatchedStepSizeSearch(
-        host_workspace,
-        model,
-        position,
-        current_logjoint,
-        current_gradient,
-        batch_args,
-        batch_constraints,
-        hmc_divergence_threshold,
-        rng,
-    )
 
     # Host staging + download buffers (allocated once).
     sqrt_inverse_mass = Vector{Float64}(undef, num_params)
     host_momentum = Matrix{Float64}(undef, num_params, num_chains)
     momentum_upload = Matrix{T}(undef, num_params, num_chains)
     inverse_mass_upload = Vector{T}(undef, num_params)
+    step_upload = Vector{T}(undef, num_chains)
+    accept_statistics = Vector{Float64}(undef, num_chains)
     host_valid = Vector{UInt8}(undef, num_chains)
     host_current_ham = Vector{T}(undef, num_chains)
     host_proposed_ham = Vector{T}(undef, num_chains)
@@ -407,8 +535,16 @@ function _run_device_batched_hmc(
     sample_index = 0
     cumulative_divergences = 0
     for iteration = 1:total_iterations
-        hmc_step_size = driver.step_size
-        inverse_mass_matrix = driver.inverse_mass_matrix
+        if per_chain_adaptation
+            inverse_mass_matrix = driver.mass.inverse_mass_matrix
+            step_upload .= driver.step_sizes
+            copyto!(ws.step, step_upload)
+            report_step_size = sum(driver.step_sizes) / num_chains
+        else
+            hmc_step_size = driver.step_size
+            inverse_mass_matrix = driver.inverse_mass_matrix
+            report_step_size = hmc_step_size
+        end
         inverse_mass_upload .= inverse_mass_matrix
         copyto!(ws.inverse_mass, inverse_mass_upload)
 
@@ -420,7 +556,11 @@ function _run_device_batched_hmc(
         _device_hmc_hamiltonian!(ws.backend)(
             ws.current_hamiltonian, ws.momentum, ws.inverse_mass, ws.current_logjoint, num_params; ndrange=num_chains,
         )
-        _device_leapfrog_integrate!(ws, hmc_step_size, num_leapfrog_steps)
+        if per_chain_adaptation
+            _device_leapfrog_integrate_perchain!(ws, num_leapfrog_steps)
+        else
+            _device_leapfrog_integrate!(ws, hmc_step_size, num_leapfrog_steps)
+        end
         _device_hmc_hamiltonian!(ws.backend)(
             ws.proposed_hamiltonian, ws.working_momentum, ws.inverse_mass, ws.inner.totals_device, num_params; ndrange=num_chains,
         )
@@ -492,27 +632,50 @@ function _run_device_batched_hmc(
         end
 
         if iteration <= num_warmup
-            _mass_adaptation_weights!(
-                driver.variance_state,
-                mass_adaptation_weights,
-                accepted_step,
-                accept_prob,
-                divergent_step,
-            )
-            accept_statistic = _mean_batched_adaptation_probability(accept_prob, divergent_step)
-            warmup_update!(
-                driver,
-                iteration,
-                accept_statistic,
-                position,
-                mass_adaptation_weights,
-                refind,
-            )
+            if per_chain_adaptation
+                @inbounds for chain_index = 1:num_chains
+                    mass_adaptation_weights[chain_index] = _mass_adaptation_weight(
+                        driver.mass.variance_state,
+                        accepted_step[chain_index],
+                        accept_prob[chain_index],
+                        divergent_step[chain_index],
+                    )
+                    accept_statistics[chain_index] =
+                        divergent_step[chain_index] ? 0.0 : accept_prob[chain_index]
+                    refind[chain_index].position = collect(view(position, :, chain_index))
+                    refind[chain_index].current_logjoint = current_logjoint[chain_index]
+                end
+                warmup_update!(
+                    driver,
+                    iteration,
+                    accept_statistics,
+                    position,
+                    mass_adaptation_weights,
+                    refind,
+                )
+            else
+                _mass_adaptation_weights!(
+                    driver.variance_state,
+                    mass_adaptation_weights,
+                    accepted_step,
+                    accept_prob,
+                    divergent_step,
+                )
+                accept_statistic = _mean_batched_adaptation_probability(accept_prob, divergent_step)
+                warmup_update!(
+                    driver,
+                    iteration,
+                    accept_statistic,
+                    position,
+                    mass_adaptation_weights,
+                    refind,
+                )
+            end
             if iteration == num_warmup
                 warmup_finalize!(driver)
             end
             isnothing(callback) || _invoke_progress_callback(
-                callback, callback_every, :warmup, iteration, num_warmup, hmc_step_size, cumulative_divergences)
+                callback, callback_every, :warmup, iteration, num_warmup, report_step_size, cumulative_divergences)
         end
 
         if iteration > num_warmup
@@ -537,13 +700,22 @@ function _run_device_batched_hmc(
                 divergent[sample_index, chain_index] = divergent_step[chain_index]
             end
             isnothing(callback) || _invoke_progress_callback(
-                callback, callback_every, :sample, sample_index, num_samples, hmc_step_size, cumulative_divergences)
+                callback, callback_every, :sample, sample_index, num_samples, report_step_size, cumulative_divergences)
         end
     end
 
-    mass_matrix = copy(driver.inverse_mass_matrix)
+    # Both modes report a shared diagonal mass; per-chain reports each chain's own
+    # dual-averaged step, shared reports the single scalar step.
+    if per_chain_adaptation
+        mass_matrix = copy(driver.mass.inverse_mass_matrix)
+        mass_windows = driver.mass.mass_adaptation_windows
+    else
+        mass_matrix = copy(driver.inverse_mass_matrix)
+        mass_windows = driver.mass_adaptation_windows
+    end
     chains = Vector{HMCChain}(undef, num_chains)
     for chain_index = 1:num_chains
+        chain_step_size = per_chain_adaptation ? driver.step_sizes[chain_index] : driver.step_size
         chains[chain_index] = HMCChain(
             :hmc,
             model,
@@ -557,14 +729,14 @@ function _run_device_batched_hmc(
             vec(energy_errors[:, chain_index]),
             vec(accepted[:, chain_index]),
             vec(divergent[:, chain_index]),
-            driver.step_size,
+            chain_step_size,
             copy(mass_matrix),
             num_leapfrog_steps,
             0,
             zeros(Int, num_samples),
             fill(num_leapfrog_steps, num_samples),
             hmc_target_accept,
-            copy(driver.mass_adaptation_windows),
+            copy(mass_windows),
             nothing,
         )
     end

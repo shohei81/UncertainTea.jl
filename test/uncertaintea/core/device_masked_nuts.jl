@@ -118,11 +118,17 @@ end
         dnuts_conjugate_gauss, (), choicemap((:y, 0.3));
         num_chains=2, num_samples=1, tree_strategy=:hybrid, backend=CPU(),
     )
-    # per-chain adaptation is rejected on the device backend.
-    @test_throws ArgumentError batched_nuts(
+    # per-chain adaptation is now SUPPORTED on the device backend (issue #137): it
+    # routes to the pooled-mass / per-chain-step driver and converges.
+    per_chain = batched_nuts(
         dnuts_conjugate_gauss, (), choicemap((:y, 0.3));
-        num_chains=2, num_samples=1, tree_strategy=:masked, per_chain_adaptation=true, backend=CPU(),
+        num_chains=4, num_samples=300, num_warmup=200,
+        tree_strategy=:masked, per_chain_adaptation=true, backend=CPU(), rng=MersenneTwister(513),
     )
+    per_chain_draws = posterior_array(per_chain)
+    @test all(isfinite, per_chain_draws)
+    @test isapprox(dnuts_mean(per_chain_draws), 0.15; atol=0.1)
+    @test all(<(1.2), rhat(per_chain))
     # A non-lowerable model raises (pointing at device_lowering_report).
     @test_throws ArgumentError batched_nuts(
         dnuts_marginalize_model, (), choicemap((:y, 0.3));
