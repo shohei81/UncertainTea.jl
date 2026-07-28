@@ -23,23 +23,17 @@ function batched_hmc(
     precision=nothing,
     rng::AbstractRNG=Random.default_rng(),
 )
-    # Host default is per-chain adaptation (issue #137); the device backend
-    # requires shared adaptation, so `nothing` resolves to `backend === nothing`.
-    # An explicit user value is always respected.
-    per_chain_adaptation = something(per_chain_adaptation, backend === nothing)
+    # Per-chain adaptation is the default everywhere (issue #137). The HOST path uses
+    # per-chain step + per-chain mass; the DEVICE path uses per-chain step + a SHARED
+    # (pooled) diagonal mass, since the device leapfrog kernels consume a single
+    # shared inverse-mass vector. An explicit user value is always respected.
+    per_chain_adaptation = something(per_chain_adaptation, true)
     if backend !== nothing
         # Device-resident inner loop. RNG stays host-side, so results are statistically
         # equivalent to (not bitwise identical to) the CPU path. The CPU path below is
         # untouched when `backend === nothing`.
         backend isa KernelAbstractions.Backend ||
             throw(ArgumentError("batched_hmc `backend` must be a KernelAbstractions.Backend or nothing, got $(typeof(backend))"))
-        per_chain_adaptation && throw(
-            ArgumentError(
-                "batched_hmc per-chain adaptation is not supported on the device backend; " *
-                "run with backend=nothing, or leave per_chain_adaptation unset / pass " *
-                "per_chain_adaptation=false to use shared adaptation on the device",
-            ),
-        )
         device_precision = precision === nothing ? default_device_precision(backend) : precision
         return _run_device_batched_hmc(
             model, args, constraints;
@@ -52,6 +46,7 @@ function batched_hmc(
             target_accept=target_accept,
             adapt_step_size=adapt_step_size,
             adapt_mass_matrix=adapt_mass_matrix,
+            per_chain_adaptation=per_chain_adaptation,
             find_reasonable_step_size=find_reasonable_step_size,
             divergence_threshold=divergence_threshold,
             mass_matrix_regularization=mass_matrix_regularization,
