@@ -448,26 +448,22 @@ function _run_device_batched_hmc(
             mass_matrix_regularization=mass_matrix_regularization,
             mass_matrix_min_samples=mass_matrix_min_samples,
         )
-        # Per-chain window-end re-search on each chain's own column gradient cache,
-        # against the shared pooled mass. Positions/logjoints refreshed each warmup
-        # iteration from the host mirrors.
-        refind = [
-            ScalarStepSizeSearch(
-                model,
-                _logjoint_gradient_cache(
-                    model,
-                    collect(view(position, :, chain_index)),
-                    _batched_args(batch_args, chain_index),
-                    _batched_constraints(batch_constraints, chain_index);
-                    reject_invalid_parameters=true,
-                ),
-                _batched_args(batch_args, chain_index),
-                _batched_constraints(batch_constraints, chain_index),
-                rng,
-                collect(view(position, :, chain_index)),
-                current_logjoint[chain_index],
-            ) for chain_index = 1:num_chains
-        ]
+        # Per-chain window-end re-search (issue #158 lever A): ONE batched call
+        # re-searches every chain's step against the shared pooled mass in a single
+        # vectorized doubling loop (replacing the former C scalar searches). It holds
+        # live references to the host mirrors position/current_logjoint/current_gradient
+        # (refreshed by the device download each warmup iteration) and reuses the
+        # initial-search host workspace.
+        refind = BatchedPerChainStepSizeSearch(
+            host_workspace,
+            model,
+            position,
+            current_logjoint,
+            current_gradient,
+            batch_args,
+            batch_constraints,
+            rng,
+        )
     else
         if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
             hmc_step_size = _find_reasonable_batched_step_size(
@@ -642,8 +638,6 @@ function _run_device_batched_hmc(
                     )
                     accept_statistics[chain_index] =
                         divergent_step[chain_index] ? 0.0 : accept_prob[chain_index]
-                    refind[chain_index].position = collect(view(position, :, chain_index))
-                    refind[chain_index].current_logjoint = current_logjoint[chain_index]
                 end
                 warmup_update!(
                     driver,

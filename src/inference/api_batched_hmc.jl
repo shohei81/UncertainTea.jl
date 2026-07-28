@@ -422,26 +422,21 @@ function _batched_hmc_host_pooled!(
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
     )
-    # Per-chain window-end re-search uses a single-chain reasonable step-size search on
-    # each chain's own column gradient cache against the SHARED pooled mass (chain-major
-    # RNG at warmup window ends), mirroring the device pooled refind.
-    refinds = [
-        ScalarStepSizeSearch(
-            model,
-            _logjoint_gradient_cache(
-                model,
-                collect(view(position, :, chain_index)),
-                _batched_args(batch_args, chain_index),
-                _batched_constraints(batch_constraints, chain_index);
-                reject_invalid_parameters=true,
-            ),
-            _batched_args(batch_args, chain_index),
-            _batched_constraints(batch_constraints, chain_index),
-            rng,
-            collect(view(position, :, chain_index)),
-            current_logjoint[chain_index],
-        ) for chain_index = 1:num_chains
-    ]
+    # Per-chain window-end re-search (issue #158 lever A): ONE batched call re-searches
+    # every chain's step against the SHARED pooled mass in a single vectorized doubling
+    # loop (replacing the former C scalar searches). It holds live references to
+    # position/current_logjoint/current_gradient (mutated in place below) and reuses the
+    # HMC workspace that also ran the initial search.
+    refind = BatchedPerChainStepSizeSearch(
+        workspace,
+        model,
+        position,
+        current_logjoint,
+        current_gradient,
+        batch_args,
+        batch_constraints,
+        rng,
+    )
     accept_statistics = Vector{Float64}(undef, num_chains)
 
     sample_index = 0
@@ -522,8 +517,6 @@ function _batched_hmc_host_pooled!(
                     divergent_step[chain_index],
                 )
                 accept_statistics[chain_index] = divergent_step[chain_index] ? 0.0 : accept_prob[chain_index]
-                refinds[chain_index].position = collect(view(position, :, chain_index))
-                refinds[chain_index].current_logjoint = current_logjoint[chain_index]
             end
             warmup_update!(
                 driver,
@@ -531,7 +524,7 @@ function _batched_hmc_host_pooled!(
                 accept_statistics,
                 position,
                 workspace.mass_adaptation_weights,
-                refinds,
+                refind,
             )
             if iteration == num_warmup
                 warmup_finalize!(driver)
