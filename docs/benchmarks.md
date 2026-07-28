@@ -14,15 +14,17 @@ Rows marked FAIL keep their timings visible for context only.
 
 ## Provenance (current)
 
-- **Date:** 2026-07-28 (device legs re-measured at the new default after the
-  #137 device fix; CPU/host legs carried over from the 2026-07-24 pass, which
-  supersedes the 2026-07-23 baseline preserved at the bottom of this file).
+- **Date:** 2026-07-28. `logistic` re-measured after the GLM analytic lowering
+  (#149/#150); device legs re-measured at the new default after the #137
+  device fix (#176); other CPU/host legs carried over from the 2026-07-24
+  pass, which supersedes the 2026-07-23 baseline preserved at the bottom of
+  this file.
 - **Hardware:** Apple M4 (10 cores, 32 GB), Metal 4; macOS 26.5.1. All
   frameworks measured natively on this one machine.
-- **Software:** Julia 1.12.2, UncertainTea @ `c404ee2` (main, after the first
-  performance wave PRs #164–#173 + #170 and the device per-chain-step fix
-  #176), NumPyro 0.19 / JAX 0.9 (pinned in `bench/crossppl/python/uv.lock`),
-  CmdStan 2.36.0, Python 3.12.
+- **Software:** Julia 1.12.2, UncertainTea @ `b8fe737` (main, after the first
+  performance wave PRs #164–#173, the device per-chain-step fix #176, and the
+  GLM lowering #178), NumPyro 0.19 / JAX 0.9 (pinned in
+  `bench/crossppl/python/uv.lock`), CmdStan 2.36.0, Python 3.12.
 - **Sampler settings:** NUTS everywhere, `target_accept=0.8`,
   `max_tree_depth=10`, diagonal metric, framework-default warmup schedules.
   Correctness pass: 4 chains × 1000 warmup + 1000 draws × 3 repetitions
@@ -63,18 +65,26 @@ Rows marked FAIL keep their timings visible for context only.
    the honest ones. Warmup cost also rose with per-chain adaptation (#158
    tracks recovering it via pooled-mass — whose core machinery #176 already
    built).
-4. **GLMs still trail.** `logistic` batched-cpu passes the gate now (156
-   ESS/s, was gate-marginal) but stays far behind NumPyro (4,185) because the
-   bernoulli-logit + covariate observation does not lower to the analytic
-   batched path yet (#150/#134/#135). Single-chain `logistic` improved 83 →
-   406 ESS/s from the interpreter rework (#145).
+4. **GLMs now ride the analytic path and win at low chain counts.** #150/#149
+   backend-lower the logistic linear predictor `alpha + sum(beta .* X[:, i])`
+   as a fused GLM node scored by a stable `bernoullilogit` family, so
+   `logistic` no longer falls back to per-column ForwardDiff. `batched-cpu` at
+   4 chains jumped **156 → 11,790 bulk ESS/s** (~76×; gradient 531 µs → 11 µs)
+   — now ahead of NumPyro-parallel (10,504) and second only to Stan (64,569).
+   It is gate-passing at every chain count. But NumPyro-vectorized still leads
+   at high chain counts (54,197 vs 5,539 at 512): unlike `gauss`, the logistic
+   per-observation `X[:, i]` dot product cannot be sufficient-statistics-fused
+   (each observation has distinct covariates), so the gradient stays O(n·D·B),
+   and the host `batched-cpu` path is single-threaded. Threading (#143) and
+   device lowering (#135) are the levers to close that high-chain gap.
 
-Open issues from the audit still shaping these numbers: #150/#134/#135 (GLM /
-device lowering — the `logistic` gap), #151/#152/#153/#160 (device
-engineering — the `batched-cpu`-vs-Metal gap), #158 (pooled-mass host default
-+ nutpie, to recover warmup cost), #144 (generated type-stable scorer, the
-remaining single-chain gap vs Stan). #137 (per-chain step-size adaptation) is
-now closed on both host and device.
+Open issues from the audit still shaping these numbers: #143 (thread the
+batched host gradient — the `logistic` high-chain gap) and #135 (device GLM
+lowering), #151/#152/#153/#160 (device engineering — the `batched-cpu`-vs-Metal
+gap), #158 (pooled-mass host default + nutpie, to recover warmup cost), #144
+(generated type-stable scorer, the remaining single-chain gap vs Stan). #137
+(per-chain step-size adaptation) and #149/#150 (GLM analytic lowering) are now
+closed.
 
 ## Scaling sweep — gauss (mean/scale, N=1000; 200 warmup + 500 draws)
 
@@ -123,15 +133,26 @@ is built for the many-chains regime above, not 4 chains.
 
 ### logistic (N=500, D=8) — all PASS
 
-| framework | min bulk ESS/s | div rate |
-|---|---|---|
-| stan | 23,628 ± 1,951 | 0 |
-| numpyro-parallel | 4,185 ± 500 | 0 |
-| uncertaintea-cpu | 406 ± 32 | 0 |
-| uncertaintea-batched-cpu | 156 ± 6 | 0 |
+| framework | chains | min bulk ESS/s | div rate |
+|---|---|---|---|
+| stan | 4 | 64,569 ± 2,514 | 0 |
+| uncertaintea-batched-cpu | 4 | **11,790 ± 790** | 0 |
+| numpyro-parallel | 4 | 10,504 ± 670 | 0 |
+| uncertaintea-cpu | 4 | 1,078 ± 12 | 0 |
+| numpyro-vectorized | 512 | 54,197 ± 2,387 | 0 |
+| uncertaintea-batched-cpu | 512 | 5,539 ± 380 | 0 |
+| numpyro-vectorized | 64 | 31,886 ± 1,242 | 0 |
+| uncertaintea-batched-cpu | 64 | 9,270 ± 910 | 0 |
 
-GLM gap persists (no analytic/​device lowering yet — #150/#134/#135);
-single-chain improved 83 → 406 from #145.
+`logistic` now rides the fused GLM analytic path (#150/#149): `batched-cpu` at
+4 chains went 156 → **11,790 ESS/s** (~76×), ahead of NumPyro-parallel. It is
+gate-passing at every chain count. NumPyro-vectorized still leads at high
+chain counts because the per-observation covariate dot cannot be
+sufficient-statistics-fused (see key finding 4) and `batched-cpu` is
+single-threaded (#143). Single-chain `uncertaintea-cpu` improved 83 → 1,078
+across #145/#150/#159. The joint density is unchanged; the Julia model now
+uses `bernoullilogit(alpha + sum(beta .* X[:, i]))`, matching the Stan
+(`bernoulli_logit`) and NumPyro (`Bernoulli(logits=...)`) sides.
 
 ### eight_schools_centered — all FAIL (funnel; expected)
 
@@ -148,6 +169,7 @@ model stays in the suite as the honesty check.
 | gauss batched-cpu 4096 chains | 763 s / FAIL | 23.2 s / **PASS**, 37k ESS/s | same |
 | gauss Metal 4096 (default) | FAIL (~6% div) | **PASS**, 18k ESS/s (55 s) | #137 device (#176) + #146 |
 | gauss Metal / ka default gate | FAIL, R-hat ≈ 11.7 | **PASS**, R-hat ≈ 1.003, 0% div | #176 |
+| logistic batched-cpu 4 chains | 156 ESS/s (gate-marginal) | **11,790 ESS/s** (PASS) | #149, #150 |
 | gauss cpu (single chain) | 173 ESS/s | 509 ESS/s | #145, #159 |
 | eight-schools-nc cpu | 3,354 ESS/s | 9,554 ESS/s | #145, #159 |
 | logistic cpu | 83 ESS/s | 406 ESS/s | #145 |
