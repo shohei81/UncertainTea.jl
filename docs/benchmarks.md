@@ -14,13 +14,14 @@ Rows marked FAIL keep their timings visible for context only.
 
 ## Provenance (current)
 
-- **Date:** 2026-07-24 (post-optimization; supersedes the 2026-07-23 baseline
-  preserved at the bottom of this file).
+- **Date:** 2026-07-28 (device legs re-measured at the new default after the
+  #137 device fix; CPU/host legs carried over from the 2026-07-24 pass, which
+  supersedes the 2026-07-23 baseline preserved at the bottom of this file).
 - **Hardware:** Apple M4 (10 cores, 32 GB), Metal 4; macOS 26.5.1. All
   frameworks measured natively on this one machine.
-- **Software:** Julia 1.12.2, UncertainTea @ `bfca904` (main, after the first
-  performance wave: PRs #164/#165/#166/#167/#168/#169/#171/#172/#173/#170),
-  NumPyro 0.19 / JAX 0.9 (pinned in `bench/crossppl/python/uv.lock`),
+- **Software:** Julia 1.12.2, UncertainTea @ `c404ee2` (main, after the first
+  performance wave PRs #164–#173 + #170 and the device per-chain-step fix
+  #176), NumPyro 0.19 / JAX 0.9 (pinned in `bench/crossppl/python/uv.lock`),
   CmdStan 2.36.0, Python 3.12.
 - **Sampler settings:** NUTS everywhere, `target_accept=0.8`,
   `max_tree_depth=10`, diagonal metric, framework-default warmup schedules.
@@ -41,24 +42,27 @@ Rows marked FAIL keep their timings visible for context only.
    host default (#137), which together took the 512-chain leg from a
    gate-failing 72 s to a passing 2.0 s. Only Stan's single-chain C++
    (171,372 ESS/s on this 2-parameter model) is faster.
-2. **Metal now overtakes both at 4096 chains.** The device masked path still
-   runs a host gradient every iteration (#151, not yet fixed), but that
-   gradient inherited the #146 fusion, so Metal's 4096-chain sampling dropped
-   from 228 s to 36.3 s → 41,215 ESS/s, ahead of the 10-core CPU backend
-   (36,879) and NumPyro (7,687). This is the first honest "GPU-native
-   overtakes CPU" crossover in the suite. Fixing #151 (move the per-iteration
-   leaf onto the device) should widen it substantially and lower the
-   crossover chain count.
-3. **Correctness still requires per-chain adaptation, which is default only on
-   the host paths.** The stranding failure (#137: prior-draw init + shared
-   step size permanently strands ~6% of chains, divergence rate ≈
-   P(prior s < 0.4) = 6.2%) is fixed by default on `batched-cpu`, but the
-   KernelAbstractions CPU (`batched-cpu-ka`) and Metal paths are treated as
-   device backends where per-chain step-size adaptation is still deferred
-   (#137 device part) — so their default-config rows FAIL, and the Metal
-   scaling numbers above come from the `-pinned-init` diagnostic workaround.
-   Warmup cost rose with the per-chain default (#158 tracks recovering it via
-   pooled-mass adaptation).
+2. **The device paths now pass the gate by default (no init workaround).**
+   Issue #137 is fully closed: per-chain step-size adaptation now works on the
+   device masked path via a pooled-mass + per-chain-step warmup driver (PR
+   #176). With plain prior-draw init the Metal and KernelAbstractions-CPU
+   backends go from ~6% divergence / R-hat ≈ 11.7 (shared adaptation,
+   stranded chains) to **0% divergence / R-hat ≈ 1.003** — verified on the M4
+   Metal GPU. Every device row in the sweep below is now a real
+   default-configuration result; the `-pinned-init` diagnostic workaround is
+   retired.
+3. **Metal beats NumPyro at 4096 chains but the CPU backend still dominates;
+   device per-draw cost is the next target.** At default init Metal reaches
+   18,104 ESS/s at 4096 chains (PASS) — ahead of NumPyro-vectorized (7,687) —
+   but the host `batched-cpu` backend leads everywhere (36,879 at 4096,
+   53,430 at 512). Metal's per-draw cost is still high because the masked path
+   runs a host gradient every iteration (#151, not yet fixed) and pays
+   full-width work on finished lanes (#160); these are the levers to make the
+   GPU genuinely win. The earlier `-pinned-init` diagnostic overstated the
+   device story (best-case init, shorter trees) — the default numbers here are
+   the honest ones. Warmup cost also rose with per-chain adaptation (#158
+   tracks recovering it via pooled-mass — whose core machinery #176 already
+   built).
 4. **GLMs still trail.** `logistic` batched-cpu passes the gate now (156
    ESS/s, was gate-marginal) but stays far behind NumPyro (4,185) because the
    bernoulli-logit + covariate observation does not lower to the analytic
@@ -66,9 +70,11 @@ Rows marked FAIL keep their timings visible for context only.
    406 ESS/s from the interpreter rework (#145).
 
 Open issues from the audit still shaping these numbers: #150/#134/#135 (GLM /
-device lowering), #151/#152/#153 (device engineering), #137-device + #158
-(per-chain/pooled adaptation on device), #144 (generated type-stable scorer,
-the remaining single-chain gap vs Stan).
+device lowering — the `logistic` gap), #151/#152/#153/#160 (device
+engineering — the `batched-cpu`-vs-Metal gap), #158 (pooled-mass host default
++ nutpie, to recover warmup cost), #144 (generated type-stable scorer, the
+remaining single-chain gap vs Stan). #137 (per-chain step-size adaptation) is
+now closed on both host and device.
 
 ## Scaling sweep — gauss (mean/scale, N=1000; 200 warmup + 500 draws)
 
@@ -82,21 +88,21 @@ the remaining single-chain gap vs Stan).
 | numpyro-vectorized | 64 | f32 | PASS | 14,279 ± 1,205 | 1.70 | 1.63 | 0 |
 | numpyro-vectorized | 512 | f32 | PASS | 28,378 ± 1,773 | 7.08 | 4.23 | 0 |
 | numpyro-vectorized | 4096 | f32 | PASS | 7,687 | 205 | 93.6 | 0 |
-| uncertaintea-batched-metal-pinned-init | 64 | f32 | PASS | 2,975 ± 290 | 8.29 | 6.21 | 0 |
-| uncertaintea-batched-metal-pinned-init | 512 | f32 | PASS | 14,712 ± 3,959 | 13.9 | 6.32 | 0 |
-| uncertaintea-batched-metal-pinned-init | 4096 | f32 | PASS | **41,215** | 36.3 | 13.4 | 0 |
-| uncertaintea-batched-cpu-ka | 64 | f64 | FAIL (#137 dev) | 85.8 | 3.1 | 1.48 | 0.057 |
-| uncertaintea-batched-cpu-ka | 512 | f64 | FAIL (#137 dev) | 43.2 | 37.3 | 13.5 | 0.07 |
-| uncertaintea-batched-metal | 64 | f32 | FAIL (#137 dev) | 9.53 | 29.8 | 15.7 | 0.057 |
-| uncertaintea-batched-metal | 512 | f32 | FAIL (#137 dev) | 24.8 | 66.7 | 21.2 | 0.07 |
+| uncertaintea-batched-cpu-ka | 64 | f64 | PASS | 5,259 ± 140 | 3.20 | 2.86 | 0 |
+| uncertaintea-batched-cpu-ka | 512 | f64 | PASS | 2,916 ± 620 | 46.0 | 33.5 | 0 |
+| uncertaintea-batched-cpu-ka | 4096 | f64 | PASS | 6,282 | 159 | 178 | 0 |
+| uncertaintea-batched-metal | 64 | f32 | PASS | 648 ± 4.2 | 25.9 | 18.9 | 0 |
+| uncertaintea-batched-metal | 512 | f32 | PASS | 2,770 ± 53 | 46.9 | 37.9 | 0 |
+| uncertaintea-batched-metal | 4096 | f32 | PASS | **18,104** | 55.3 | 72.3 | 0 |
 
-`-pinned-init` = the #137 diagnostic workaround (every chain initialized at
-the posterior mode); those rows are not default-configuration results. The
-default-config `-ka` and Metal rows FAIL because per-chain adaptation is not
-yet the device default (#137 device part); their timings are context only.
-`batched-cpu-ka` is also slow here because the masked KernelAbstractions path
-does not use the fused analytic gradient the host `batched-cpu` path got — on
-this shape `batched-cpu` now dominates it.
+All device rows are now default-configuration (prior-draw init, per-chain
+adaptation the device default) and gate-passing after #176 — no `-pinned-init`
+workaround. `batched-cpu` dominates the device backends on this shape because
+it uses the fused analytic gradient (#146/#166) while the masked
+KernelAbstractions/Metal paths run the (now-fused but still host-side)
+gradient every iteration (#151) and pay full-width work on finished lanes
+(#160). Metal overtakes NumPyro only at 4096 chains; closing the gap to
+`batched-cpu` is the device-engineering work in #151/#152/#153/#160.
 
 ## Correctness pass (4 chains × 1000 warmup + 1000 draws)
 
@@ -136,11 +142,12 @@ model stays in the suite as the honesty check.
 
 ## What changed since the 2026-07-23 baseline
 
-| leg | 2026-07-23 | 2026-07-24 | driver |
+| leg | 2026-07-23 | now | driver |
 |---|---|---|---|
 | gauss batched-cpu 512 chains | 72 s / FAIL | 2.0 s / **PASS**, 53k ESS/s | #146, #166, #137, #142 |
 | gauss batched-cpu 4096 chains | 763 s / FAIL | 23.2 s / **PASS**, 37k ESS/s | same |
-| gauss Metal 4096 (pinned) | 228 s, 3.6k ESS/s | 36.3 s, **41k ESS/s** | #146 (via the #151 host gradient) |
+| gauss Metal 4096 (default) | FAIL (~6% div) | **PASS**, 18k ESS/s (55 s) | #137 device (#176) + #146 |
+| gauss Metal / ka default gate | FAIL, R-hat ≈ 11.7 | **PASS**, R-hat ≈ 1.003, 0% div | #176 |
 | gauss cpu (single chain) | 173 ESS/s | 509 ESS/s | #145, #159 |
 | eight-schools-nc cpu | 3,354 ESS/s | 9,554 ESS/s | #145, #159 |
 | logistic cpu | 83 ESS/s | 406 ESS/s | #145 |
@@ -177,9 +184,12 @@ loop-addressed gaussian rather than a regression because of #134/#135.
 
 ```bash
 cd bench/crossppl
-./run_all.sh cpu && ./run_all.sh metal && ./run_all.sh pinned && ./run_all.sh analyze
+./run_all.sh cpu && ./run_all.sh metal && ./run_all.sh analyze
 ```
 
+The device legs (`metal`, and the `-ka` legs inside `cpu`) now pass the gate
+at their default configuration, so the `pinned` mode is no longer needed to
+report device numbers — it remains only as an init-sensitivity diagnostic.
 Update the "current" sections above from `results/summary.md` with the date,
 hardware, and commit; move the previous numbers into the history table; keep
 the correctness-gate framing intact.
