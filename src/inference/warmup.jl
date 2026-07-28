@@ -238,3 +238,125 @@ function warmup_finalize!(driver::WarmupDriver)
     end
     return driver.step_size
 end
+
+# ---- pooled-mass / per-chain-step warmup driver --------------------------------
+#
+# The third adaptation mode (issue #137): a SHARED diagonal mass matrix pooled
+# across all chains, plus a PER-CHAIN step size. This is exactly what the device
+# masked NUTS/HMC path needs -- the device leapfrog kernels consume one shared
+# `inverse_mass` P-vector (so the host per-chain-mass mode is unusable on device),
+# but each chain still gets its own dual-averaged step, which is the operative fix
+# for prior-draw stranding.
+#
+# The shared mass machinery is COMPOSED from an inner `WarmupDriver` built with
+# `adapt_step_size=false`, so its `warmup_update!`/`warmup_finalize!` run the exact
+# pooled running-variance + windowed mass math (bit-identical to shared mode) and
+# never touch a step size. This driver adds the per-chain dual-averaging states and
+# re-runs each chain's reasonable-step-size search against the freshly-pooled shared
+# mass at every mass window end (mirroring the scalar driver's window-end re-search,
+# but per chain).
+mutable struct PooledMassPerChainStepDriver
+    mass::WarmupDriver
+    dual_states::Vector{DualAveragingState}
+    step_sizes::Vector{Float64}
+    target_accept::Float64
+    num_warmup::Int
+    adapt_step_size::Bool
+end
+
+function PooledMassPerChainStepDriver(
+    num_params::Int,
+    num_warmup::Int,
+    initial_step_sizes::AbstractVector{Float64},
+    target_accept::Real;
+    adapt_step_size::Bool,
+    adapt_mass_matrix::Bool,
+    mass_matrix_regularization::Real,
+    mass_matrix_min_samples::Int,
+)
+    accept = Float64(target_accept)
+    # The inner driver owns ONLY the shared mass state; adapt_step_size=false keeps
+    # its own scalar step untouched so it never runs a step re-search. Its initial
+    # step is irrelevant (never read); use the first chain's for tidiness.
+    mass = WarmupDriver(
+        num_params,
+        num_warmup,
+        isempty(initial_step_sizes) ? 1.0 : initial_step_sizes[1],
+        accept;
+        adapt_step_size=false,
+        adapt_mass_matrix=adapt_mass_matrix,
+        mass_matrix_regularization=mass_matrix_regularization,
+        mass_matrix_min_samples=mass_matrix_min_samples,
+    )
+    dual_states = [_dual_averaging_state(step, accept) for step in initial_step_sizes]
+    return PooledMassPerChainStepDriver(
+        mass,
+        dual_states,
+        collect(Float64, initial_step_sizes),
+        accept,
+        num_warmup,
+        adapt_step_size,
+    )
+end
+
+# The shared diagonal mass metric threaded through every chain's integrator.
+_driver_metric(driver::PooledMassPerChainStepDriver) = _driver_metric(driver.mass)
+
+# One warmup iteration for the pooled-mass / per-chain-step driver.
+# `accept_statistics` is a per-chain vector (each chain's own masked accept stat,
+# 0.0 for a divergent chain). `positions` is the full P x C matrix (the mass is
+# pooled over ALL chains, exactly once). `mass_weights` is the per-chain weight
+# vector. `refind_per_chain` is a vector of callables, invoked at each mass window
+# end to re-search each chain's step against the just-updated shared mass.
+function warmup_update!(
+    driver::PooledMassPerChainStepDriver,
+    iteration::Int,
+    accept_statistics::AbstractVector,
+    positions,
+    mass_weights,
+    refind_per_chain,
+)
+    if driver.adapt_step_size
+        @inbounds for c in eachindex(driver.step_sizes)
+            driver.step_sizes[c] = _update_step_size!(driver.dual_states[c], accept_statistics[c])
+        end
+    end
+
+    mass = driver.mass
+    schedule = mass.warmup_schedule
+    # A mass window closes on THIS iteration exactly when the inner driver's mass
+    # block will advance its window index (same guard as the scalar path). Capture
+    # it BEFORE the inner update advances `mass_window_index`.
+    window_ends_now =
+        mass.adapt_mass_matrix &&
+        mass.mass_window_index <= length(schedule.slow_window_ends) &&
+        iteration > schedule.initial_buffer &&
+        iteration == schedule.slow_window_ends[mass.mass_window_index]
+
+    # Pooled shared-mass update. adapt_step_size=false => this runs only the running
+    # variance + windowed mass recomputation and never invokes the refind below.
+    warmup_update!(mass, iteration, 0.0, positions, mass_weights, nothing)
+
+    # At a window end, re-search each chain's step against the NEW shared mass and
+    # restart that chain's dual averaging (the per-chain analog of the scalar
+    # driver's window-end reset at warmup.jl's `refind` block).
+    if window_ends_now && driver.adapt_step_size && iteration < driver.num_warmup
+        metric = _driver_metric(mass)
+        @inbounds for c in eachindex(driver.step_sizes)
+            driver.step_sizes[c] = refind_per_chain[c](driver.step_sizes[c], metric)
+            driver.dual_states[c] = _dual_averaging_state(driver.step_sizes[c], driver.target_accept)
+        end
+    end
+
+    return driver.step_sizes
+end
+
+function warmup_finalize!(driver::PooledMassPerChainStepDriver)
+    if driver.adapt_step_size
+        @inbounds for c in eachindex(driver.step_sizes)
+            driver.step_sizes[c] = _final_step_size(driver.dual_states[c])
+        end
+    end
+    warmup_finalize!(driver.mass)
+    return driver.step_sizes
+end
