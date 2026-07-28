@@ -5,6 +5,12 @@ _backend_gradient_supported_expr(::BackendLiteralExpr) = true
 _backend_gradient_supported_expr(::BackendSlotExpr) = true
 _backend_gradient_supported_expr(::BackendTupleExpr) = false
 
+# The linear-predictor node emits its own per-parameter partials (X[d, index]
+# onto coef's rows, plus the intercept's own gradient); only the intercept
+# sub-expr must be gradient-differentiable.
+_backend_gradient_supported_expr(expr::BackendLinearPredictorExpr) =
+    isnothing(expr.intercept) || _backend_gradient_supported_expr(expr.intercept)
+
 function _backend_gradient_supported_constant_expr(expr::BackendLiteralExpr)
     return expr.value isa Real && !(expr.value isa Bool)
 end
@@ -83,6 +89,10 @@ end
 
 function _backend_gradient_supported_step(step::BackendBernoulliChoicePlanStep)
     return isnothing(step.parameter_slot) && _backend_gradient_supported_expr(step.probability)
+end
+
+function _backend_gradient_supported_step(step::BackendBernoulliLogitChoicePlanStep)
+    return isnothing(step.parameter_slot) && _backend_gradient_supported_expr(step.eta)
 end
 
 function _backend_gradient_supported_step(step::BackendGeometricChoicePlanStep)
@@ -192,6 +202,8 @@ _backend_gradient_supported_step(step::BackendWeibullChoicePlanStep, numeric_slo
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendBetaChoicePlanStep, numeric_slots::BitVector) = _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendBernoulliChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendBernoulliLogitChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendGeometricChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
@@ -689,6 +701,55 @@ function _eval_backend_numeric_expr_and_gradient!(
     depth::Int=1,
 ) where {T<:AbstractFloat}
     _backend_numeric_error(env, "batched backend gradient expression cannot be a tuple")
+end
+
+# Fused GLM linear predictor value + gradient. The intercept contributes its own
+# gradient plane (e.g. d_eta/d_alpha through alpha's slot gradient); the
+# coefficient part contributes eta += coef[d]*X[d, index] and seeds
+# d_eta/d_coef[d] = X[d, index] directly onto coef's UNCONSTRAINED rows via the
+# cache's value-row -> seed-row map (X is constant data, zero gradient).
+function _eval_backend_numeric_expr_and_gradient!(
+    values::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    expr::BackendLinearPredictorExpr,
+    depth::Int=1,
+) where {T<:AbstractFloat}
+    if isnothing(expr.intercept)
+        fill!(values, zero(T))
+        fill!(gradients, zero(T))
+    else
+        _eval_backend_numeric_expr_and_gradient!(values, gradients, cache, env, expr.intercept, depth)
+    end
+    env.assigned[expr.coef_slot] ||
+        throw(BatchedBackendFallback("linear predictor coefficient slot $(expr.coef_slot) is not assigned"))
+    env.assigned[expr.matrix_slot] ||
+        throw(BatchedBackendFallback("linear predictor covariate slot $(expr.matrix_slot) is not assigned"))
+    columns = _batched_index_scratch!(env, depth)
+    _eval_backend_index_value_expr!(columns, env, expr.index, depth + 1)
+    coef_storage = env.generic_values[expr.coef_slot]
+    matrix_storage = env.generic_values[expr.matrix_slot]
+    seed_rows = cache.seed_rows
+    for batch_index = 1:env.batch_size
+        coef = coef_storage[batch_index]
+        matrix = matrix_storage[batch_index]
+        column = columns[batch_index]
+        accumulator = values[batch_index]
+        @inbounds for d = 1:expr.coef_length
+            covariate = T(matrix[d, column])
+            accumulator += T(coef[d]) * covariate
+            seed_row = seed_rows[expr.coef_value_index+d-1]
+            seed_row > 0 || throw(
+                BatchedBackendFallback(
+                    "linear predictor coefficient row $(expr.coef_value_index + d - 1) has no gradient seed row",
+                ),
+            )
+            gradients[seed_row, batch_index] += covariate
+        end
+        values[batch_index] = accumulator
+    end
+    return values, gradients
 end
 
 function _eval_backend_numeric_expr_and_gradient!(

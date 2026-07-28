@@ -41,6 +41,30 @@ struct BackendTupleExpr{A<:Tuple} <: AbstractBackendExpr
     arguments::A
 end
 
+# A fused GLM linear predictor `eta = intercept + sum(coef .* Matrix[:, index])`
+# (issues #149/#150). Unlike any other backend expr this produces PER-PARAMETER
+# gradients from an indexed covariate column times a latent coefficient VECTOR:
+# `d_eta/d_intercept` flows through the intercept sub-expr, and
+# `d_eta/d_coef[d] = Matrix[d, index]` is seeded directly onto the coefficient's
+# unconstrained parameter rows (X is constant data, zero gradient). The node is
+# family-agnostic (it yields a scalar eta and its gradient) so a future
+# normal/linreg lowering can reuse it; only bernoulli-logit is wired now.
+#
+# `intercept` is an optional numeric sub-expr (`nothing` when absent). `coef_slot`
+# is the coefficient latent's environment binding slot (its stored constrained
+# vector supplies the value); `coef_value_index`/`coef_length` locate its
+# constrained value rows so the gradient can be seeded through the cache's
+# value-row -> seed-row map. `matrix_slot` is the covariate model-argument
+# (generic) slot; `index` lowers the loop iterator.
+struct BackendLinearPredictorExpr{I,X<:AbstractBackendExpr} <: AbstractBackendExpr
+    intercept::I
+    coef_slot::Int
+    coef_value_index::Int
+    coef_length::Int
+    matrix_slot::Int
+    index::X
+end
+
 struct BackendBlockExpr{A<:Tuple} <: AbstractBackendExpr
     arguments::A
 end
@@ -319,6 +343,8 @@ function _backend_lower_step(
     step.rhs.family === :mixture && return _backend_lower_mixture_choice_step(model, layout, parameter_layout, step, issues)
     step.rhs.family === :mvnormaldense &&
         return _backend_lower_mvnormaldense_choice_step(model, layout, parameter_layout, step, issues)
+    step.rhs.family === :bernoullilogit &&
+        return _backend_lower_bernoullilogit_choice_step(model, layout, parameter_layout, step, issues)
 
     address = _backend_lower_address(model, layout, step.address, issues)
     arguments = map(arg -> _backend_lower_expr(model, layout, arg, issues, "distribution argument"), step.rhs.arguments)
@@ -573,6 +599,25 @@ function _mark_backend_numeric_expr_slots!(
     for arg in expr.arguments
         _mark_backend_numeric_expr_slots!(arg, numeric_slots, index_slots, generic_slots)
     end
+    return nothing
+end
+
+# A linear-predictor node reads its intercept (numeric), the covariate matrix
+# (generic model arg), and the loop index. The coefficient latent binding slot
+# is deliberately NOT marked as a read: it is a latent-vector binding marked
+# generic by its own prior step, and this node supplies coef's per-parameter
+# gradient explicitly, so the latent-vector taint gate (manual_gradient.jl) must
+# not see it as a plain (gradient-blind) read.
+function _mark_backend_numeric_expr_slots!(
+    expr::BackendLinearPredictorExpr,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    isnothing(expr.intercept) ||
+        _mark_backend_numeric_expr_slots!(expr.intercept, numeric_slots, index_slots, generic_slots)
+    _mark_backend_generic_slot!(numeric_slots, index_slots, generic_slots, expr.matrix_slot)
+    _mark_backend_index_expr_slots!(expr.index, numeric_slots, index_slots, generic_slots)
     return nothing
 end
 

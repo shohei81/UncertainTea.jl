@@ -56,6 +56,7 @@ _backend_observed_loop_gradient_supported(
         BackendStudentTChoicePlanStep,
         BackendLaplaceChoicePlanStep,
         BackendBernoulliChoicePlanStep,
+        BackendBernoulliLogitChoicePlanStep,
         BackendPoissonChoicePlanStep,
         BackendGeometricChoicePlanStep,
         BackendBinomialChoicePlanStep,
@@ -81,6 +82,25 @@ function _score_backend_observed_loop_and_gradient!(
     observed =
         constraints isa ChoiceMap ?
         _gathered_observed_loop_values!(cache, env, step, choice, reference_iterable, constraints) : nothing
+
+    # fused GLM linear-predictor gradient (issue #150): a bernoulli-logit
+    # observation whose eta is the fused linear predictor cannot take the
+    # sufficient-statistics/hoisted tiers (eta reads the iterator through the
+    # covariate column), but the per-iteration generic walk pays a dense P x B
+    # gradient-plane update PER observation. This tier reduces over observations
+    # FIRST (per chain), then applies the P x B chain rule once — the same
+    # observation-order reassociation the hoisted normal tier uses (tolerance,
+    # not bitwise). Requires a loop-invariant intercept (checked) plus a
+    # loop-invariant coefficient vector + covariate matrix (guaranteed by the
+    # linear-predictor lowering: coef is a latent vector, matrix a model arg).
+    if !isnothing(observed) &&
+       _BATCHED_GRADIENT_OBSERVED_LOOP_HOIST[] &&
+       choice isa BackendBernoulliLogitChoicePlanStep &&
+       choice.eta isa BackendLinearPredictorExpr &&
+       (isnothing(choice.eta.intercept) || !_backend_expr_reads_slot(choice.eta.intercept, step.iterator_slot))
+        _score_backend_observed_loop_bernoullilogit_glm!(choice, step, observed, reference_iterable, totals, gradients, cache, env)
+        return totals, gradients
+    end
 
     # sufficient-statistics fusion (issue #146): loop-invariant parameters +
     # shared constraints + closed-form-compatible data replace the whole
@@ -116,6 +136,124 @@ function _score_backend_observed_loop_and_gradient!(
         _score_backend_observed_loop_choice_gradient!(choice, totals, gradients, cache, env)
     end
     return totals, gradients
+end
+
+# Fused bernoulli-logit GLM gradient over the whole observation loop. Per chain,
+# with eta_i = intercept + sum_d coef[d]*X[d, col_i] and
+# derivative_i = y_i - logistic(eta_i):
+#   logjoint sum      = sum_i [y_i*eta_i - log1p(exp(eta_i))]
+#   d/d_intercept     = sum_i derivative_i         (chain-ruled through the
+#                                                   loop-invariant intercept plane)
+#   d/d_coef[d]       = sum_i derivative_i*X[d, col_i]  (seeded on coef's rows)
+# The intercept value+gradient is evaluated ONCE (loop-invariant); the covariate
+# columns are resolved once from the iterator. A non-0/1 observation scores -Inf
+# and contributes no gradient, exactly like `_accumulate_bernoullilogit_gradient!`.
+function _score_backend_observed_loop_bernoullilogit_glm!(
+    choice::BackendBernoulliLogitChoicePlanStep,
+    step::BackendLoopPlanStep,
+    observed::Vector{T},
+    reference_iterable,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    eta = choice.eta
+    intercept_values = _batched_numeric_scratch!(env, 1)
+    intercept_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    if isnothing(eta.intercept)
+        fill!(intercept_values, zero(T))
+        fill!(intercept_gradients, zero(T))
+    else
+        _eval_backend_numeric_expr_and_gradient!(intercept_values, intercept_gradients, cache, env, eta.intercept, 2)
+    end
+
+    env.assigned[eta.coef_slot] ||
+        throw(BatchedBackendFallback("linear predictor coefficient slot $(eta.coef_slot) is not assigned"))
+    env.assigned[eta.matrix_slot] ||
+        throw(BatchedBackendFallback("linear predictor covariate slot $(eta.matrix_slot) is not assigned"))
+
+    # resolve the covariate column for each observation once (index depends only
+    # on the shared iterator, not on the chain)
+    observation_count = length(observed)
+    columns = Vector{Int}(undef, observation_count)
+    for (position, item) in enumerate(reference_iterable)
+        _batched_environment_set_shared!(env, step.iterator_slot, item)
+        columns[position] = _eval_backend_index_value_expr(env, eta.index, 1)
+    end
+
+    coef_storage = env.generic_values[eta.coef_slot]
+    matrix_storage = env.generic_values[eta.matrix_slot]
+    seed_rows = cache.seed_rows
+    coef_length = eta.coef_length
+    parameter_count = size(gradients, 1)
+    coefficient_accumulator = zeros(T, coef_length)
+    coefficient_rows = Vector{Int}(undef, coef_length)
+    for d = 1:coef_length
+        row = seed_rows[eta.coef_value_index+d-1]
+        row > 0 || throw(
+            BatchedBackendFallback("linear predictor coefficient row $(eta.coef_value_index + d - 1) has no gradient seed row"),
+        )
+        coefficient_rows[d] = row
+    end
+
+    for batch_index in eachindex(totals)
+        # coef/matrix live in the Any-typed generic store; the function barrier
+        # specializes the hot O(observations x coef) reduction on their concrete
+        # element types (otherwise every element read boxes)
+        total_accumulator, intercept_derivative_sum = _glm_chain_reduce!(
+            coef_storage[batch_index],
+            matrix_storage[batch_index],
+            columns,
+            observed,
+            intercept_values[batch_index],
+            coefficient_accumulator,
+            coef_length,
+        )
+        totals[batch_index] += total_accumulator
+        @inbounds for parameter_index = 1:parameter_count
+            gradients[parameter_index, batch_index] +=
+                intercept_derivative_sum * intercept_gradients[parameter_index, batch_index]
+        end
+        @inbounds for d = 1:coef_length
+            gradients[coefficient_rows[d], batch_index] += coefficient_accumulator[d]
+        end
+    end
+    return totals, gradients
+end
+
+# Function-barrier hot loop for one chain: reduces the observation sum of the
+# bernoulli-logit logjoint and the intercept-derivative + per-coefficient
+# gradient accumulators, all in concrete element types.
+function _glm_chain_reduce!(
+    coef::AbstractVector,
+    matrix::AbstractMatrix,
+    columns::Vector{Int},
+    observed::Vector{T},
+    intercept::T,
+    coefficient_accumulator::Vector{T},
+    coef_length::Int,
+) where {T<:AbstractFloat}
+    fill!(coefficient_accumulator, zero(T))
+    total_accumulator = zero(T)
+    intercept_derivative_sum = zero(T)
+    @inbounds for position in eachindex(columns, observed)
+        column = columns[position]
+        e = intercept
+        for d = 1:coef_length
+            e += T(coef[d]) * T(matrix[d, column])
+        end
+        y = observed[position]
+        total_accumulator += _backend_bernoullilogit_logpdf(e, y)
+        support = _bernoulli_value(y)
+        isnothing(support) && continue
+        derivative = (support ? one(T) : zero(T)) - _bernoullilogit_logistic(e)
+        intercept_derivative_sum += derivative
+        for d = 1:coef_length
+            coefficient_accumulator[d] += derivative * T(matrix[d, column])
+        end
+    end
+    return total_accumulator, intercept_derivative_sum
 end
 
 # Gather the loop's observed values into a vector staged on the gradient
@@ -681,6 +819,19 @@ function _score_backend_observed_loop_choice_gradient!(
     probability_gradients = _batched_backend_gradient_scratch!(cache, 1)
     _eval_backend_numeric_expr_and_gradient!(probability_values, probability_gradients, cache, env, choice.probability, 2)
     return _accumulate_bernoulli_gradient!(totals, gradients, probability_values, probability_gradients, env.observed_values)
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendBernoulliLogitChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    eta_values = _batched_numeric_scratch!(env, 1)
+    eta_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    _eval_backend_numeric_expr_and_gradient!(eta_values, eta_gradients, cache, env, choice.eta, 2)
+    return _accumulate_bernoullilogit_gradient!(totals, gradients, eta_values, eta_gradients, env.observed_values)
 end
 
 function _score_backend_observed_loop_choice_gradient!(
