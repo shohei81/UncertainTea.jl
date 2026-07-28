@@ -1,13 +1,15 @@
-# PR 39: per-chain warmup adaptation for the batched samplers.
-# Contract: batched_hmc / batched_nuts accept per_chain_adaptation. Since
-# issue #137 the HOST default is per-chain (an unset value resolves to
-# `backend === nothing`; device runs keep shared adaptation).
-# When false the run is bitwise identical to the shared-driver path;
-# when true each chain owns a WarmupDriver, adapting its own step size and
-# diagonal inverse mass matrix. The batched integrators / momentum sampling /
-# Hamiltonians gain per-chain overloads (step-size vector + inverse-mass
-# matrix, one column per chain). The progress callback reports the mean of the
-# per-chain step sizes.
+# PR 39 / issue #137 / issue #158: pooled-mass + per-chain-step warmup adaptation
+# for the batched samplers.
+# Contract: batched_hmc / batched_nuts accept per_chain_adaptation. Since issue
+# #137 the HOST default is per-chain step; since issue #158 `per_chain_adaptation`
+# means pooled mass + per-chain step on BOTH host and device (the retired host
+# per-chain-MASS mode is gone). An unset value resolves to true.
+# When false the run is bitwise identical to the shared-driver path; when true a
+# SINGLE diagonal inverse mass matrix is pooled across all chains (one
+# running-variance state fed every chain's draws) while each chain owns its own
+# dual-averaged step size. The batched integrators / momentum sampling /
+# Hamiltonians carry the per-chain step vector against the shared pooled mass. The
+# progress callback reports the mean of the per-chain step sizes.
 
 @testset "per_chain_warmup_batched" begin
     @tea static function pca_gaussian_model()
@@ -76,10 +78,15 @@
     pca_step_wide = pca_scale.chains[2].step_size
     pca_mass_tight = pca_scale.chains[1].mass_matrix[1]
     pca_mass_wide = pca_scale.chains[2].mass_matrix[1]
-    # Adapted step sizes must differ by at least 2x across the two scales.
+    # Adapted step sizes must differ by at least 2x across the two scales: the
+    # per-chain step is the operative per-chain property (and the #137 stranding
+    # fix) that the pooled-mass / per-chain-step host default (issue #158) keeps.
     @test max(pca_step_tight, pca_step_wide) / min(pca_step_tight, pca_step_wide) >= 2.0
-    # The wider posterior (chain 2, sigma=10) must carry the larger mass entry.
-    @test pca_mass_wide > pca_mass_tight
+    # Under the pooled-mass default the diagonal mass is shared across all chains
+    # (one running-variance state fed every chain's draws), so the two chains carry
+    # the SAME mass entry -- superseding the retired per-chain-mass mode where the
+    # wider posterior carried the larger entry.
+    @test pca_mass_wide == pca_mass_tight
 
     # Statistical sanity: per-chain mode on the shared gaussian recovers the
     # posterior mean (0.15) and mixes (rhat < 1.2). Uses 4 chains x 500 draws:
@@ -113,7 +120,9 @@
         rng=MersenneTwister(99),
     )
     @test pca_hmc.chains[1].step_size != pca_hmc.chains[2].step_size
-    @test pca_hmc.chains[2].mass_matrix[1] > pca_hmc.chains[1].mass_matrix[1]
+    # Pooled mass: both chains share the diagonal mass entry under the issue #158
+    # host default (per-chain step, pooled mass).
+    @test pca_hmc.chains[2].mass_matrix[1] == pca_hmc.chains[1].mass_matrix[1]
 
     # Callback still fires in per-chain mode with the documented phase fields; the
     # reported step_size is the mean of the per-chain step sizes.

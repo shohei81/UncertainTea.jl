@@ -167,7 +167,7 @@ function batched_nuts(
             rng,
         )
     elseif per_chain_adaptation
-        return _batched_nuts_per_chain!(
+        return _batched_nuts_host_pooled!(
             workspace,
             model,
             args,
@@ -395,15 +395,24 @@ function batched_nuts(
     return HMCChains(model, args, constraints, chains)
 end
 
-# Per-chain warmup adaptation for batched NUTS. Each chain owns its own
-# WarmupDriver (independent step size + diagonal inverse mass matrix). The batched
-# tree machinery is threaded a per-chain step-size vector and an inverse-mass
-# matrix (one column per chain); the shared-mode path is untouched. Dual averaging
-# for each chain is driven by that chain's own acceptance probability, masked to
-# zero when the chain diverged (the per-chain analog of the shared masked mean).
-# Callback contract: the reported `step_size` is the mean of the per-chain step
-# sizes at the start of the iteration.
-function _batched_nuts_per_chain!(
+# Pooled-mass / per-chain-step warmup adaptation for host batched NUTS (issue #158).
+# This is the HOST batched default and the exact host analog of the device pooled
+# path `_batched_nuts_device_per_chain!`: a SINGLE diagonal inverse-mass vector
+# pooled across all chains (one running-variance state fed the full P x C positions)
+# plus a PER-CHAIN dual-averaged step size. It supersedes the retired per-chain-MASS
+# mode, which estimated every chain's mass column from only ~160 of its own draws
+# (issue #168 / #158). Pooling feeds one running-variance state the full P x C draws,
+# so the metric sees C x the samples and converges in the first slow window (a better,
+# less marginal R-hat), while the per-chain step keeps the #137 stranding fix. It also
+# unifies the meaning of per_chain_adaptation with the device path. The only difference
+# from the device
+# loop is the proposal generator: the host masked (`_batched_nuts_proposals_masked!`)
+# or hybrid (`_batched_nuts_proposals!`) trajectory instead of the device kernel; both
+# are threaded the shared P-vector mass and the C-length per-chain step vector, which
+# the `_chain_inverse_mass`/`_chain_step_size` selectors already dispatch correctly.
+# Callback contract: the reported `step_size` is the mean of the per-chain step sizes
+# at the start of the iteration.
+function _batched_nuts_host_pooled!(
     workspace::BatchedNUTSWorkspace,
     model::TeaModel,
     args,
@@ -442,7 +451,6 @@ function _batched_nuts_per_chain!(
     tree_strategy::Symbol,
     rng::AbstractRNG,
 )
-    inverse_mass_matrices = ones(num_params, num_chains)
     step_sizes = fill(nuts_step_size, num_chains)
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         step_size_workspace = BatchedHMCWorkspace(
@@ -454,7 +462,7 @@ function _batched_nuts_per_chain!(
             position,
             current_logjoint,
             current_gradient,
-            inverse_mass_matrices,
+            ones(num_params, num_chains),
             batch_args,
             batch_constraints,
             nuts_step_size,
@@ -462,20 +470,19 @@ function _batched_nuts_per_chain!(
         )
     end
 
-    drivers = [
-        WarmupDriver(
-            num_params,
-            num_warmup,
-            step_sizes[chain_index],
-            nuts_target_accept;
-            adapt_step_size=adapt_step_size,
-            adapt_mass_matrix=adapt_mass_matrix,
-            mass_matrix_regularization=mass_matrix_regularization,
-            mass_matrix_min_samples=mass_matrix_min_samples,
-        ) for chain_index = 1:num_chains
-    ]
-    # Per-chain re-search: each chain re-runs the single-chain reasonable step-size
-    # search on its own column at its own warmup window ends (chain-major RNG).
+    driver = PooledMassPerChainStepDriver(
+        num_params,
+        num_warmup,
+        step_sizes,
+        nuts_target_accept;
+        adapt_step_size=adapt_step_size,
+        adapt_mass_matrix=adapt_mass_matrix,
+        mass_matrix_regularization=mass_matrix_regularization,
+        mass_matrix_min_samples=mass_matrix_min_samples,
+    )
+    # Per-chain window-end re-search: each chain re-runs the single-chain reasonable
+    # step-size search on its own column against the SHARED pooled mass (chain-major
+    # RNG at warmup window ends), mirroring the device pooled refind.
     refinds = [
         ScalarStepSizeSearch(
             model,
@@ -487,18 +494,20 @@ function _batched_nuts_per_chain!(
             current_logjoint[chain_index],
         ) for chain_index = 1:num_chains
     ]
+    accept_statistics = Vector{Float64}(undef, num_chains)
+    # The pooled shared mass is broadcast into every column so the fully-tested
+    # per-chain proposal overloads (Matrix mass + C-length step vector) run with
+    # identical mass columns -- numerically identical to a shared-mass integrator,
+    # the host analog of the device path's single uploaded inverse-mass vector.
+    inverse_mass_matrices = ones(num_params, num_chains)
 
     sample_index = 0
     cumulative_divergences = 0
     for iteration = 1:total_iterations
-        for chain_index = 1:num_chains
-            step_sizes[chain_index] = drivers[chain_index].step_size
-            @inbounds copyto!(
-                view(inverse_mass_matrices, :, chain_index),
-                drivers[chain_index].inverse_mass_matrix,
-            )
+        @inbounds for chain_index = 1:num_chains
+            copyto!(view(inverse_mass_matrices, :, chain_index), driver.mass.inverse_mass_matrix)
         end
-        mean_step_size = sum(step_sizes) / num_chains
+        mean_step_size = sum(driver.step_sizes) / num_chains
 
         if tree_strategy === :masked
             _batched_nuts_proposals_masked!(
@@ -510,7 +519,7 @@ function _batched_nuts_per_chain!(
                 inverse_mass_matrices,
                 batch_args,
                 batch_constraints,
-                step_sizes,
+                driver.step_sizes,
                 max_tree_depth,
                 nuts_max_delta_energy,
                 rng,
@@ -525,7 +534,7 @@ function _batched_nuts_per_chain!(
                 inverse_mass_matrices,
                 batch_args,
                 batch_constraints,
-                step_sizes,
+                driver.step_sizes,
                 max_tree_depth,
                 nuts_max_delta_energy,
                 rng,
@@ -543,28 +552,28 @@ function _batched_nuts_per_chain!(
         cumulative_divergences += count(workspace.control.divergent_step)
 
         if iteration <= num_warmup
-            for chain_index = 1:num_chains
-                mass_weight = _mass_adaptation_weight(
-                    drivers[chain_index].variance_state,
+            @inbounds for chain_index = 1:num_chains
+                workspace.mass_adaptation_weights[chain_index] = _mass_adaptation_weight(
+                    driver.mass.variance_state,
                     false,
                     workspace.accept_prob[chain_index],
                     workspace.control.divergent_step[chain_index],
                 )
-                accept_statistic = workspace.control.divergent_step[chain_index] ? 0.0 :
-                                   workspace.accept_prob[chain_index]
+                accept_statistics[chain_index] =
+                    workspace.control.divergent_step[chain_index] ? 0.0 : workspace.accept_prob[chain_index]
                 refinds[chain_index].position = collect(view(position, :, chain_index))
                 refinds[chain_index].current_logjoint = current_logjoint[chain_index]
-                warmup_update!(
-                    drivers[chain_index],
-                    iteration,
-                    accept_statistic,
-                    view(position, :, chain_index),
-                    mass_weight,
-                    refinds[chain_index],
-                )
-                if iteration == num_warmup
-                    warmup_finalize!(drivers[chain_index])
-                end
+            end
+            warmup_update!(
+                driver,
+                iteration,
+                accept_statistics,
+                position,
+                workspace.mass_adaptation_weights,
+                refinds,
+            )
+            if iteration == num_warmup
+                warmup_finalize!(driver)
             end
             isnothing(callback) || _invoke_progress_callback(
                 callback, callback_every, :warmup, iteration, num_warmup, mean_step_size, cumulative_divergences)
@@ -595,9 +604,9 @@ function _batched_nuts_per_chain!(
         end
     end
 
+    mass_matrix = copy(driver.mass.inverse_mass_matrix)
     chains = Vector{HMCChain}(undef, num_chains)
     for chain_index = 1:num_chains
-        mass_matrix = copy(drivers[chain_index].inverse_mass_matrix)
         chains[chain_index] = HMCChain(
             :nuts,
             model,
@@ -611,14 +620,14 @@ function _batched_nuts_per_chain!(
             vec(energy_errors[:, chain_index]),
             vec(accepted[:, chain_index]),
             vec(divergent[:, chain_index]),
-            drivers[chain_index].step_size,
-            mass_matrix,
+            driver.step_sizes[chain_index],
+            copy(mass_matrix),
             0,
             max_tree_depth,
             vec(tree_depths[:, chain_index]),
             vec(integration_steps_values[:, chain_index]),
             nuts_target_accept,
-            copy(drivers[chain_index].mass_adaptation_windows),
+            copy(driver.mass.mass_adaptation_windows),
             nothing,
         )
     end
