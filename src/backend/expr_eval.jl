@@ -177,6 +177,68 @@ function _eval_backend_numeric_expr(env::BatchedPlanEnvironment, expr::BackendBl
     return value
 end
 
+# --- fused GLM linear predictor eta = intercept + sum(coef .* Matrix[:, index]) ---
+
+function _linear_predictor_coef_matrix(env, coef, matrix, context::String)
+    coef isa AbstractVector ||
+        _backend_numeric_error(env, "$context coefficient must be a vector, got $(typeof(coef))")
+    matrix isa AbstractMatrix ||
+        _backend_numeric_error(env, "$context covariate must be a matrix, got $(typeof(matrix))")
+    return coef, matrix
+end
+
+function _eval_backend_numeric_expr(env::PlanEnvironment, expr::BackendLinearPredictorExpr)
+    coef, matrix = _linear_predictor_coef_matrix(
+        env,
+        _environment_value(env, expr.coef_slot),
+        _environment_value(env, expr.matrix_slot),
+        "backend linear predictor",
+    )
+    column = _eval_backend_index_value_expr(env, expr.index)
+    accumulator = coef[1] * matrix[1, column]
+    for d = 2:expr.coef_length
+        accumulator += coef[d] * matrix[d, column]
+    end
+    isnothing(expr.intercept) && return accumulator
+    return _eval_backend_numeric_expr(env, expr.intercept) + accumulator
+end
+
+function _eval_backend_numeric_expr!(
+    destination::AbstractVector,
+    env::BatchedPlanEnvironment,
+    expr::BackendLinearPredictorExpr,
+    depth::Int=1,
+)
+    if isnothing(expr.intercept)
+        fill!(destination, zero(eltype(destination)))
+    else
+        _eval_backend_numeric_expr!(destination, env, expr.intercept, depth)
+    end
+    env.assigned[expr.coef_slot] ||
+        throw(BatchedBackendFallback("linear predictor coefficient slot $(expr.coef_slot) is not assigned"))
+    env.assigned[expr.matrix_slot] ||
+        throw(BatchedBackendFallback("linear predictor covariate slot $(expr.matrix_slot) is not assigned"))
+    columns = _batched_index_scratch!(env, depth)
+    _eval_backend_index_value_expr!(columns, env, expr.index, depth + 1)
+    coef_storage = env.generic_values[expr.coef_slot]
+    matrix_storage = env.generic_values[expr.matrix_slot]
+    for batch_index = 1:env.batch_size
+        coef, matrix = _linear_predictor_coef_matrix(
+            env,
+            coef_storage[batch_index],
+            matrix_storage[batch_index],
+            "batched backend linear predictor",
+        )
+        column = columns[batch_index]
+        accumulator = destination[batch_index]
+        @inbounds for d = 1:expr.coef_length
+            accumulator += coef[d] * matrix[d, column]
+        end
+        destination[batch_index] = accumulator
+    end
+    return destination
+end
+
 function _batched_numeric_scratch!(env::BatchedPlanEnvironment, depth::Int)
     depth > 0 || throw(ArgumentError("batched numeric scratch depth must be positive"))
     while length(env.numeric_scratch) < depth

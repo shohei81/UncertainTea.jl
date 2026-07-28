@@ -19,6 +19,62 @@ function _accumulate_bernoulli_gradient!(
     return totals, gradients
 end
 
+# Logit Bernoulli: the eta-gradient is well-conditioned, `d/d_eta = x - logistic(eta)`,
+# so it stays finite where the sigmoid-spelling gradient (1/p or -1/(1-p)) blows
+# up as p saturates. A non-0/1 value scores -Inf and contributes no gradient.
+function _accumulate_bernoullilogit_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    eta_values::AbstractVector{T},
+    eta_gradients::AbstractMatrix{T},
+    value_values::AbstractVector{T},
+) where {T<:AbstractFloat}
+    for batch_index in eachindex(totals)
+        eta = eta_values[batch_index]
+        value = value_values[batch_index]
+        totals[batch_index] += _backend_bernoullilogit_logpdf(eta, value)
+        support = _bernoulli_value(value)
+        isnothing(support) && continue
+        derivative = (support ? one(T) : zero(T)) - _bernoullilogit_logistic(eta)
+        for parameter_index in axes(gradients, 1)
+            gradients[parameter_index, batch_index] += derivative * eta_gradients[parameter_index, batch_index]
+        end
+    end
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendBernoulliLogitChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    isnothing(step.parameter_slot) ||
+        throw(BatchedBackendFallback("batched backend gradient does not support bernoullilogit latent parameters"))
+    value_values = env.observed_values
+    eta_values = _batched_numeric_scratch!(env, 1)
+    eta_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    _eval_backend_numeric_expr_and_gradient!(eta_values, eta_gradients, cache, env, step.eta, 2)
+    _accumulate_bernoullilogit_gradient!(totals, gradients, eta_values, eta_gradients, value_values)
+
+    if !isnothing(step.binding_slot)
+        _assign_backend_choice_value!(
+            env,
+            cache.slot_gradients,
+            step.binding_slot,
+            value_values,
+            _zero_gradient!(_batched_backend_gradient_scratch!(cache, 3)),
+        )
+    end
+    return totals, gradients
+end
+
 function _accumulate_binomial_gradient!(
     totals::AbstractVector{T},
     gradients::AbstractMatrix{T},

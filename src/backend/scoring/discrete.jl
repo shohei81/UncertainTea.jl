@@ -9,6 +9,78 @@ function _backend_bernoulli_logpdf(p, x)
     return value ? log(probability) : log1p(-probability)
 end
 
+# Logit-parameterized Bernoulli (issues #149/#150), stable log-scale form
+# `x*eta - log1p(exp(eta))`; mirrors the CPU `logpdf(::BernoulliLogitDist, x)`.
+function _backend_bernoullilogit_logpdf(eta, x)
+    value = _bernoulli_value(x)
+    isnothing(value) && return oftype(float(eta), -Inf)
+    log_normalizer = _bernoullilogit_log1p_exp(eta)
+    return value ? eta - log_normalizer : -log_normalizer
+end
+
+function _score_backend_step!(
+    step::BackendBernoulliLogitChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    eta = _eval_backend_numeric_expr(env, step.eta)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_bernoullilogit_logpdf(eta, value)
+end
+
+function _score_backend_step!(
+    step::BackendBernoulliLogitChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    eta_values = _batched_numeric_scratch!(env, 1)
+    _eval_backend_numeric_expr!(eta_values, env, step.eta, 2)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_bernoullilogit_logpdf(eta_values[batch_index], choice_values[batch_index])
+        if !isnothing(step.binding_slot)
+            value = choice_values[batch_index]
+            if env.numeric_slots[step.binding_slot]
+                env.numeric_values[step.binding_slot, batch_index] = convert(eltype(env.numeric_values), value)
+            elseif env.index_slots[step.binding_slot]
+                value isa Integer || throw(
+                    BatchedBackendFallback("index backend slot $(step.binding_slot) received non-integer choice value"),
+                )
+                env.index_values[step.binding_slot, batch_index] = Int(value)
+            else
+                env.generic_values[step.binding_slot][batch_index] = value
+            end
+        end
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendBernoulliLogitChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    eta_values = _batched_numeric_scratch!(env, 1)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(eta_values, env, step.eta, 2)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_bernoullilogit_logpdf(eta_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
 function _backend_poisson_logpdf(lambda, x)
     lambda > zero(lambda) || throw(ArgumentError("poisson requires lambda > 0"))
     count = _poisson_count(x)

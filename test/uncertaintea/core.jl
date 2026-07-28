@@ -37,11 +37,13 @@ core_test_files = [
     ("dist_integer_params.jl", "dist"),
     ("dist_count_logfactorial.jl", "dist"),
     ("dist_bernoulli.jl", "dist"),
+    ("dist_bernoulli_logit.jl", "dist"),
     # "backend": CPU/backend batched scoring and vector-latent paths.
     ("vector_backend_sampler.jl", "backend"),
     ("batched_scoring_eltype_f32.jl", "backend"),
     ("vectorized_obs_iid_latents.jl", "backend"),
     ("backend_native_families.jl", "backend"),
+    ("backend_glm_logistic.jl", "backend"),
     ("batched_observed_loop_gradient.jl", "backend"),
     ("batched_observed_loop_suffstats.jl", "backend"),
     # "device": the KernelAbstractions device kernels (heavier compile).

@@ -26,22 +26,31 @@ end
 end
 
 # Logistic regression: alpha ~ N(0,2.5), beta_d ~ N(0,2.5),
-# y_i ~ Bernoulli(logistic(alpha + x_i'beta)).  D = 8 is literal; the
-# observation loop is loop-addressed because only `normal.` broadcasts.
+# y_i ~ BernoulliLogit(alpha + x_i'beta).  D = 8 is literal; the observation
+# loop is loop-addressed because only `normal.` broadcasts.  The observation is
+# the logit-scale `bernoullilogit` family (issue #149) so the linear predictor
+# `alpha + sum(beta .* X[:, i])` backend-lowers to the fused analytic path
+# (issue #150), matching Stan's `bernoulli_logit` and NumPyro's
+# `Bernoulli(logits=...)` sides — same joint density, stable parameterization.
+# The i.i.d. N(0, 2.5) coefficient prior is written as a diagonal `mvnormal` (an
+# identical joint density) so the whole plan, prior included, rides the backend.
 @tea static function bench_logistic(X, n)
     alpha ~ normal(0.0, 2.5)
-    beta ~ iid(normal(0.0, 2.5), 8)
+    beta ~ mvnormal(
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5),
+    )
     for i = 1:n
-        {:y => i} ~ bernoulli(1.0 / (1.0 + exp(-(alpha + sum(beta .* X[:, i])))))
+        {:y => i} ~ bernoullilogit(alpha + sum(beta .* X[:, i]))
     end
     return alpha
 end
 
 # Gaussian mean/scale estimation with a loop-addressed observation vector —
 # the device-supported form (same shape as test/gpu gpu_gauss_model) used for
-# the chain-count scaling sweep.  Broadcast-normal observations and indexed
-# covariates do not lower to the device path yet, so regression-style models
-# cannot ride it (see issues filed from this benchmark work).
+# the chain-count scaling sweep.  The logistic model above now rides the HOST
+# batched analytic path via the fused GLM linear predictor (issue #150); the
+# device (KernelAbstractions) leg for that same shape is the follow-on #135.
 @tea static function bench_gauss(n)
     mu ~ normal(0.0, 1.0)
     s ~ gamma(2.0, 1.0)

@@ -227,6 +227,24 @@
         return p
     end
 
+    # generic scalar eta: exercises the bernoullilogit step with a plain numeric
+    # eta expression (issue #149/#150)
+    @tea static function gxc_bernoullilogit_obs()
+        s ~ normal(0.0f0, 1.0f0)
+        {:y} ~ bernoullilogit(2.0f0 * s - 0.5f0)
+        return s
+    end
+
+    # fused GLM linear predictor: exercises BackendLinearPredictorExpr — the
+    # intercept `a` flows through its own gradient, and each coefficient
+    # `b[d]`'s partial is `X[d, 1]` seeded onto its unconstrained row (issue #150)
+    @tea static function gxc_bernoullilogit_glm(X)
+        a ~ normal(0.0f0, 1.0f0)
+        b ~ mvnormal((0.0f0, 0.0f0), (1.0f0, 1.0f0))
+        {:y} ~ bernoullilogit(a + sum(b .* X[:, 1]))
+        return a
+    end
+
     @tea static function gxc_binomial_obs()
         logit ~ normal(0.0f0, 0.5f0)
         probability = 1.0f0 / (1.0f0 + exp(-logit))
@@ -385,6 +403,7 @@
     end
 
     gxc_dense_factor = [1.0 0.0; 0.3 0.8]
+    gxc_glm_covariates = reshape(Float32[0.7, -1.1], 2, 1)  # d x n = 2 x 1
 
     # family => [(model, args, constraints), ...]; every registry family must
     # have an entry (enforced below).
@@ -428,6 +447,10 @@
         :bernoulli => [
             (gxc_bernoulli_obs, (), choicemap((:y, true))),
             (gxc_bernoulli_marginalized, (), choicemap((:y, 0.8))),
+        ],
+        :bernoullilogit => [
+            (gxc_bernoullilogit_obs, (), choicemap((:y, true))),
+            (gxc_bernoullilogit_glm, (gxc_glm_covariates,), choicemap((:y, false))),
         ],
         :binomial => [(gxc_binomial_obs, (), choicemap((:y, 5)))],
         :geometric => [(gxc_geometric_obs, (), choicemap((:y, 3)))],
