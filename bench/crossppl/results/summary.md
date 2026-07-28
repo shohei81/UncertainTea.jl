@@ -92,6 +92,6 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | numpyro-vectorized | 512 | 500 | float32 | PASS | 54,197 ± 2,387 | 36,263 | 5.68 | 5.25 | 12.1 | 0 |
 | stan | 4 | 1000 | float64 | PASS | 64,569 ± 2,514 | 35,243 | 0.0767 | 0.072 | 1.16 | 0 |
 | uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 11,790 ± 7.9e+02 | 8,235 | 0.338 | 0.46 | 4.45 | 0 |
-| uncertaintea-batched-cpu | 64 | 500 | Float64 | PASS | 9,270 ± 9.1e+02 | 7,469 | 3.32 | 3.12 | 9.54 | 0 |
-| uncertaintea-batched-cpu | 512 | 500 | Float64 | PASS | 5,539 ± 3.8e+02 | 4,484 | 45.7 | 33.9 | 78.2 | 0 |
+| uncertaintea-batched-cpu | 64 | 500 | Float64 | PASS | 21,563 ± 1,450 | 17,442 | 1.43 | 1.53 | 7.17 | 0 |
+| uncertaintea-batched-cpu | 512 | 500 | Float64 | PASS | 14,458 ± 1,537 | 11,705 | 17.6 | 14 | 32.4 | 0 |
 | uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 1,078 ± 12 | 714 | 3.93 | 3.75 | 7.36 | 0 |

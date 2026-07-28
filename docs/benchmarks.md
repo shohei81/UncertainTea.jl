@@ -21,10 +21,11 @@ Rows marked FAIL keep their timings visible for context only.
   this file.
 - **Hardware:** Apple M4 (10 cores, 32 GB), Metal 4; macOS 26.5.1. All
   frameworks measured natively on this one machine.
-- **Software:** Julia 1.12.2, UncertainTea @ `b8fe737` (main, after the first
-  performance wave PRs #164–#173, the device per-chain-step fix #176, and the
-  GLM lowering #178), NumPyro 0.19 / JAX 0.9 (pinned in
-  `bench/crossppl/python/uv.lock`), CmdStan 2.36.0, Python 3.12.
+- **Software:** Julia 1.12.2, UncertainTea @ `cf8c74a` (main, after the first
+  performance wave PRs #164–#173, the device per-chain-step fix #176, the GLM
+  lowering #178, and the batched-gradient threading #180), NumPyro 0.19 /
+  JAX 0.9 (pinned in `bench/crossppl/python/uv.lock`), CmdStan 2.36.0,
+  Python 3.12. Host batched legs measured at `-t auto` (4 performance cores).
 - **Sampler settings:** NUTS everywhere, `target_accept=0.8`,
   `max_tree_depth=10`, diagonal metric, framework-default warmup schedules.
   Correctness pass: 4 chains × 1000 warmup + 1000 draws × 3 repetitions
@@ -72,19 +73,20 @@ Rows marked FAIL keep their timings visible for context only.
    4 chains jumped **156 → 11,790 bulk ESS/s** (~76×; gradient 531 µs → 11 µs)
    — now ahead of NumPyro-parallel (10,504) and second only to Stan (64,569).
    It is gate-passing at every chain count. But NumPyro-vectorized still leads
-   at high chain counts (54,197 vs 5,539 at 512): unlike `gauss`, the logistic
+   at high chain counts (54,197 vs 14,458 at 512): unlike `gauss`, the logistic
    per-observation `X[:, i]` dot product cannot be sufficient-statistics-fused
-   (each observation has distinct covariates), so the gradient stays O(n·D·B),
-   and the host `batched-cpu` path is single-threaded. Threading (#143) and
-   device lowering (#135) are the levers to close that high-chain gap.
+   (each observation has distinct covariates), so the gradient stays O(n·D·B).
+   Threading the batched gradient over chain-blocks (#143) lifted the
+   high-chain rows ~2.3–2.6× on 4 cores and narrowed the NumPyro gap from ~10×
+   to ~3.7×; device lowering (#135) is the remaining lever.
 
-Open issues from the audit still shaping these numbers: #143 (thread the
-batched host gradient — the `logistic` high-chain gap) and #135 (device GLM
-lowering), #151/#152/#153/#160 (device engineering — the `batched-cpu`-vs-Metal
-gap), #158 (pooled-mass host default + nutpie, to recover warmup cost), #144
-(generated type-stable scorer, the remaining single-chain gap vs Stan). #137
-(per-chain step-size adaptation) and #149/#150 (GLM analytic lowering) are now
-closed.
+Open issues from the audit still shaping these numbers: #135 (device GLM
+lowering — the remaining `logistic` high-chain gap), #151/#152/#153/#160
+(device engineering — the `batched-cpu`-vs-Metal gap), #158 (pooled-mass host
+default + nutpie, to recover warmup cost), #144 (generated type-stable scorer,
+the remaining single-chain gap vs Stan). #137 (per-chain step-size adaptation),
+#149/#150 (GLM analytic lowering), and #143 (batched-gradient threading) are
+now closed.
 
 ## Scaling sweep — gauss (mean/scale, N=1000; 200 warmup + 500 draws)
 
@@ -140,16 +142,20 @@ is built for the many-chains regime above, not 4 chains.
 | numpyro-parallel | 4 | 10,504 ± 670 | 0 |
 | uncertaintea-cpu | 4 | 1,078 ± 12 | 0 |
 | numpyro-vectorized | 512 | 54,197 ± 2,387 | 0 |
-| uncertaintea-batched-cpu | 512 | 5,539 ± 380 | 0 |
+| uncertaintea-batched-cpu | 512 | 14,458 ± 1,537 | 0 |
 | numpyro-vectorized | 64 | 31,886 ± 1,242 | 0 |
-| uncertaintea-batched-cpu | 64 | 9,270 ± 910 | 0 |
+| uncertaintea-batched-cpu | 64 | 21,563 ± 1,450 | 0 |
 
 `logistic` now rides the fused GLM analytic path (#150/#149): `batched-cpu` at
 4 chains went 156 → **11,790 ESS/s** (~76×), ahead of NumPyro-parallel. It is
-gate-passing at every chain count. NumPyro-vectorized still leads at high
-chain counts because the per-observation covariate dot cannot be
-sufficient-statistics-fused (see key finding 4) and `batched-cpu` is
-single-threaded (#143). Single-chain `uncertaintea-cpu` improved 83 → 1,078
+gate-passing at every chain count. The high-chain `batched-cpu` rows above are
+measured at `-t auto` (4 performance cores) after the batched-gradient
+threading (#143), which lifted them ~2.3–2.6× (512 chains: 5,539 → 14,458;
+64: 9,270 → 21,563). NumPyro-vectorized still leads at high chain counts
+(54,197 at 512) because the per-observation covariate dot cannot be
+sufficient-statistics-fused (see key finding 4) and the XLA vectorization
+scales further; the gap narrowed from ~10× to ~3.7×. Closing it further is
+device lowering (#135). Single-chain `uncertaintea-cpu` improved 83 → 1,078
 across #145/#150/#159. The joint density is unchanged; the Julia model now
 uses `bernoullilogit(alpha + sum(beta .* X[:, i]))`, matching the Stan
 (`bernoulli_logit`) and NumPyro (`Bernoulli(logits=...)`) sides.
@@ -170,6 +176,7 @@ model stays in the suite as the honesty check.
 | gauss Metal 4096 (default) | FAIL (~6% div) | **PASS**, 18k ESS/s (55 s) | #137 device (#176) + #146 |
 | gauss Metal / ka default gate | FAIL, R-hat ≈ 11.7 | **PASS**, R-hat ≈ 1.003, 0% div | #176 |
 | logistic batched-cpu 4 chains | 156 ESS/s (gate-marginal) | **11,790 ESS/s** (PASS) | #149, #150 |
+| logistic batched-cpu 512 chains | (didn't lower) | 5,539 → **14,458 ESS/s** (-t auto) | #150, #143 |
 | gauss cpu (single chain) | 173 ESS/s | 509 ESS/s | #145, #159 |
 | eight-schools-nc cpu | 3,354 ESS/s | 9,554 ESS/s | #145, #159 |
 | logistic cpu | 83 ESS/s | 406 ESS/s | #145 |
