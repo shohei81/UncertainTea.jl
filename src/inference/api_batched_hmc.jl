@@ -122,7 +122,7 @@ function batched_hmc(
     hmc_divergence_threshold = Float64(divergence_threshold)
 
     if per_chain_adaptation
-        return _batched_hmc_per_chain!(
+        return _batched_hmc_host_pooled!(
             workspace,
             model,
             args,
@@ -342,11 +342,23 @@ function batched_hmc(
     return HMCChains(model, args, constraints, chains)
 end
 
-# Per-chain warmup adaptation for batched HMC. Mirrors the shared-mode loop but
-# each chain owns a WarmupDriver, an inverse-mass column, and its own step size.
-# Callback contract: the reported `step_size` is the mean of the per-chain step
-# sizes at the start of the iteration.
-function _batched_hmc_per_chain!(
+# Pooled-mass / per-chain-step warmup adaptation for host batched HMC (issue #158).
+# The HOST batched default and host analog of the device pooled path
+# (`src/device/hmc_kernels.jl`): a SINGLE diagonal inverse-mass vector pooled across
+# all chains plus a PER-CHAIN dual-averaged step size. It supersedes the retired
+# per-chain-MASS mode, whose per-chain mass estimation used only ~160 own-draws
+# (issue #168 / #158); pooling feeds one running-variance state the full P x C draws
+# so the metric sees C x the samples (a better, less marginal R-hat), while the
+# per-chain step keeps the #137 stranding fix and the mode unifies with the device
+# path.
+#
+# The shared pooled mass is broadcast into every column of `inverse_mass_matrices`
+# each iteration, so the fully-tested per-chain leapfrog/Hamiltonian overloads run
+# with a C-length step vector against identical mass columns -- numerically identical
+# to a shared-mass integrator, and the exact host analog of the device path that
+# uploads one shared inverse-mass vector plus a C-length step. Callback contract: the
+# reported `step_size` is the mean of the per-chain step sizes at the iteration start.
+function _batched_hmc_host_pooled!(
     workspace::BatchedHMCWorkspace,
     model::TeaModel,
     args,
@@ -400,20 +412,19 @@ function _batched_hmc_per_chain!(
         )
     end
 
-    drivers = [
-        WarmupDriver(
-            num_params,
-            num_warmup,
-            step_sizes[chain_index],
-            hmc_target_accept;
-            adapt_step_size=adapt_step_size,
-            adapt_mass_matrix=adapt_mass_matrix,
-            mass_matrix_regularization=mass_matrix_regularization,
-            mass_matrix_min_samples=mass_matrix_min_samples,
-        ) for chain_index = 1:num_chains
-    ]
-    # Per-chain re-search uses a single-chain reasonable step-size search on each
-    # chain's own column gradient cache (chain-major RNG at warmup window ends).
+    driver = PooledMassPerChainStepDriver(
+        num_params,
+        num_warmup,
+        step_sizes,
+        hmc_target_accept;
+        adapt_step_size=adapt_step_size,
+        adapt_mass_matrix=adapt_mass_matrix,
+        mass_matrix_regularization=mass_matrix_regularization,
+        mass_matrix_min_samples=mass_matrix_min_samples,
+    )
+    # Per-chain window-end re-search uses a single-chain reasonable step-size search on
+    # each chain's own column gradient cache against the SHARED pooled mass (chain-major
+    # RNG at warmup window ends), mirroring the device pooled refind.
     refinds = [
         ScalarStepSizeSearch(
             model,
@@ -431,16 +442,15 @@ function _batched_hmc_per_chain!(
             current_logjoint[chain_index],
         ) for chain_index = 1:num_chains
     ]
+    accept_statistics = Vector{Float64}(undef, num_chains)
 
     sample_index = 0
     cumulative_divergences = 0
     for iteration = 1:total_iterations
-        for chain_index = 1:num_chains
-            step_sizes[chain_index] = drivers[chain_index].step_size
-            @inbounds copyto!(
-                view(inverse_mass_matrices, :, chain_index),
-                drivers[chain_index].inverse_mass_matrix,
-            )
+        # Broadcast the shared pooled mass into every column; run per-chain steps.
+        step_sizes .= driver.step_sizes
+        @inbounds for chain_index = 1:num_chains
+            copyto!(view(inverse_mass_matrices, :, chain_index), driver.mass.inverse_mass_matrix)
         end
         mean_step_size = sum(step_sizes) / num_chains
 
@@ -504,27 +514,27 @@ function _batched_hmc_per_chain!(
         cumulative_divergences += count(divergent_step)
 
         if iteration <= num_warmup
-            for chain_index = 1:num_chains
-                mass_weight = _mass_adaptation_weight(
-                    drivers[chain_index].variance_state,
+            @inbounds for chain_index = 1:num_chains
+                workspace.mass_adaptation_weights[chain_index] = _mass_adaptation_weight(
+                    driver.mass.variance_state,
                     accepted_step[chain_index],
                     accept_prob[chain_index],
                     divergent_step[chain_index],
                 )
-                accept_statistic = divergent_step[chain_index] ? 0.0 : accept_prob[chain_index]
+                accept_statistics[chain_index] = divergent_step[chain_index] ? 0.0 : accept_prob[chain_index]
                 refinds[chain_index].position = collect(view(position, :, chain_index))
                 refinds[chain_index].current_logjoint = current_logjoint[chain_index]
-                warmup_update!(
-                    drivers[chain_index],
-                    iteration,
-                    accept_statistic,
-                    view(position, :, chain_index),
-                    mass_weight,
-                    refinds[chain_index],
-                )
-                if iteration == num_warmup
-                    warmup_finalize!(drivers[chain_index])
-                end
+            end
+            warmup_update!(
+                driver,
+                iteration,
+                accept_statistics,
+                position,
+                workspace.mass_adaptation_weights,
+                refinds,
+            )
+            if iteration == num_warmup
+                warmup_finalize!(driver)
             end
             isnothing(callback) || _invoke_progress_callback(
                 callback, callback_every, :warmup, iteration, num_warmup, mean_step_size, cumulative_divergences)
@@ -556,9 +566,9 @@ function _batched_hmc_per_chain!(
         end
     end
 
+    mass_matrix = copy(driver.mass.inverse_mass_matrix)
     chains = Vector{HMCChain}(undef, num_chains)
     for chain_index = 1:num_chains
-        mass_matrix = copy(drivers[chain_index].inverse_mass_matrix)
         chains[chain_index] = HMCChain(
             :hmc,
             model,
@@ -572,14 +582,14 @@ function _batched_hmc_per_chain!(
             vec(energy_errors[:, chain_index]),
             vec(accepted[:, chain_index]),
             vec(divergent[:, chain_index]),
-            drivers[chain_index].step_size,
-            mass_matrix,
+            driver.step_sizes[chain_index],
+            copy(mass_matrix),
             num_leapfrog_steps,
             0,
             zeros(Int, num_samples),
             fill(num_leapfrog_steps, num_samples),
             hmc_target_accept,
-            copy(drivers[chain_index].mass_adaptation_windows),
+            copy(driver.mass.mass_adaptation_windows),
             nothing,
         )
     end
