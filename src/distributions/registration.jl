@@ -27,6 +27,7 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :beta,
     :dirichlet,
     :bernoulli,
+    :bernoullilogit,
     :binomial,
     :geometric,
     :negativebinomial,

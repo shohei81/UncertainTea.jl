@@ -18,6 +18,19 @@ struct GeometricDist{T<:Real} <: AbstractTeaDistribution
     end
 end
 
+# Logit-parameterized Bernoulli (issue #149): the success probability is
+# `logistic(eta) = 1/(1+exp(-eta))`, but the log density is scored in the stable
+# log-scale form `x*eta - log1p(exp(eta))` so gradients stay finite where the
+# probability saturates to 0/1 (|eta| >~ 37 in Float64). The naive
+# `bernoulli(1/(1+exp(-eta)))` spelling scores `log(p)`/`log1p(-p)` and gives
+# -Inf/NaN there. `eta` is stored through `float` so integer literals and
+# ForwardDiff Duals both flow correctly.
+struct BernoulliLogitDist{T<:Real} <: AbstractTeaDistribution
+    eta::T
+
+    BernoulliLogitDist(eta::T) where {T<:Real} = new{T}(eta)
+end
+
 struct BinomialDist{T<:Real} <: AbstractTeaDistribution
     trials::Int
     p::T
@@ -76,6 +89,26 @@ function geometric(p)
     return GeometricDist(float(p))
 end
 
+function bernoullilogit(eta)
+    return BernoulliLogitDist(float(eta))
+end
+
+# Numerically stable `log(1 + exp(eta))`: the branch keeps the exponentiated
+# argument non-positive, so it never overflows and stays finite at |eta| = 90
+# where a naive `log(1 + exp(eta))` would overflow to Inf.
+_bernoullilogit_log1p_exp(eta) =
+    eta > zero(eta) ? eta + log1p(exp(-eta)) : log1p(exp(eta))
+
+# Stable `logistic(eta) = 1/(1 + exp(-eta))`, evaluated so the exponent is never
+# positive (no overflow); returns exactly 0/1 only in the true float limit.
+function _bernoullilogit_logistic(eta)
+    if eta >= zero(eta)
+        return inv(one(eta) + exp(-eta))
+    end
+    expeta = exp(eta)
+    return expeta / (one(eta) + expeta)
+end
+
 function binomial(trials, p)
     count = _binomial_trials(trials)
     isnothing(count) && throw(ArgumentError("binomial requires integer trials >= 0"))
@@ -103,6 +136,10 @@ end
 
 function Random.rand(rng::AbstractRNG, dist::BernoulliDist)
     return rand(rng) < dist.p
+end
+
+function Random.rand(rng::AbstractRNG, dist::BernoulliLogitDist)
+    return rand(rng) < _bernoullilogit_logistic(float(dist.eta))
 end
 
 function Random.rand(rng::AbstractRNG, dist::GeometricDist)
@@ -193,6 +230,16 @@ function logpdf(dist::BernoulliDist, x)
     value = _bernoulli_value(x)
     isnothing(value) && return oftype(float(dist.p), -Inf)
     return value ? log(dist.p) : log1p(-dist.p)
+end
+
+# Support handling mirrors `bernoulli` (Bool or a numeric 0/1); the density is
+# the stable log-scale form `x*eta - log1p(exp(eta))`.
+function logpdf(dist::BernoulliLogitDist, x)
+    value = _bernoulli_value(x)
+    isnothing(value) && return oftype(float(dist.eta), -Inf)
+    eta = dist.eta
+    log_normalizer = _bernoullilogit_log1p_exp(eta)
+    return value ? eta - log_normalizer : -log_normalizer
 end
 
 function logpdf(dist::GeometricDist, x)
