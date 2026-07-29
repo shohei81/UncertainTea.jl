@@ -151,6 +151,84 @@ function (search::BatchedStepSizeSearch)(step_size::Float64, inverse_mass_matrix
     )
 end
 
+# Batched per-chain window-end re-search callable. Replaces the `Vector` of scalar
+# `ScalarStepSizeSearch`es the pooled-mass / per-chain-step driver used to iterate
+# one chain at a time (issue #158 lever A): a SINGLE
+# `_find_reasonable_batched_step_size_per_chain` call re-searches every chain's step
+# against the freshly-pooled shared mass in one vectorized doubling loop. It holds
+# REFERENCES to the live `position`/`current_logjoint`/`current_gradient` buffers the
+# host/device loop mutates in place, so no per-iteration copy is needed (the shared
+# `BatchedStepSizeSearch` keeps its buffers the same way). The workspace from the
+# initial search is reused; it is lazily built only if none was threaded in.
+mutable struct BatchedPerChainStepSizeSearch{M,A,K,R<:AbstractRNG}
+    workspace::Union{Nothing,BatchedHMCWorkspace}
+    model::M
+    position::Matrix{Float64}
+    current_logjoint::Vector{Float64}
+    current_gradient::Matrix{Float64}
+    inverse_mass_matrices::Matrix{Float64}
+    args::A
+    constraints::K
+    rng::R
+end
+
+function BatchedPerChainStepSizeSearch(
+    workspace::Union{Nothing,BatchedHMCWorkspace},
+    model,
+    position::Matrix{Float64},
+    current_logjoint::Vector{Float64},
+    current_gradient::Matrix{Float64},
+    args,
+    constraints,
+    rng::AbstractRNG,
+)
+    return BatchedPerChainStepSizeSearch(
+        workspace,
+        model,
+        position,
+        current_logjoint,
+        current_gradient,
+        Matrix{Float64}(undef, size(position)),
+        args,
+        constraints,
+        rng,
+    )
+end
+
+function (search::BatchedPerChainStepSizeSearch)(
+    step_sizes::AbstractVector{Float64},
+    inverse_mass_matrix::Vector{Float64},
+)
+    workspace = search.workspace
+    if workspace === nothing
+        workspace = BatchedHMCWorkspace(
+            search.model,
+            search.position,
+            search.args,
+            search.constraints,
+            inverse_mass_matrix,
+        )
+        search.workspace = workspace
+    end
+    # Broadcast the shared pooled P-vector mass into every column so the per-chain
+    # search runs against identical mass columns (numerically the shared metric).
+    @inbounds for chain_index in axes(search.inverse_mass_matrices, 2)
+        copyto!(view(search.inverse_mass_matrices, :, chain_index), inverse_mass_matrix)
+    end
+    return _find_reasonable_batched_step_size_per_chain(
+        workspace,
+        search.model,
+        search.position,
+        search.current_logjoint,
+        search.current_gradient,
+        search.inverse_mass_matrices,
+        search.args,
+        search.constraints,
+        step_sizes,
+        search.rng,
+    )
+end
+
 # One warmup iteration. `accept_statistic` drives dual averaging; `mass_weights`
 # are the caller-computed per-sample weights (scalar for single chain, vector for
 # batched) accumulated over `positions` (Vector or Matrix). `refind` is invoked
@@ -306,15 +384,17 @@ _driver_metric(driver::PooledMassPerChainStepDriver) = _driver_metric(driver.mas
 # `accept_statistics` is a per-chain vector (each chain's own masked accept stat,
 # 0.0 for a divergent chain). `positions` is the full P x C matrix (the mass is
 # pooled over ALL chains, exactly once). `mass_weights` is the per-chain weight
-# vector. `refind_per_chain` is a vector of callables, invoked at each mass window
-# end to re-search each chain's step against the just-updated shared mass.
+# vector. `refind` is a single BATCHED per-chain callable (issue #158 lever A),
+# invoked once at each mass window end to re-search EVERY chain's step against the
+# just-updated shared mass in one vectorized doubling loop; it returns the C-vector
+# of new step sizes.
 function warmup_update!(
     driver::PooledMassPerChainStepDriver,
     iteration::Int,
     accept_statistics::AbstractVector,
     positions,
     mass_weights,
-    refind_per_chain,
+    refind,
 )
     if driver.adapt_step_size
         @inbounds for c in eachindex(driver.step_sizes)
@@ -337,13 +417,15 @@ function warmup_update!(
     # variance + windowed mass recomputation and never invokes the refind below.
     warmup_update!(mass, iteration, 0.0, positions, mass_weights, nothing)
 
-    # At a window end, re-search each chain's step against the NEW shared mass and
-    # restart that chain's dual averaging (the per-chain analog of the scalar
-    # driver's window-end reset at warmup.jl's `refind` block).
+    # At a window end, re-search EVERY chain's step against the NEW shared mass in a
+    # single vectorized batched call, then restart each chain's dual averaging (the
+    # per-chain analog of the scalar driver's window-end reset; issue #158 lever A
+    # replaces the former C scalar `_find_reasonable` calls with one batched search).
     if window_ends_now && driver.adapt_step_size && iteration < driver.num_warmup
         metric = _driver_metric(mass)
+        new_step_sizes = refind(driver.step_sizes, metric)
         @inbounds for c in eachindex(driver.step_sizes)
-            driver.step_sizes[c] = refind_per_chain[c](driver.step_sizes[c], metric)
+            driver.step_sizes[c] = new_step_sizes[c]
             driver.dual_states[c] = _dual_averaging_state(driver.step_sizes[c], driver.target_accept)
         end
     end

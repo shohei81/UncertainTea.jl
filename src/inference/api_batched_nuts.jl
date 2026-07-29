@@ -451,6 +451,9 @@ function _batched_nuts_host_pooled!(
     tree_strategy::Symbol,
     rng::AbstractRNG,
 )
+    # Keep the initial-search workspace ALIVE (issue #158 lever A) so the batched
+    # window-end re-search reuses it instead of the retired C scalar searches.
+    step_size_workspace = nothing
     step_sizes = fill(nuts_step_size, num_chains)
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         step_size_workspace = BatchedHMCWorkspace(
@@ -480,20 +483,21 @@ function _batched_nuts_host_pooled!(
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
     )
-    # Per-chain window-end re-search: each chain re-runs the single-chain reasonable
-    # step-size search on its own column against the SHARED pooled mass (chain-major
-    # RNG at warmup window ends), mirroring the device pooled refind.
-    refinds = [
-        ScalarStepSizeSearch(
-            model,
-            workspace.column_gradient_caches[chain_index],
-            _batched_args(batch_args, chain_index),
-            _batched_constraints(batch_constraints, chain_index),
-            rng,
-            collect(view(position, :, chain_index)),
-            current_logjoint[chain_index],
-        ) for chain_index = 1:num_chains
-    ]
+    # Per-chain window-end re-search (issue #158 lever A): ONE batched call re-searches
+    # every chain's step against the SHARED pooled mass in a single vectorized doubling
+    # loop (replacing the former C scalar searches). It holds live references to
+    # position/current_logjoint/current_gradient (mutated in place below) and reuses
+    # the initial-search workspace.
+    refind = BatchedPerChainStepSizeSearch(
+        step_size_workspace,
+        model,
+        position,
+        current_logjoint,
+        current_gradient,
+        batch_args,
+        batch_constraints,
+        rng,
+    )
     accept_statistics = Vector{Float64}(undef, num_chains)
     # The pooled shared mass is broadcast into every column so the fully-tested
     # per-chain proposal overloads (Matrix mass + C-length step vector) run with
@@ -561,8 +565,6 @@ function _batched_nuts_host_pooled!(
                 )
                 accept_statistics[chain_index] =
                     workspace.control.divergent_step[chain_index] ? 0.0 : workspace.accept_prob[chain_index]
-                refinds[chain_index].position = collect(view(position, :, chain_index))
-                refinds[chain_index].current_logjoint = current_logjoint[chain_index]
             end
             warmup_update!(
                 driver,
@@ -570,7 +572,7 @@ function _batched_nuts_host_pooled!(
                 accept_statistics,
                 position,
                 workspace.mass_adaptation_weights,
-                refinds,
+                refind,
             )
             if iteration == num_warmup
                 warmup_finalize!(driver)
@@ -683,6 +685,9 @@ function _batched_nuts_device_per_chain!(
     callback_every::Int,
     rng::AbstractRNG,
 )
+    # Keep the initial-search workspace ALIVE (issue #158 lever A) so the batched
+    # window-end re-search reuses it instead of the retired C scalar searches.
+    step_size_workspace = nothing
     step_sizes = fill(nuts_step_size, num_chains)
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         step_size_workspace = BatchedHMCWorkspace(
@@ -712,20 +717,21 @@ function _batched_nuts_device_per_chain!(
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
     )
-    # Per-chain window-end re-search: each chain re-runs the single-chain reasonable
-    # step-size search on its own column against the SHARED pooled mass (chain-major
-    # RNG at warmup window ends), mirroring the host per-chain refind.
-    refinds = [
-        ScalarStepSizeSearch(
-            model,
-            workspace.column_gradient_caches[chain_index],
-            _batched_args(batch_args, chain_index),
-            _batched_constraints(batch_constraints, chain_index),
-            rng,
-            collect(view(position, :, chain_index)),
-            current_logjoint[chain_index],
-        ) for chain_index = 1:num_chains
-    ]
+    # Per-chain window-end re-search (issue #158 lever A): ONE batched call re-searches
+    # every chain's step against the SHARED pooled mass in a single vectorized doubling
+    # loop (replacing the former C scalar searches). It holds live references to the
+    # host mirrors position/current_logjoint/current_gradient (refreshed by the device
+    # download each warmup iteration) and reuses the initial-search workspace.
+    refind = BatchedPerChainStepSizeSearch(
+        step_size_workspace,
+        model,
+        position,
+        current_logjoint,
+        current_gradient,
+        batch_args,
+        batch_constraints,
+        rng,
+    )
     accept_statistics = Vector{Float64}(undef, num_chains)
 
     sample_index = 0
@@ -770,8 +776,6 @@ function _batched_nuts_device_per_chain!(
                 )
                 accept_statistics[chain_index] =
                     workspace.control.divergent_step[chain_index] ? 0.0 : workspace.accept_prob[chain_index]
-                refinds[chain_index].position = collect(view(position, :, chain_index))
-                refinds[chain_index].current_logjoint = current_logjoint[chain_index]
             end
             warmup_update!(
                 driver,
@@ -779,7 +783,7 @@ function _batched_nuts_device_per_chain!(
                 accept_statistics,
                 position,
                 workspace.mass_adaptation_weights,
-                refinds,
+                refind,
             )
             if iteration == num_warmup
                 warmup_finalize!(driver)

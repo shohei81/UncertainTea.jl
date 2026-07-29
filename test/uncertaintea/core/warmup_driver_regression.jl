@@ -135,4 +135,131 @@
     @test stepsearch_up > 1.0e-4
     # The two directions bracket each other within the doubling grid.
     @test stepsearch_up / 4 <= stepsearch_down <= stepsearch_up * 4
+
+    # Issue #158 lever A: the vectorized per-chain reasonable-step-size search
+    # (`_find_reasonable_batched_step_size_per_chain`) must reproduce C independent
+    # scalar `_find_reasonable_step_size` calls exactly -- same first crossing per
+    # chain -- so the batched window-end search provably replaces the scalar loop it
+    # supersedes in the pooled-mass / per-chain-step driver. Momentum is drawn
+    # chain-major in both, so sharing one RNG gives an identical draw order and
+    # therefore identical results. Uses a 2-parameter model so the chain-major
+    # momentum ordering is genuinely exercised (P > 1).
+    @tea static function perchain_stepsearch_model()
+        a ~ normal(0.0f0, 1.0f0)
+        b ~ normal(0.0f0, 1.0f0)
+        {:y} ~ normal(a + b, 1.0f0)
+        return a
+    end
+    perchain_constraints = choicemap((:y, 0.4f0))
+    perchain_num_chains = 4
+    perchain_num_params = UncertainTea.parametercount(
+        UncertainTea.parameterlayout(perchain_stepsearch_model),
+    )
+    perchain_position = randn(MersenneTwister(7), perchain_num_params, perchain_num_chains)
+    perchain_gradient = Matrix{Float64}(undef, perchain_num_params, perchain_num_chains)
+    perchain_logjoint = Vector{Float64}(undef, perchain_num_chains)
+    for perchain_chain = 1:perchain_num_chains
+        perchain_cache = UncertainTea._logjoint_gradient_cache(
+            perchain_stepsearch_model,
+            perchain_position[:, perchain_chain],
+            (),
+            perchain_constraints,
+        )
+        perchain_gradient[:, perchain_chain] = UncertainTea._logjoint_gradient!(
+            perchain_cache,
+            perchain_position[:, perchain_chain],
+        )
+        perchain_logjoint[perchain_chain] = logjoint_unconstrained(
+            perchain_stepsearch_model,
+            perchain_position[:, perchain_chain],
+            (),
+            perchain_constraints,
+        )
+    end
+    perchain_initial_step = 0.7
+    # Reference: C independent scalar searches sharing one RNG, called in chain order.
+    perchain_scalar_rng = MersenneTwister(2158)
+    perchain_scalar_steps = map(1:perchain_num_chains) do perchain_chain
+        perchain_scalar_cache = UncertainTea._logjoint_gradient_cache(
+            perchain_stepsearch_model,
+            perchain_position[:, perchain_chain],
+            (),
+            perchain_constraints,
+        )
+        UncertainTea._find_reasonable_step_size(
+            perchain_stepsearch_model,
+            collect(perchain_position[:, perchain_chain]),
+            perchain_logjoint[perchain_chain],
+            perchain_scalar_cache,
+            ones(perchain_num_params),
+            (),
+            perchain_constraints,
+            perchain_initial_step,
+            perchain_scalar_rng,
+        )
+    end
+    # Batched: one vectorized doubling loop over all chains, same RNG seed.
+    perchain_batched_rng = MersenneTwister(2158)
+    perchain_workspace = UncertainTea.BatchedHMCWorkspace(
+        perchain_stepsearch_model,
+        perchain_position,
+        (),
+        perchain_constraints,
+    )
+    perchain_batched_steps = UncertainTea._find_reasonable_batched_step_size_per_chain(
+        perchain_workspace,
+        perchain_stepsearch_model,
+        perchain_position,
+        perchain_logjoint,
+        perchain_gradient,
+        ones(perchain_num_params, perchain_num_chains),
+        (),
+        perchain_constraints,
+        perchain_initial_step,
+        perchain_batched_rng,
+    )
+    @test perchain_batched_steps == perchain_scalar_steps
+    # A per-chain vector of initial steps (the window-end re-search form) starts each
+    # chain's doubling from its own anchor and still matches C scalar searches.
+    perchain_vec_anchors = [0.3, 0.5, 0.9, 1.4]
+    perchain_scalar_rng_vec = MersenneTwister(9931)
+    perchain_scalar_steps_vec = map(1:perchain_num_chains) do perchain_chain
+        perchain_scalar_cache = UncertainTea._logjoint_gradient_cache(
+            perchain_stepsearch_model,
+            perchain_position[:, perchain_chain],
+            (),
+            perchain_constraints,
+        )
+        UncertainTea._find_reasonable_step_size(
+            perchain_stepsearch_model,
+            collect(perchain_position[:, perchain_chain]),
+            perchain_logjoint[perchain_chain],
+            perchain_scalar_cache,
+            ones(perchain_num_params),
+            (),
+            perchain_constraints,
+            perchain_vec_anchors[perchain_chain],
+            perchain_scalar_rng_vec,
+        )
+    end
+    perchain_batched_rng_vec = MersenneTwister(9931)
+    perchain_workspace_vec = UncertainTea.BatchedHMCWorkspace(
+        perchain_stepsearch_model,
+        perchain_position,
+        (),
+        perchain_constraints,
+    )
+    perchain_batched_steps_vec = UncertainTea._find_reasonable_batched_step_size_per_chain(
+        perchain_workspace_vec,
+        perchain_stepsearch_model,
+        perchain_position,
+        perchain_logjoint,
+        perchain_gradient,
+        ones(perchain_num_params, perchain_num_chains),
+        (),
+        perchain_constraints,
+        perchain_vec_anchors,
+        perchain_batched_rng_vec,
+    )
+    @test perchain_batched_steps_vec == perchain_scalar_steps_vec
 end

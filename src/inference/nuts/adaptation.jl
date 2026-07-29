@@ -427,6 +427,14 @@ end
 # Per-chain reasonable step-size search: one shared doubling loop, but each chain
 # tracks its own step size, direction, and crossing decision (mirrors the scalar
 # `_find_reasonable_step_size`). Momentum is drawn once in chain-major order.
+#
+# `step_size` is either a single Float64 (every chain starts the doubling from the
+# same anchor -- the initial-search case) or a per-chain Vector (each chain starts
+# from its own current step size -- the window-end re-search case, exactly what the
+# scalar per-chain window-end loop did). Because momentum is drawn chain-major and
+# each chain's doubling grid is anchored independently, the vector form is bitwise
+# equivalent to C independent scalar `_find_reasonable_step_size` calls that share
+# `rng`.
 function _find_reasonable_batched_step_size_per_chain(
     workspace::BatchedHMCWorkspace,
     model::TeaModel,
@@ -436,14 +444,20 @@ function _find_reasonable_batched_step_size_per_chain(
     inverse_mass_matrices::AbstractMatrix,
     args,
     constraints,
-    step_size::Float64,
+    step_size::Union{Float64,AbstractVector{Float64}},
     rng::AbstractRNG,
 )
     num_chains = length(current_logjoint)
     min_step_size = 1e-8
     max_step_size = 1e3
     log_target = log(0.5)
-    step_sizes = fill(step_size, num_chains)
+    if step_size isa AbstractVector
+        length(step_size) == num_chains ||
+            throw(DimensionMismatch("expected $num_chains initial step sizes, got $(length(step_size))"))
+        step_sizes = collect(Float64, step_size)
+    else
+        step_sizes = fill(Float64(step_size), num_chains)
+    end
     directions = zeros(Float64, num_chains)
     done = falses(num_chains)
 
