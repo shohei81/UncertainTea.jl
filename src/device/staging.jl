@@ -194,6 +194,53 @@ function _stage_step!(
     return nothing
 end
 
+# bernoullilogit whose eta is the fused GLM linear predictor (issues #135/#150):
+# the covariate column `X[:, index]` is per-observation CONSTANT data (like
+# observed values), so it rides the observation buffer with addresses erased.
+# Staging pushes `D` covariate rows FIRST (one per coefficient dimension,
+# resolving the loop-indexed column on the host), then the observed y row; the
+# device GLM step consumes them in exactly that cursor order. A generic scalar
+# eta stages only the observed y row (no leading covariate rows).
+function _stage_step!(
+    rows,
+    step::BackendBernoulliLogitChoicePlanStep,
+    env,
+    constraints,
+    dummy_params,
+    trip_counts,
+    loop_starts,
+    loop_counter,
+    ::Type{T},
+) where {T}
+    step.eta isa BackendLinearPredictorExpr &&
+        _stage_linear_predictor_covariates!(rows, step.eta, env, dummy_params, T)
+    isnothing(step.parameter_slot) || return nothing # latent: no observed row (bernoullilogit is observed-only)
+    _stage_observed_row!(rows, step, env, constraints, dummy_params, T)
+    return nothing
+end
+
+function _stage_linear_predictor_covariates!(rows, eta::BackendLinearPredictorExpr, env, dummy_params, ::Type{T}) where {T}
+    env.assigned[eta.matrix_slot] || throw(
+        ArgumentError(
+            "device staging requires the linear-predictor covariate matrix to be a resolvable model argument (a captured constant or direct argument)",
+        ),
+    )
+    # the covariate column index is the loop iterator (already set by the loop
+    # staging walk); it is shared across the batch, so resolve it once
+    column = _eval_backend_index_value_expr(env, eta.index, 1)
+    matrix_storage = env.generic_values[eta.matrix_slot]
+    batch_size = size(dummy_params, 2)
+    for d = 1:eta.coef_length
+        covariate_row = Vector{T}(undef, batch_size)
+        for batch_index = 1:batch_size
+            matrix = matrix_storage[batch_index]
+            covariate_row[batch_index] = T(matrix[d, column])
+        end
+        push!(rows, covariate_row)
+    end
+    return nothing
+end
+
 # A vector observation stages as `value_length` consecutive rows in component
 # order; the kernel-side cursor advances by the step's compile-time dimension,
 # preserving the pre-order alignment invariant with a stride. lkjcholesky

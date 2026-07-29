@@ -125,6 +125,47 @@ struct DeviceBernoulliChoiceStep{P} <: AbstractDeviceChoiceStep
     binding_slot::Int32
 end
 
+# Logit-parameterized Bernoulli with a generic scalar `eta` (issues #135/#149):
+# `bernoullilogit(scalar_expr)`. Scored in the stable `x*eta - log1p(exp(eta))`
+# form. bernoullilogit latents are unsupported (backend rejects them), so
+# `value_source` is always the staged observation (-1); the transform field is
+# carried for the choice-step convention and stays identity.
+struct DeviceBernoulliLogitChoiceStep{E<:AbstractDeviceExpr} <: AbstractDeviceChoiceStep
+    eta::E
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+# Logit-parameterized Bernoulli whose eta is the fused GLM linear predictor
+# `intercept + sum_d coef[d] * X[d, index]` (issues #135/#150 -- the device analog
+# of the HOST batched analytic lowering). `D` is the compile-time coefficient
+# dimension (the backend guarantees a VectorIdentity latent vector), unrolling the
+# dot product in the kernel body. The covariate column `X[:, index]` is
+# per-observation CONSTANT data staged into the observation buffer (like observed
+# values, addresses erased): staging pushes `D` covariate rows then the observed y
+# row, and the kernel reads them cursor-first, so the `index` expr disappears from
+# the device plan entirely. `coef_value_source` is the coefficient latent's
+# UNCONSTRAINED parameter row start (VectorIdentity: constrained == unconstrained,
+# log-abs-det 0); the gradient kernel seeds derivative 1 there so forward-mode
+# reproduces `d_eta/d_coef[d] = X[d, index]`, and `d_eta/d_intercept = 1` flows
+# through the intercept sub-expr's slot dual. `value_source` is always -1
+# (bernoullilogit is observed-only).
+struct DeviceBernoulliLogitGLMChoiceStep{D,I<:AbstractDeviceExpr} <: AbstractDeviceChoiceStep
+    intercept::I
+    coef_value_source::Int32
+    value_source::Int32
+    binding_slot::Int32
+end
+
+DeviceBernoulliLogitGLMChoiceStep{D}(intercept::I, coef_value_source, value_source, binding_slot) where {D,I} =
+    DeviceBernoulliLogitGLMChoiceStep{D,I}(
+        intercept,
+        Int32(coef_value_source),
+        Int32(value_source),
+        Int32(binding_slot),
+    )
+
 struct DeviceBinomialChoiceStep{N,P} <: AbstractDeviceChoiceStep
     trials::N
     probability::P
@@ -939,6 +980,79 @@ function _lower_device_step!(
     (isnothing(src) || isnothing(p)) && return nothing
     value_source, tcode = src
     push!(out, DeviceBernoulliChoiceStep(p, value_source, tcode, _device_slot32(step.binding_slot)))
+    return nothing
+end
+
+# Resolve the linear predictor coefficient's UNCONSTRAINED parameter row start
+# from the backend expr's constrained value_index/length. The coefficient must be
+# a VectorIdentity latent vector (the same guard the host analytic lowering #150
+# uses); a non-identity coefficient makes the device fall back honestly.
+function _device_linear_predictor_coef_source(eta::BackendLinearPredictorExpr, layout::ParameterLayout, issues::Vector{String})
+    slot_position =
+        findfirst(s -> s.value_index == eta.coef_value_index && s.value_length == eta.coef_length, layout.slots)
+    if isnothing(slot_position)
+        _device_issue!(issues, "device lowering could not resolve the linear predictor coefficient parameter slot")
+        return nothing
+    end
+    slot = layout.slots[slot_position]
+    if !(slot.transform isa VectorIdentityTransform) || slot.dimension != eta.coef_length
+        _device_issue!(
+            issues,
+            "device lowering only supports identity-transform (VectorIdentity) linear predictor coefficients; non-identity coefficients fall back",
+        )
+        return nothing
+    end
+    return Int32(slot.index)
+end
+
+# bernoullilogit (issues #135/#149/#150). Latents are unsupported (the backend
+# rejects them), so the value is always the staged observation. When `eta` is the
+# fused GLM linear predictor, lower to the analytic device GLM step (covariate
+# column staged into the observation buffer); otherwise lower the generic scalar
+# eta expr.
+function _lower_device_step!(
+    out,
+    step::BackendBernoulliLogitChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    if !isnothing(step.parameter_slot)
+        _device_issue!(issues, "device lowering does not support bernoullilogit latent parameters")
+        return nothing
+    end
+    if step.eta isa BackendLinearPredictorExpr
+        eta = step.eta
+        if eta.coef_length > DEVICE_MAX_VECTOR_DIMENSION
+            _device_issue!(
+                issues,
+                "device lowering caps the linear predictor coefficient dimension at $DEVICE_MAX_VECTOR_DIMENSION (kernel compile-time budget), got $(eta.coef_length)",
+            )
+            return nothing
+        end
+        coef_source = _device_linear_predictor_coef_source(eta, layout, issues)
+        isnothing(coef_source) && return nothing
+        intercept =
+            isnothing(eta.intercept) ? DeviceLiteralExpr(zero(T)) :
+            _lower_device_expr(eta.intercept, backend.generic_slots, T, issues, "bernoullilogit linear predictor intercept")
+        isnothing(intercept) && return nothing
+        push!(
+            out,
+            DeviceBernoulliLogitGLMChoiceStep{eta.coef_length}(
+                intercept,
+                coef_source,
+                Int32(-1),
+                _device_slot32(step.binding_slot),
+            ),
+        )
+        return nothing
+    end
+    eta = _lower_device_expr(step.eta, backend.generic_slots, T, issues, "bernoullilogit eta")
+    isnothing(eta) && return nothing
+    push!(out, DeviceBernoulliLogitChoiceStep(eta, Int32(-1), DEVICE_TRANSFORM_IDENTITY, _device_slot32(step.binding_slot)))
     return nothing
 end
 

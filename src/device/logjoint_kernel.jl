@@ -228,6 +228,54 @@ end
     return (_device_bernoulli_logpdf(p, value) + lad, cur)
 end
 
+@inline function _device_score_step(
+    step::DeviceBernoulliLogitChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    eta = _device_eval(step.eta, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    e, v = promote(eta, value)
+    return (_device_bernoullilogit_logpdf(e, v) + lad, cur)
+end
+
+# Fused GLM linear predictor `eta = intercept + sum_d coef[d] * X[d, index]`
+# scored as a logit-Bernoulli observation. The covariate column `X[:, index]`
+# was staged into the observation buffer as `D` leading rows (staging.jl), then
+# the observed y row: read them cursor-first. The coefficient values come
+# straight from the unconstrained params (VectorIdentity: constrained ==
+# unconstrained), NOT from a materialized slot.
+@inline function _device_score_step(
+    step::DeviceBernoulliLogitGLMChoiceStep{D},
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+) where {D}
+    intercept = _device_eval(step.intercept, slots, col)
+    terms = ntuple(
+        i -> @inbounds(params[step.coef_value_source+Int32(i-1), col] * observed[cursor+Int32(i-1), col]),
+        Val(D),
+    )
+    eta = intercept + _device_tuple_sum(terms)
+    cur = cursor + Int32(D)
+    value = @inbounds observed[cur, col]
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    e, v = promote(eta, value)
+    return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
+end
+
 @inline function _device_score_step(step::DevicePoissonChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
     lambda = _device_eval(step.lambda, slots, col)
     value, lad, cur = _device_choice_value(step, params, observed, col, cursor)

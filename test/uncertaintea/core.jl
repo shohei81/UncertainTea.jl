@@ -53,6 +53,7 @@ core_test_files = [
     ("device_gradient_dual.jl", "device"),
     ("device_hmc_advi.jl", "device"),
     ("device_masked_nuts.jl", "device"),
+    ("device_glm_lowering.jl", "device"),
     ("device_perchain_stranding.jl", "device"),
     ("host_device_pooled_agreement.jl", "device"),
     ("gradient_crosscheck.jl", "crosscheck"),
