@@ -206,24 +206,8 @@ function DeviceHMCWorkspace(
     )
 end
 
-# Launch the fused device gradient kernel against `inner.params_device` in place
-# (no upload, no download, no synchronize): the working position is already resident.
-function _device_launch_gradient!(inner::DeviceBatchedWorkspace)
-    kernel = _device_gradient_kernel!(inner.backend)
-    kernel(
-        inner.totals_device,
-        inner.gradients_device,
-        inner.plan,
-        inner.params_device,
-        inner.observed_device,
-        inner.observed_int_device,
-        inner.grad_slots_device,
-        inner.trip_counts_device,
-        inner.loop_starts_device;
-        ndrange=(inner.parameter_count, inner.batch_size),
-    )
-    return nothing
-end
+# `_device_launch_gradient!` (serial scan or observation-parallel tiled path) lives
+# in device/tiled_gradient.jl so it is defined before the api / advi / nuts callers.
 
 # Device leapfrog trajectory (matches `batched_leapfrog_trajectory!` step for step):
 # initial half-kick from `current_gradient`, then K (drift, gradient, kick) steps

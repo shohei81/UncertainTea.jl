@@ -95,19 +95,9 @@ function device_batched_logjoint_gradient!(workspace::DeviceBatchedWorkspace{T},
     _device_upload_params!(workspace, params)
     _device_ensure_gradient_buffers!(workspace)
 
-    kernel = _device_gradient_kernel!(workspace.backend)
-    kernel(
-        workspace.totals_device,
-        workspace.gradients_device,
-        workspace.plan,
-        workspace.params_device,
-        workspace.observed_device,
-        workspace.observed_int_device,
-        workspace.grad_slots_device,
-        workspace.trip_counts_device,
-        workspace.loop_starts_device;
-        ndrange=(workspace.parameter_count, workspace.batch_size),
-    )
+    # Serial `(P, C)` scan or the observation-parallel tiled path (issue #153),
+    # selected by the workspace; one synchronize covers whichever kernels ran.
+    _device_launch_gradient!(workspace)
     KernelAbstractions.synchronize(workspace.backend)
 
     values = Vector{T}(undef, workspace.batch_size)

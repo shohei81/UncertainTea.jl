@@ -55,6 +55,13 @@ mutable struct DeviceBatchedWorkspace{T,B<:KernelAbstractions.Backend,P<:DeviceE
     # is a `DeviceDual{T}` scratch laid out (slot_count x parameter_count x batch).
     gradients_device::Any
     grad_slots_device::Any
+    # Observation-parallel tiled gradient (issue #153): the descriptor when the plan
+    # has a tileable observation loop large enough to tile (else `nothing`, keeping
+    # the serial `(P, C)` scan), plus the per-tile partial value/gradient scratch
+    # (allocated lazily with the gradient buffers).
+    tiled_gradient::Any
+    tile_partial_grads::Any
+    tile_partial_totals::Any
     # Signature layout + representative constraints kept so a params-width
     # mismatch can name the conditioning (issue #95, PR-5).
     layout::ParameterLayout
@@ -84,18 +91,45 @@ function DeviceBatchedWorkspace(
 
     batch_size = Int(batch_size)
     backend_plan = _signature_backend_plan(model, resolved)
-    bundle = _stage_device_observations(model, backend_plan, plan, args, constraints, batch_size)
+    # Detect a tileable observation loop before staging so staging captures the
+    # loop's base-cursor / per-iteration stride anchors (issue #153).
+    tileable = _device_detect_tileable_loop(plan)
+    tile_loop_id = isnothing(tileable) ? 0 : Int(tileable.loop_id)
+    bundle =
+        _stage_device_observations(model, backend_plan, plan, args, constraints, batch_size; tile_loop_id=tile_loop_id)
 
     parameter_count = parametercount(resolved.plan.parameter_layout)
     slot_count = Int(plan.slot_count)
 
+    # Shared observations stage a single column and broadcast (issue #153); a
+    # per-chain (batched-argument) staging keeps `C` columns. The device buffers
+    # mirror the staged column count.
+    obs_cols = size(bundle.observed, 2)
+
     params_device = KernelAbstractions.allocate(backend, T, parameter_count, batch_size)
     slots_device = KernelAbstractions.allocate(backend, T, slot_count, batch_size)
     _device_stage_arguments!(slots_device, model, args, batch_size, T)
-    observed_device = KernelAbstractions.allocate(backend, T, size(bundle.observed, 1), batch_size)
+    observed_device = KernelAbstractions.allocate(backend, T, size(bundle.observed, 1), obs_cols)
     copyto!(observed_device, bundle.observed)
-    observed_int_device = KernelAbstractions.allocate(backend, Int64, size(bundle.observed_int, 1), batch_size)
-    copyto!(observed_int_device, bundle.observed_int)
+    # The exact-integer mirror is only read by count-family (binomial) steps; drop
+    # it to a 1x1 dummy when the plan has none, so the (potentially large) Int64
+    # buffer is neither materialized per chain nor uploaded (issue #71/#153).
+    if _device_plan_has_count_family(plan)
+        observed_int_device = KernelAbstractions.allocate(backend, Int64, size(bundle.observed_int, 1), obs_cols)
+        copyto!(observed_int_device, bundle.observed_int)
+    else
+        observed_int_device = fill!(KernelAbstractions.allocate(backend, Int64, 1, 1), Int64(0))
+    end
+    # Build the tiled-gradient descriptor when the flagged loop is large enough that
+    # the occupancy win outweighs the extra kernel launches; below the threshold the
+    # serial scan is kept so small models stay bitwise identical to the untiled path.
+    tiled_gradient = nothing
+    if !isnothing(tileable) && bundle.tile_stride > Int32(0)
+        n_obs = bundle.trip_counts[tile_loop_id]
+        if n_obs >= DEVICE_GRADIENT_TILE_MIN_OBS
+            tiled_gradient = _build_device_tiled_gradient(plan, tileable, bundle)
+        end
+    end
     totals_device = KernelAbstractions.allocate(backend, T, batch_size)
     trip_counts_device = KernelAbstractions.allocate(backend, Int32, length(bundle.trip_counts))
     loop_starts_device = KernelAbstractions.allocate(backend, Int32, length(bundle.loop_starts))
@@ -117,6 +151,9 @@ function DeviceBatchedWorkspace(
         trip_counts_device,
         loop_starts_device,
         args,
+        nothing,
+        nothing,
+        tiled_gradient,
         nothing,
         nothing,
         resolved.plan.parameter_layout,
@@ -149,6 +186,18 @@ function _device_ensure_gradient_buffers!(workspace::DeviceBatchedWorkspace{T}) 
             workspace.batch_size,
             T,
         )
+    end
+    if !isnothing(workspace.tiled_gradient) && isnothing(workspace.tile_partial_grads)
+        tg = workspace.tiled_gradient
+        workspace.tile_partial_grads = KernelAbstractions.allocate(
+            workspace.backend,
+            T,
+            workspace.parameter_count,
+            Int(tg.ntiles),
+            workspace.batch_size,
+        )
+        workspace.tile_partial_totals =
+            KernelAbstractions.allocate(workspace.backend, T, Int(tg.ntiles), workspace.batch_size)
     end
     return nothing
 end
