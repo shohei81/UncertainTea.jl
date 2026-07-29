@@ -120,11 +120,14 @@ end
 end
 
 @testset "devglm_masked_nuts_vs_host_exact" begin
-    # With adaptation OFF at a fixed step size, the device masked path is a
-    # faithful reimplementation of the host masked path: same RNG order, same
-    # reduction order, so the draws match to ~1e-8 on CPU() at Float64 (the
-    # residual is the fused device gradient's ~1e-16 disagreement with the host
-    # gradient cache, which flips no accept decision).
+    # With adaptation OFF at a fixed step size AND `device_sync_per_leaf=true` (the
+    # Tier-1 order-preserving path, issue #152), the device masked path is a faithful
+    # reimplementation of the host masked path: same RNG order, same reduction order,
+    # so the draws match to ~1e-8 on CPU() at Float64 (the residual is the fused
+    # device gradient's ~1e-16 disagreement with the host gradient cache, which flips
+    # no accept decision). The DEFAULT device path is the Tier-2 async path (device-
+    # pre-drawn round RNG), which is only STATISTICALLY equivalent, so this bitwise
+    # oracle opts into the sync-per-leaf path explicitly.
     rng = MersenneTwister(909)
     D, n = 4, 30
     X, ys = devglm_make_data(rng, D, n, 0.2, [0.5, -0.3, 0.8, -0.4])
@@ -137,6 +140,7 @@ end
         adapt_step_size=false,
         adapt_mass_matrix=false,
         tree_strategy=:masked,
+        device_sync_per_leaf=true,
         per_chain_adaptation=false,
     )
     device = batched_nuts(devglm_logistic, (X, n), cm; rng=MersenneTwister(11), backend=CPU(), kwargs...)

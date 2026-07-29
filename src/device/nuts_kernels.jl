@@ -19,6 +19,20 @@
 # iteration position/gradient download the device HMC loop already does during
 # warmup.
 #
+# Two round-loop strategies (issue #152):
+#   * `sync_per_leaf=true`  -- the Tier-1 order-preserving path: the per-leaf
+#     accept/select bookkeeping stays on the host, so the RNG draw order and the
+#     reduction order match the host masked path exactly and the CPU()-Float64
+#     device-vs-host BITWISE oracle holds. One host round-trip per leaf.
+#   * `sync_per_leaf=false` (DEFAULT, Tier 2) -- the async path: the round's RNG is
+#     pre-drawn and uploaded once, the per-leaf accept/select/divergence/log-weight
+#     and the dyadic-U-turn fold run device-side (`_device_nuts_advance!` +
+#     `_device_masked_nuts_doubling_round_async!`), and the host reads the subtree
+#     state back in ONE batch per doubling ROUND instead of per leaf. This departs
+#     from the CPU RNG draw order, so it is only STATISTICALLY (not bitwise)
+#     equivalent to the host masked path -- validated by SBC + posterior-moment
+#     agreement + divergence-rate, not by the bitwise oracle.
+#
 # Results are statistically equivalent to the host masked path, and -- with
 # adaptation OFF at a fixed step size -- numerically identical to it on the CPU()
 # reference backend at Float64 (the RNG draw order and reduction order are
@@ -394,6 +408,135 @@ end
     @inbounds moved[b] = is_moved
 end
 
+# ---- issue #152 Tier 2: device-side per-leaf accept/select ---------------------
+# Per-chain (ndrange = C) transcription of the host `_advance_batched_nuts_subtree_cohort!`
+# scalar loop body (nuts/kernel.jl lines 16-64): step-invalid + delta-energy
+# divergence, accept-prob + accept-stat accumulation, the multinomial progressive
+# proposal selection (logaddexp + a PRE-DRAWN uniform, `leaf_uniform[leaf_row, b]`),
+# and the per-leaf frontier/proposal-copy decision masks. Runs on the device with no
+# host round-trip, so the whole round's leaves enqueue back-to-back and the host reads
+# the subtree state once at round end. `divergent`/`turning` are sticky across the
+# round (init 0 once); a chain that turned on an earlier odd leaf is folded out of
+# `active` at the top here (and by `_device_nuts_fold_turning!` right after the dyadic
+# test). This departs from the CPU RNG draw order -> only statistically equivalent.
+@kernel function _device_nuts_advance!(
+    active, divergent, turning, log_weight,
+    integration_steps, accept_stat_sum, accept_stat_count,
+    tree_current_logjoint, tree_left_logjoint, tree_right_logjoint,
+    tree_proposal_logjoint, proposal_energy, proposal_energy_error,
+    copy_left, copy_right, select_proposal, advanced, checkpoint,
+    @Const(valid), @Const(proposed_energy), @Const(logjoint), @Const(current_energy),
+    @Const(sign), @Const(leaf_uniform), leaf_offset::Int, max_delta_energy,
+)
+    b = @index(Global)
+    T = eltype(log_weight)
+    # Clear the per-leaf decision masks (they gate the P x C copies that follow).
+    @inbounds copy_left[b] = 0x00
+    @inbounds copy_right[b] = 0x00
+    @inbounds select_proposal[b] = 0x00
+    @inbounds advanced[b] = 0x00
+    @inbounds checkpoint[b] = 0x00
+    # Fold any earlier U-turn into active (sticky). KernelAbstractions forbids `return`,
+    # so inactive lanes fall through the nested branches as no-ops.
+    if @inbounds(turning[b]) != 0x00
+        @inbounds active[b] = 0x00
+    end
+    if @inbounds(active[b]) != 0x00
+        if @inbounds(valid[b]) == 0x00
+            # Step-invalid divergence: divergent + inactive WITHOUT counting a step.
+            @inbounds divergent[b] = 0x01
+            @inbounds active[b] = 0x00
+        else
+            # Advance (current <- next); the step count + the frontier copy decision
+            # are made BEFORE the delta-energy check, exactly as the host does.
+            lj = @inbounds logjoint[b]
+            @inbounds tree_current_logjoint[b] = lj
+            @inbounds integration_steps[b] += Int32(1)
+            @inbounds advanced[b] = 0x01
+            if @inbounds(sign[b]) < zero(T)
+                @inbounds copy_left[b] = 0x01
+                @inbounds tree_left_logjoint[b] = lj
+            else
+                @inbounds copy_right[b] = 0x01
+                @inbounds tree_right_logjoint[b] = lj
+            end
+            delta = @inbounds(proposed_energy[b]) - @inbounds(current_energy[b])
+            if !isfinite(delta) || delta > max_delta_energy
+                # Delta-energy divergence (still counts the step above).
+                @inbounds divergent[b] = 0x01
+                @inbounds active[b] = 0x00
+            else
+                accept_prob = min(one(T), exp(min(zero(T), -delta)))
+                @inbounds accept_stat_sum[b] += accept_prob
+                @inbounds accept_stat_count[b] += Int32(1)
+                candidate = -@inbounds(proposed_energy[b])
+                lw = @inbounds log_weight[b]
+                ninf = T(-Inf)
+                # combined = logaddexp(lw, candidate) (device _logaddexp transcription).
+                combined = if lw == ninf
+                    candidate
+                elseif candidate == ninf
+                    lw
+                else
+                    hi = max(lw, candidate)
+                    hi + log1p(exp(min(lw, candidate) - hi))
+                end
+                u = @inbounds leaf_uniform[leaf_offset+b]
+                if !isfinite(lw) || log(u) < candidate - combined
+                    @inbounds select_proposal[b] = 0x01
+                    @inbounds tree_proposal_logjoint[b] = lj
+                    @inbounds proposal_energy[b] = @inbounds(proposed_energy[b])
+                    @inbounds proposal_energy_error[b] = delta
+                end
+                @inbounds log_weight[b] = combined
+                @inbounds checkpoint[b] = 0x01
+            end
+        end
+    end
+end
+
+# Fold the sticky U-turn flag into the active mask (active &= !turning); enqueued
+# after the odd-leaf dyadic test so the next leaf's pre-gradient kernel already sees
+# the chain dropped out.
+@kernel function _device_nuts_fold_turning!(active, @Const(turning))
+    b = @index(Global)
+    if @inbounds(turning[b]) != 0x00
+        @inbounds active[b] = 0x00
+    end
+end
+
+# Cohort scatter with three SEPARATE per-chain mask vectors (async path): the fused
+# `_device_nuts_scatter3!` above reads a packed C x 3 matrix, but the async advance
+# kernel writes three independent UInt8 mask vectors, so this variant consumes them
+# directly (no mask repack). tree_left/right/proposal <- tree_current.
+@kernel function _device_nuts_scatter3_v!(
+    dl_p, dl_m, dl_g, dr_p, dr_m, dr_g, dp_p, dp_m, dp_g,
+    @Const(s_p), @Const(s_m), @Const(s_g),
+    @Const(mask_left), @Const(mask_right), @Const(mask_sel),
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    sp = @inbounds s_p[pidx, b]
+    sm = @inbounds s_m[pidx, b]
+    sg = @inbounds s_g[pidx, b]
+    if @inbounds(mask_left[b]) != 0x00
+        @inbounds dl_p[pidx, b] = sp
+        @inbounds dl_m[pidx, b] = sm
+        @inbounds dl_g[pidx, b] = sg
+    end
+    if @inbounds(mask_right[b]) != 0x00
+        @inbounds dr_p[pidx, b] = sp
+        @inbounds dr_m[pidx, b] = sm
+        @inbounds dr_g[pidx, b] = sg
+    end
+    if @inbounds(mask_sel[b]) != 0x00
+        @inbounds dp_p[pidx, b] = sp
+        @inbounds dp_m[pidx, b] = sm
+        @inbounds dp_g[pidx, b] = sg
+    end
+end
+
 # ---- device NUTS workspace -----------------------------------------------------
 
 # Device buffers for the masked doubling round loop. Wraps a `DeviceBatchedWorkspace`
@@ -469,6 +612,44 @@ mutable struct DeviceNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     # per-chain leapfrog overload requires a per-chain mass matrix). The device
     # rounds still consume the shared `inverse_mass` P-vector.
     inverse_mass_cols::Matrix{Float64}
+    # ---- issue #152 Tier 2: async round + device-side accept/select ------------
+    # When `sync_per_leaf` is true the round loop runs the Tier-1 order-preserving
+    # path (one host round-trip per leaf; keeps the CPU()-Float64 bitwise oracle).
+    # When false (default) it runs the async path: the round's RNG is pre-drawn and
+    # uploaded once, the per-leaf accept/select/divergence/log-weight/dyadic-U-turn
+    # bookkeeping runs on the device, and the host reads one status batch per round
+    # instead of per leaf. The async path departs from the CPU RNG draw order, so it
+    # is only STATISTICALLY (not bitwise) equivalent to the host masked path.
+    sync_per_leaf::Bool
+    # Device-resident per-chain (C) subtree state the async advance kernel owns
+    # (mirrors the host `ws.subtree_*` scalars during a round; downloaded once at
+    # round end for the host merge).
+    d_subtree_active::Any        # UInt8
+    d_subtree_divergent::Any     # UInt8
+    d_subtree_turning::Any       # UInt8 (sticky across the round)
+    d_log_weight::Any            # T
+    d_integration_steps::Any     # Int32
+    d_accept_stat_sum::Any       # T
+    d_accept_stat_count::Any     # Int32
+    d_current_energy::Any        # T   reference energy (uploaded once per draw)
+    d_tree_current_logjoint::Any # T
+    d_tree_left_logjoint::Any    # T
+    d_tree_right_logjoint::Any   # T
+    d_tree_proposal_logjoint::Any # T
+    d_proposal_energy::Any       # T   subtree_proposal_energy
+    d_proposal_energy_error::Any # T
+    d_copy_left::Any             # UInt8
+    d_copy_right::Any            # UInt8
+    d_select_proposal::Any       # UInt8
+    d_advanced::Any              # UInt8
+    d_checkpoint::Any            # UInt8
+    # Pre-drawn round RNG: a FLAT (1<<max_tree_depth)*C vector of uniforms laid out
+    # leaf-major (leaf i's chain-b uniform at index i*C + b), so a round of `nleaves`
+    # leaves uploads only the contiguous prefix `1:nleaves*C`.
+    d_leaf_uniform::Any          # T
+    host_leaf_uniform::Vector{T} # host staging (rand! fills the used prefix)
+    # Host staging for the round-end integer downloads.
+    host_i32::Vector{Int32}
 end
 
 function DeviceNUTSWorkspace(
@@ -479,6 +660,7 @@ function DeviceNUTSWorkspace(
     precision::Type=Float64,
     args=(),
     constraints=choicemap(),
+    sync_per_leaf::Bool=false,
 )
     inner = DeviceBatchedWorkspace(
         model, num_chains; backend=backend, precision=precision, args=args, constraints=constraints,
@@ -497,7 +679,10 @@ function DeviceNUTSWorkspace(
     mat() = fill!(KernelAbstractions.allocate(backend, T, P, C), zero(T))
     vecT() = KernelAbstractions.allocate(backend, T, C)
     vecU8() = KernelAbstractions.allocate(backend, UInt8, C)
+    vecI32() = fill!(KernelAbstractions.allocate(backend, Int32, C), Int32(0))
     ckpt() = fill!(KernelAbstractions.allocate(backend, T, P, max(D + 1, 1), C), zero(T))
+    max_leaves = 1 << max(D, 0)
+    leaf_uniform = fill!(KernelAbstractions.allocate(backend, T, max_leaves * C), zero(T))
     return DeviceNUTSWorkspace{T,typeof(backend)}(
         inner, backend, P, C, D,
         fill!(KernelAbstractions.allocate(backend, T, P), zero(T)),
@@ -529,6 +714,20 @@ function DeviceNUTSWorkspace(
         vecU8(),
         Matrix{T}(undef, P, C),
         Matrix{Float64}(undef, P, C),
+        # ---- issue #152 Tier 2 buffers -----------------------------------------
+        sync_per_leaf,
+        vecU8(), vecU8(), vecU8(),          # d_subtree_active/divergent/turning
+        vecT(),                              # d_log_weight
+        vecI32(),                            # d_integration_steps
+        vecT(),                              # d_accept_stat_sum
+        vecI32(),                            # d_accept_stat_count
+        vecT(),                              # d_current_energy
+        vecT(), vecT(), vecT(), vecT(),      # d_tree_current/left/right/proposal_logjoint
+        vecT(), vecT(),                      # d_proposal_energy / _error
+        vecU8(), vecU8(), vecU8(), vecU8(), vecU8(), # copy_left/right/select/advanced/checkpoint
+        leaf_uniform,                        # d_leaf_uniform
+        Vector{T}(undef, max_leaves * C),    # host_leaf_uniform
+        Vector{Int32}(undef, C),             # host_i32
     )
 end
 
@@ -579,6 +778,26 @@ _download_reals!(host::AbstractVector{Float64}, dev, stage::Vector) = begin
         host[i] = Float64(stage[i])
     end
     return host
+end
+
+# Download a device Int32 vector into a host Int vector through `stage` (issue #152
+# Tier 2 round-end batch).
+_download_ints!(host::AbstractVector{<:Integer}, dev, stage::Vector{Int32}) = begin
+    copyto!(stage, dev)
+    @inbounds for i in eachindex(host)
+        host[i] = Int(stage[i])
+    end
+    return host
+end
+
+# Upload a host Float64 C-vector into a device T vector (converts precision) through
+# a caller-owned `stage::Vector{T}` so the transfer does not allocate.
+_upload_reals!(dev, host::AbstractVector{Float64}, stage::Vector) = begin
+    @inbounds for i in eachindex(host, stage)
+        stage[i] = host[i]
+    end
+    copyto!(dev, stage)
+    return dev
 end
 
 # Upload a host P x C Float64 matrix into a device T matrix (converts precision)
@@ -977,6 +1196,212 @@ function _device_masked_nuts_doubling_round!(
     return true
 end
 
+# ---- issue #152 Tier 2: async round loop ---------------------------------------
+
+# Async leaf (no host round-trip): fused pre-gradient kernel + gradient + fused
+# post-gradient kernel, all enqueued against the DEVICE-resident active mask
+# (`dws.d_subtree_active`). Unlike `_device_nuts_leaf!` it neither synchronizes nor
+# downloads -- the device advance kernel reads `valid`/`proposed_energy`/`totals`
+# straight off the device. Scalar shared step.
+function _device_nuts_leaf_async!(dws::DeviceNUTSWorkspace{T}, ws, step_size::Real) where {T}
+    be = dws.backend
+    P = dws.num_params
+    C = dws.num_chains
+    inner = dws.inner
+    q = inner.params_device
+    grad = inner.gradients_device
+    logj = inner.totals_device
+    p = dws.working_momentum
+    h = convert(T, step_size)
+    half = convert(T, step_size / 2)
+    _device_nuts_leaf_pre!(be)(
+        q, p, grad,
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.inverse_mass, dws.d_subtree_active, dws.sign, h, half; ndrange=(P, C),
+    )
+    _device_launch_gradient!(inner)
+    _device_nuts_leaf_post!(be)(
+        dws.valid, dws.proposed_energy, p,
+        grad, logj, dws.d_subtree_active, dws.sign, dws.inverse_mass, half, P; ndrange=C,
+    )
+    return dws
+end
+
+# Per-chain-step async leaf (issue #137).
+function _device_nuts_leaf_async!(dws::DeviceNUTSWorkspace{T}, ws, ::Nothing) where {T}
+    be = dws.backend
+    P = dws.num_params
+    C = dws.num_chains
+    inner = dws.inner
+    q = inner.params_device
+    grad = inner.gradients_device
+    logj = inner.totals_device
+    p = dws.working_momentum
+    half = convert(T, 0.5)
+    _device_nuts_leaf_pre_perchain!(be)(
+        q, p, grad,
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.inverse_mass, dws.d_subtree_active, dws.sign, dws.step, half; ndrange=(P, C),
+    )
+    _device_launch_gradient!(inner)
+    _device_nuts_leaf_post_perchain!(be)(
+        dws.valid, dws.proposed_energy, p,
+        grad, logj, dws.d_subtree_active, dws.sign, dws.step, dws.inverse_mass, half, P; ndrange=C,
+    )
+    return dws
+end
+
+# Async per-leaf cohort advance: the device accept/select kernel + the P x C copies
+# it drives (accept-copy, dyadic checkpoint/turning, frontier scatter). No host
+# round-trip. `leaf_index` is the 0-based leaf within the round (the host loop
+# counter); the checkpoint/turning schedule is a pure function of it, so no download
+# is needed to drive it.
+function _device_advance_cohort_async!(
+    dws::DeviceNUTSWorkspace{T}, ws, max_delta_energy::Float64, leaf_index::Int,
+) where {T}
+    be = dws.backend
+    P = dws.num_params
+    C = dws.num_chains
+    _device_nuts_advance!(be)(
+        dws.d_subtree_active, dws.d_subtree_divergent, dws.d_subtree_turning, dws.d_log_weight,
+        dws.d_integration_steps, dws.d_accept_stat_sum, dws.d_accept_stat_count,
+        dws.d_tree_current_logjoint, dws.d_tree_left_logjoint, dws.d_tree_right_logjoint,
+        dws.d_tree_proposal_logjoint, dws.d_proposal_energy, dws.d_proposal_energy_error,
+        dws.d_copy_left, dws.d_copy_right, dws.d_select_proposal, dws.d_advanced, dws.d_checkpoint,
+        dws.valid, dws.proposed_energy, dws.inner.totals_device, dws.d_current_energy,
+        dws.sign, dws.d_leaf_uniform, leaf_index * C, convert(T, max_delta_energy); ndrange=C,
+    )
+    # accept-copy: tree_current <- (q, p, grad) for advanced chains.
+    _device_nuts_copy_columns!(be)(
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.inner.params_device, dws.working_momentum, dws.inner.gradients_device, dws.d_advanced; ndrange=(P, C),
+    )
+    # even leaf: store checkpoint; odd leaf: dyadic U-turn fold + active fold.
+    if iseven(leaf_index)
+        slot = count_ones(leaf_index) + 1
+        _device_nuts_store_checkpoint!(be)(
+            dws.checkpoint_position, dws.checkpoint_momentum,
+            dws.tree_current_position, dws.tree_current_momentum, dws.d_checkpoint, slot; ndrange=(P, C),
+        )
+    else
+        for k = 1:trailing_ones(leaf_index)
+            block_start = leaf_index - (1 << k) + 1
+            slot = count_ones(block_start) + 1
+            _device_nuts_dyadic_turning!(be)(
+                dws.d_subtree_turning, dws.checkpoint_position, dws.checkpoint_momentum,
+                dws.tree_current_position, dws.tree_current_momentum, dws.d_checkpoint, dws.sign,
+                dws.inverse_mass, slot, P; ndrange=C,
+            )
+        end
+        _device_nuts_fold_turning!(be)(dws.d_subtree_active, dws.d_subtree_turning; ndrange=C)
+    end
+    # frontier / proposal scatter: tree_left/right/proposal <- tree_current.
+    _device_nuts_scatter3_v!(be)(
+        dws.tree_left_position, dws.tree_left_momentum, dws.tree_left_gradient,
+        dws.tree_right_position, dws.tree_right_momentum, dws.tree_right_gradient,
+        dws.tree_proposal_position, dws.tree_proposal_momentum, dws.tree_proposal_gradient,
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.d_copy_left, dws.d_copy_right, dws.d_select_proposal; ndrange=(P, C),
+    )
+    return dws
+end
+
+# Async doubling round (issue #152 Tier 2): pre-draw the round's RNG once, run the
+# leaves device-resident with device-side accept/select, then read the subtree state
+# back in ONE round-end batch and reuse the host merge / continuation update verbatim.
+function _device_masked_nuts_doubling_round_async!(
+    dws::DeviceNUTSWorkspace{T},
+    ws,
+    max_tree_depth::Int,
+    max_delta_energy::Float64,
+    step_size,
+    rng::AbstractRNG,
+) where {T}
+    be = dws.backend
+    C = dws.num_chains
+    _reset_batched_nuts_subtree_scratch!(ws)
+    _update_batched_nuts_continuation_active!(ws, max_tree_depth) || return false
+    round_active = ws.control.scheduler.continuation_active
+    round_depth = 0
+    @inbounds for c in eachindex(round_active)
+        round_active[c] || continue
+        round_depth = max(round_depth, ws.control.tree_depths[c])
+    end
+    copyto!(ws.subtree_active, round_active)
+    copyto!(ws.control.scheduler.subtree_started, round_active)
+    @inbounds for c in eachindex(ws.control.step_direction)
+        ws.control.step_direction[c] = _sample_nuts_direction(rng)
+        dws.sign_host[c] = convert(T, ws.control.step_direction[c])
+    end
+    copyto!(dws.sign, dws.sign_host)
+    _device_initialize_subtree_states!(dws, ws, ws.subtree_active)
+
+    # Initialize the device-resident per-chain subtree state for the round (mirrors
+    # the host `_reset_batched_nuts_subtree_scratch!` values the device now owns).
+    _upload_mask!(dws.d_subtree_active, round_active, dws.host_u8)
+    fill!(dws.d_subtree_divergent, 0x00)
+    fill!(dws.d_subtree_turning, 0x00)
+    fill!(dws.d_log_weight, convert(T, -Inf))
+    fill!(dws.d_integration_steps, Int32(0))
+    fill!(dws.d_accept_stat_sum, zero(T))
+    fill!(dws.d_accept_stat_count, Int32(0))
+    fill!(dws.d_proposal_energy, convert(T, Inf))
+    fill!(dws.d_proposal_energy_error, convert(T, Inf))
+    _upload_reals!(dws.d_current_energy, ws.current_energy, dws.host_energy)
+    _upload_reals!(dws.d_tree_current_logjoint, ws.tree_current_logjoint, dws.host_energy)
+    _upload_reals!(dws.d_tree_left_logjoint, ws.tree_left_logjoint, dws.host_energy)
+    _upload_reals!(dws.d_tree_right_logjoint, ws.tree_right_logjoint, dws.host_energy)
+    _upload_reals!(dws.d_tree_proposal_logjoint, ws.tree_proposal_logjoint, dws.host_energy)
+
+    # Pre-draw the round's leaf uniforms (nleaves x C, leaf-major) and upload the
+    # contiguous prefix in one copy. Departs from the CPU RNG draw order.
+    nleaves = 1 << round_depth
+    used = nleaves * C
+    @inbounds rand!(rng, view(dws.host_leaf_uniform, 1:used))
+    # Offset-form copy of the contiguous prefix (view + GPU copyto! would scalar-index).
+    copyto!(dws.d_leaf_uniform, 1, dws.host_leaf_uniform, 1, used)
+
+    # Enqueue every leaf of the round with NO host sync in between.
+    for leaf_index = 0:(nleaves-1)
+        _device_nuts_leaf_async!(dws, ws, step_size)
+        _device_advance_cohort_async!(dws, ws, max_delta_energy, leaf_index)
+    end
+
+    # ONE round-end sync + batched download of the subtree state the host merge reads.
+    KernelAbstractions.synchronize(be)
+    _download_ints!(ws.subtree_integration_steps, dws.d_integration_steps, dws.host_i32)
+    _download_ints!(ws.subtree_accept_stat_count, dws.d_accept_stat_count, dws.host_i32)
+    _download_reals!(ws.subtree_accept_stat_sum, dws.d_accept_stat_sum, dws.host_energy)
+    _download_reals!(ws.subtree_log_weight, dws.d_log_weight, dws.host_energy)
+    _download_bits!(ws.subtree_divergent, dws.d_subtree_divergent, dws.host_u8)
+    _download_bits!(ws.subtree_turning, dws.d_subtree_turning, dws.host_u8)
+    _download_reals!(ws.subtree_proposal_energy, dws.d_proposal_energy, dws.host_energy)
+    _download_reals!(ws.subtree_proposal_energy_error, dws.d_proposal_energy_error, dws.host_energy)
+    _download_reals!(ws.tree_proposal_logjoint, dws.d_tree_proposal_logjoint, dws.host_energy)
+    _download_reals!(ws.tree_left_logjoint, dws.d_tree_left_logjoint, dws.host_energy)
+    _download_reals!(ws.tree_right_logjoint, dws.d_tree_right_logjoint, dws.host_energy)
+
+    # Round-end host bookkeeping + merge -- identical to the sync-per-leaf path.
+    fill!(ws.subtree_active, false)
+    any_merging = false
+    @inbounds for c in eachindex(round_active)
+        round_active[c] || continue
+        ws.control.tree_depths[c] += 1
+        if ws.subtree_integration_steps[c] == 0
+            ws.control.divergent_step[c] = ws.subtree_divergent[c]
+        elseif ws.subtree_turning[c] || ws.subtree_divergent[c]
+            _discard_invalid_batched_subtree!(ws, c)
+        else
+            ws.subtree_active[c] = true
+            any_merging = true
+        end
+    end
+    if any_merging
+        _device_merge_cohort!(dws, ws, rng)
+    end
+    return true
+end
+
 # ---- device masked-NUTS proposal generator ------------------------------------
 
 # Fills the host `BatchedNUTSWorkspace` (ws) proposal outputs for one iteration,
@@ -1045,7 +1470,16 @@ function _device_batched_nuts_proposals_masked!(
     _upload_matrix!(dws.proposal_momentum, ws.proposal_momentum, dws.host_mat)
     _upload_matrix!(dws.proposal_gradient, ws.proposal_gradient, dws.host_mat)
 
-    while _device_masked_nuts_doubling_round!(dws, ws, max_tree_depth, max_delta_energy, round_step, rng)
+    if dws.sync_per_leaf
+        # Tier-1 order-preserving path (one host round-trip per leaf; keeps the
+        # CPU()-Float64 bitwise oracle, `dnuts_device_vs_host_masked_exact`).
+        while _device_masked_nuts_doubling_round!(dws, ws, max_tree_depth, max_delta_energy, round_step, rng)
+        end
+    else
+        # Tier-2 async path (pre-drawn round RNG + device-side accept/select; one
+        # status batch per round). Statistically equivalent to the host masked path.
+        while _device_masked_nuts_doubling_round_async!(dws, ws, max_tree_depth, max_delta_energy, round_step, rng)
+        end
     end
 
     # download the accepted continuation proposal for host finalize + recording.

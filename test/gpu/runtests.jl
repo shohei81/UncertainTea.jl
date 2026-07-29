@@ -438,9 +438,10 @@ end
 
 # --- device-resident masked batched NUTS smoke (issue #2) --------------------
 # Mirrors test/uncertaintea/core/device_masked_nuts.jl on a Metal.MetalBackend at Float32.
-# The masked doubling trajectory runs device-resident: the per-leaf P x C arrays
-# and tree ops (leapfrog, checkpoints, U-turn) live on the device, while the RNG
-# draws and O(num_chains) bookkeeping stay host-side, so results are statistically
+# The masked doubling trajectory runs device-resident: the per-leaf P x C arrays and
+# tree ops (leapfrog, checkpoints, U-turn) live on the device. The default Tier-2 path
+# (issue #152) pre-draws each round's RNG and runs the per-leaf accept/select on the
+# device too, reading the subtree state back once per round; results are statistically
 # (not bitwise) equivalent to the CPU masked path.
 
 @testset "device Metal GPU batched NUTS smoke" begin
