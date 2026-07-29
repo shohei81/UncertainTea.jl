@@ -63,12 +63,14 @@ Rows marked FAIL keep their timings visible for context only.
    full-width work on finished lanes (#160); these are the levers to make the
    GPU genuinely win. The earlier `-pinned-init` diagnostic overstated the
    device story (best-case init, shorter trees) — the default numbers here are
-   the honest ones. Per-chain adaptation also raised warmup cost; pooled-mass
-   is now the unified host+device default (improves R-hat, no regression), but
-   for small-P models the warmup cost is dominated by the per-chain
-   reasonable-step-size searches, not mass estimation — vectorizing those plus
-   nutpie-style gradient-based mass adaptation (both tracked in #158) are what
-   would cut warmup from 200 → ~50-100 iterations.
+   the honest ones. Per-chain adaptation had raised warmup cost; that is now
+   resolved (#158): pooled-mass is the unified host+device default, and the
+   per-chain reasonable-step-size search — the actual small-P warmup
+   bottleneck — was vectorized (C scalar searches → one batched call),
+   cutting warmup-only wall time ~5× (gauss 512 chains 3.52 s → 0.66 s). A
+   nutpie-style gradient-based mass estimator was evaluated and dropped (no
+   warmup-length benefit; position-variance mass already clears the gate at
+   100 warmup iterations).
 4. **GLMs now ride the analytic path and win at low chain counts.** #150/#149
    backend-lower the logistic linear predictor `alpha + sum(beta .* X[:, i])`
    as a fused GLM node scored by a stable `bernoullilogit` family, so
@@ -85,13 +87,11 @@ Rows marked FAIL keep their timings visible for context only.
 
 Open issues from the audit still shaping these numbers: #135 (device GLM
 lowering — the remaining `logistic` high-chain gap), #151/#152/#153/#160
-(device engineering — the `batched-cpu`-vs-Metal gap), #158 (vectorized
-per-chain step search + nutpie mass adaptation, to actually cut warmup cost —
-its pooled-mass host default already landed), #144 (generated type-stable
-scorer, the remaining single-chain gap vs Stan). #137 (per-chain step-size
-adaptation), #149/#150 (GLM analytic lowering), #143 (batched-gradient
-threading), and #158 part 1 (pooled-mass host+device unification) are now
-closed.
+(device engineering — the `batched-cpu`-vs-Metal gap), #144 (generated
+type-stable scorer, the remaining single-chain gap vs Stan). #137 (per-chain
+step-size adaptation), #149/#150 (GLM analytic lowering), #143
+(batched-gradient threading), and #158 (pooled-mass unification + vectorized
+warmup step search) are now closed.
 
 ## Scaling sweep — gauss (mean/scale, N=1000; 200 warmup + 500 draws)
 
