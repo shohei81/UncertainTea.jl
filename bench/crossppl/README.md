@@ -85,6 +85,25 @@ information until issues #137/#138 are fixed.
 posterior mode — the issue #137 diagnostic. Those rows are labelled
 `-pinned-init` and must never be quoted as default-configuration results.
 
+## Models
+
+| model | shape | exercises |
+|---|---|---|
+| `eight_schools_centered` | hierarchical, funnel | divergence behaviour, gate honesty |
+| `eight_schools_noncentered` | hierarchical | `reparam=:noncentered`, `iid` latents |
+| `logistic` | GLM, N=500, D=8 | loop-addressed discrete observations; host analytic path |
+| `logistic_large` | GLM, N=8000, D=16 | heavy per-gradient GLM; host + device analytic path; chain-count scaling sweep |
+| `gauss` | mean/scale, N=1000 | device path; chain-count scaling sweep |
+
+`logistic_large` is a larger GLM whose per-observation D-dim dot product over N
+observations gives a genuinely heavy gradient, so the device analytic path
+(#135) and many-chains scaling are no longer dominated by device dispatch
+overhead. Priors are identical to `logistic` (`alpha ~ N(0, 2.5)`,
+`beta_d ~ N(0, 2.5)` written as a diagonal `mvnormal`). D is 16 because the
+device coefficient-dimension cap is 16 (`DEVICE_MAX_VECTOR_DIMENSION`); N is
+raised to 8000 to keep the per-gradient work budget large while the model still
+lowers to the device (`device_lowering_report` is supported).
+
 ## Adding a model
 
 1. Generate/check in the dataset in `data/` (extend `generate_data.jl`).

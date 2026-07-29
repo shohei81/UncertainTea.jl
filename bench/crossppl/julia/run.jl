@@ -82,6 +82,13 @@ function setup_model(model_name)
         @assert size(X) == (d, n)
         cons = choicemap(((:y => i, Float64(data.y[i])) for i = 1:n)...)
         return (bench_logistic, (X, n), cons)
+    elseif model_name == "logistic_large"
+        data = load_json("logistic_large.json")
+        n, d = data.n, data.d
+        X = reduce(hcat, [Float64.(col) for col in data.X])  # d x n
+        @assert size(X) == (d, n)
+        cons = choicemap(((:y => i, Float64(data.y[i])) for i = 1:n)...)
+        return (bench_logistic_large, (X, n), cons)
     elseif model_name == "gauss"
         data = load_json("gauss.json")
         n = data.n

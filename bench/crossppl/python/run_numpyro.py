@@ -44,7 +44,7 @@ def build_model(model_name: str, data: dict):
 
         return model, ["mu", "tau", "theta"]
 
-    if model_name == "logistic":
+    if model_name in ("logistic", "logistic_large"):
         X = jnp.asarray(np.array(data["X"]))  # (n, d) rows
         y = jnp.asarray(np.array(data["y"], dtype=np.float32))
         d = data["d"]

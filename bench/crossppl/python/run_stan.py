@@ -30,6 +30,7 @@ PARAMS = {
     "eight_schools_centered": ["mu", "tau"] + [f"theta[{i}]" for i in range(1, 9)],
     "eight_schools_noncentered": ["mu", "tau"] + [f"theta[{i}]" for i in range(1, 9)],
     "logistic": ["alpha"] + [f"beta[{i}]" for i in range(1, 9)],
+    "logistic_large": ["alpha"] + [f"beta[{i}]" for i in range(1, 17)],
     "gauss": ["mu", "s"],
 }
 
@@ -47,7 +48,7 @@ def ensure_cmdstan():
 def stan_data(model_name: str, data: dict) -> dict:
     if model_name.startswith("eight_schools"):
         return {"J": data["J"], "y": data["y"], "sigma": data["sigma"]}
-    if model_name == "logistic":
+    if model_name in ("logistic", "logistic_large"):
         return {"N": data["n"], "D": data["d"], "X": data["X"], "y": data["y"]}
     if model_name == "gauss":
         return {"N": data["n"], "y": data["y"]}
