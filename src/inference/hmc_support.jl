@@ -189,7 +189,8 @@ function _initial_batched_hmc_positions(
     rng::AbstractRNG,
     num_params::Int,
     constrained_num_params::Int,
-    num_chains::Int,
+    num_chains::Int;
+    init::Symbol=:prior,
 )
     batch_args = _validate_batched_args(model, args, num_chains)
     batch_constraints = _validate_batched_constraints(constraints, num_chains)
@@ -198,22 +199,142 @@ function _initial_batched_hmc_positions(
     # re-deriving it per chain is pure setup overhead (issue #156).
     resolved = _resolve_signature_plan(model, _representative_constraints(batch_constraints))
     positions = Matrix{Float64}(undef, num_params, num_chains)
-    seeds = rand(rng, UInt, num_chains)
+    _fill_batched_initial_positions!(
+        positions,
+        1:num_chains,
+        model,
+        resolved,
+        batch_args,
+        batch_constraints,
+        initial_params,
+        init,
+        rng,
+        num_params,
+        constrained_num_params,
+        num_chains,
+    )
+    return positions
+end
 
-    for chain_index = 1:num_chains
-        chain_initial_params = _chain_initial_params(initial_params, chain_index, num_params, constrained_num_params, num_chains)
-        chain_rng = MersenneTwister(seeds[chain_index])
-        positions[:, chain_index] = _initial_hmc_position(
+# Whether the requested initialization can be re-drawn to recover from a
+# non-finite starting point (issue #162): prior/uniform draws and Pathfinder
+# resampling all vary with the RNG, so a fresh seed gives a new position. An
+# explicit `initial_params` array is a fixed value -- re-drawing would just
+# reproduce it -- so those never retry.
+_init_is_redrawable(initial_params) =
+    isnothing(initial_params) || initial_params isa PathfinderResult
+
+# Fill the given `columns` of `positions` with fresh initial draws. Used both
+# for the first full draw (columns = 1:num_chains) and for the retry loop's
+# re-draw of the non-finite columns (issue #162). Draw order is chain-major with
+# a per-column MersenneTwister, matching the original loop so the :prior full
+# draw is bitwise unchanged.
+function _fill_batched_initial_positions!(
+    positions::AbstractMatrix,
+    columns,
+    model::TeaModel,
+    resolved,
+    batch_args,
+    batch_constraints,
+    initial_params,
+    init::Symbol,
+    rng::AbstractRNG,
+    num_params::Int,
+    constrained_num_params::Int,
+    num_chains::Int,
+)
+    seeds = rand(rng, UInt, length(columns))
+    for (k, chain_index) in enumerate(columns)
+        chain_initial_params = _chain_initial_params(
+            initial_params, chain_index, num_params, constrained_num_params, num_chains,
+        )
+        chain_rng = MersenneTwister(seeds[k])
+        positions[:, chain_index] = _draw_batched_initial_position_column(
             model,
             resolved,
             _batched_args(batch_args, chain_index),
             _batched_constraints(batch_constraints, chain_index),
             chain_initial_params,
+            init,
+            num_params,
             chain_rng,
         )
     end
-
     return positions
+end
+
+# One column's initial unconstrained position. `init=:uniform` draws each
+# unconstrained coordinate from Uniform(-2, 2) -- the Stan/NumPyro default
+# protocol -- but only when no explicit/Pathfinder init is supplied for the
+# chain; otherwise the requested init (prior draw, explicit params, or
+# Pathfinder draw) is honored.
+function _draw_batched_initial_position_column(
+    model::TeaModel,
+    resolved,
+    chain_args,
+    chain_constraints,
+    chain_initial_params,
+    init::Symbol,
+    num_params::Int,
+    chain_rng::AbstractRNG,
+)
+    if init === :uniform && isnothing(chain_initial_params)
+        column = Vector{Float64}(undef, num_params)
+        @inbounds for i = 1:num_params
+            column[i] = 4.0 * rand(chain_rng) - 2.0
+        end
+        return column
+    end
+    return _initial_hmc_position(
+        model, resolved, chain_args, chain_constraints, chain_initial_params, chain_rng,
+    )
+end
+
+# Re-draw the given non-finite `columns` in place, recomputing the batch
+# signature plan (retries are rare, so this setup cost is amortized against the
+# gradient re-evaluation). Issue #162.
+function _redraw_batched_initial_positions!(
+    positions::AbstractMatrix,
+    columns,
+    model::TeaModel,
+    batch_args,
+    batch_constraints,
+    initial_params,
+    init::Symbol,
+    rng::AbstractRNG,
+    num_params::Int,
+    constrained_num_params::Int,
+    num_chains::Int,
+)
+    resolved = _resolve_signature_plan(model, _representative_constraints(batch_constraints))
+    return _fill_batched_initial_positions!(
+        positions,
+        columns,
+        model,
+        resolved,
+        batch_args,
+        batch_constraints,
+        initial_params,
+        init,
+        rng,
+        num_params,
+        constrained_num_params,
+        num_chains,
+    )
+end
+
+# Columns whose initial unconstrained logjoint or gradient is non-finite.
+function _nonfinite_init_columns(
+    logjoint::AbstractVector, gradient::AbstractMatrix,
+)
+    bad = Int[]
+    for chain_index in eachindex(logjoint)
+        if !isfinite(logjoint[chain_index]) ||
+           !all(isfinite, view(gradient, :, chain_index))
+            push!(bad, chain_index)
+        end
+    end
+    return bad
 end
 
 function _sample_batched_momentum(
