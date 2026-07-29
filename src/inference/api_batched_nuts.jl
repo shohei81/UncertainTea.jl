@@ -21,6 +21,7 @@ function batched_nuts(
     tree_strategy::Symbol=:hybrid,
     backend=nothing,
     precision=nothing,
+    device_sync_per_leaf::Bool=false,
     rng::AbstractRNG=Random.default_rng(),
 )
     tree_strategy in (:hybrid, :masked) ||
@@ -83,6 +84,7 @@ function batched_nuts(
         DeviceNUTSWorkspace(
             model, num_chains, max_tree_depth;
             backend=backend, precision=device_precision, args=args, constraints=constraints,
+            sync_per_leaf=device_sync_per_leaf,
         )
 
     batch_args = _validate_batched_args(model, args, num_chains)
