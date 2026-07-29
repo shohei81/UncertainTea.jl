@@ -50,7 +50,7 @@ end
         c, lad = _device_transform(step.transform, u)
         return (c, lad, cursor)
     else
-        v = @inbounds observed[cursor, b]
+        v = _obsval(observed, cursor, b)
         z = zero(T)
         return (DeviceDual{T}(convert(T, v), z), DeviceDual{T}(z, z), cursor + Int32(1))
     end
@@ -267,7 +267,7 @@ end
     # trials `n` is an exact integer staged as a leading observation row (issue
     # #71); the -1 sentinel means the host could not resolve it (a deterministic
     # binding), so fall back to the in-kernel float evaluation.
-    n_staged = @inbounds observed_int[cursor, b]
+    n_staged = _obsint(observed_int, cursor, b)
     n = n_staged >= 0 ? n_staged : _device_count_int(_device_dual_value(_device_grad_eval(step.trials, slots, pidx, b)))
     cur = cursor + Int32(1)
     if step.value_source > Int32(0)
@@ -276,8 +276,8 @@ end
         k = _device_count_int(_device_dual_value(value))
         return (_device_binomial_logpdf(n, k, p) + lad, cur)
     end
-    k = @inbounds observed_int[cur, b]
-    value = DeviceDual{T}(convert(T, @inbounds(observed[cur, b])), zero(T))
+    k = _obsint(observed_int, cur, b)
+    value = DeviceDual{T}(convert(T, _obsval(observed, cur, b)), zero(T))
     _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
     return (_device_binomial_logpdf(n, k, p), cur + Int32(1))
 end
@@ -404,12 +404,12 @@ end
         row = step.coef_value_source + Int32(i - 1)
         raw = @inbounds params[row, b]
         coef = DeviceDual{T}(convert(T, raw), ifelse(row == Int32(pidx), one(T), zero(T)))
-        x = @inbounds observed[cursor+Int32(i-1), b]
+        x = _obsval(observed, cursor + Int32(i - 1), b)
         coef * x
     end
     eta = intercept + _device_tuple_sum(terms)
     cur = cursor + Int32(D)
-    y = DeviceDual{T}(convert(T, @inbounds(observed[cur, b])), zero(T))
+    y = DeviceDual{T}(convert(T, _obsval(observed, cur, b)), zero(T))
     _device_grad_store_binding!(slots, step.binding_slot, y, pidx, b)
     e, v = promote(eta, y)
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
@@ -456,7 +456,7 @@ end
         return (value, cursor)
     end
     value = ntuple(Val(D)) do i
-        DeviceDual{T}(convert(T, @inbounds(observed[cursor+Int32(i-1), b])), zero(T))
+        DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T))
     end
     return (value, cursor + Int32(D))
 end
@@ -487,7 +487,7 @@ end
         return (_device_dirichlet_logpdf(alpha, value) + lad, cursor)
     end
     value = ntuple(Val(length(step.alpha))) do i
-        DeviceDual{T}(convert(T, @inbounds(observed[cursor+Int32(i-1), b])), zero(T))
+        DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T))
     end
     return (_device_dirichlet_logpdf(alpha, value), cursor + Int32(length(step.alpha)))
 end
@@ -518,7 +518,7 @@ end
         return (_device_lkjcholesky_logpdf(eta, value, Val(D)) + lad, cursor)
     end
     value = ntuple(Val((D * (D + 1)) ÷ 2)) do i
-        DeviceDual{T}(convert(T, @inbounds(observed[cursor+Int32(i-1), b])), zero(T))
+        DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T))
     end
     return (_device_lkjcholesky_logpdf(eta, value, Val(D)), cursor + Int32((D * (D + 1)) ÷ 2))
 end
@@ -539,7 +539,7 @@ end
     mu = _device_grad_eval_args(step.mu, slots, pidx, b)
     # the factor is constant data (zero derivative), matching the CPU contract
     scale_packed = ntuple(
-        i -> DeviceDual{T}(convert(T, @inbounds(observed[cursor+Int32(i-1), b])), zero(T)),
+        i -> DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T)),
         Val((length(step.mu) * (length(step.mu) + 1)) ÷ 2),
     )
     cur = cursor + Int32((length(step.mu) * (length(step.mu) + 1)) ÷ 2)

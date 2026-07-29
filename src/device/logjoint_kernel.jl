@@ -7,6 +7,21 @@
 # `observed[cursor, col]`, with the cursor threaded through the recursion exactly as
 # staging assigned rows.
 
+# ---- observation buffer access -------------------------------------------------
+#
+# Staged observations are shared across the batch whenever the model arguments are
+# shared (a single constraint set applied to every chain): the covariate matrix `X`
+# and the observed `y` are then identical in every column, so staging keeps a SINGLE
+# column and every chain reads it (issue #153). A genuinely per-chain staging keeps
+# `C` columns, read at column `b`. The branch is a cheap register compare on the
+# staged column count; `observed` / `observed_int` may have different column counts
+# (e.g. `observed_int` is a `(1,1)` dummy when no count-family step reads it), so each
+# is resolved independently.
+
+@inline _device_obs_col(observed, b) = ifelse(size(observed, 2) == 1, one(b), b)
+@inline _obsval(observed, cursor, b) = @inbounds observed[cursor, _device_obs_col(observed, b)]
+@inline _obsint(observed_int, cursor, b) = @inbounds observed_int[cursor, _device_obs_col(observed_int, b)]
+
 # ---- expression evaluation -----------------------------------------------------
 
 @inline _device_eval(e::DeviceLiteralExpr, slots, col) = e.value
@@ -48,7 +63,7 @@ end
         c, lad = _device_transform(step.transform, u)
         return (c, lad, cursor)
     else
-        v = @inbounds observed[cursor, col]
+        v = _obsval(observed, cursor, col)
         return (v, zero(v), cursor + Int32(1))
     end
 end
@@ -61,7 +76,7 @@ end
         value = ntuple(i -> @inbounds(params[step.value_source+Int32(i-1), col]), Val(D))
         return (value, cursor)
     end
-    value = ntuple(i -> @inbounds(observed[cursor+Int32(i-1), col]), Val(D))
+    value = ntuple(i -> _obsval(observed, cursor + Int32(i - 1), col), Val(D))
     return (value, cursor + Int32(D))
 end
 
@@ -173,7 +188,7 @@ end
     # trials `n` is an exact integer staged as a leading observation row (issue
     # #71); the -1 sentinel means the host could not resolve it (a deterministic
     # binding), so fall back to the in-kernel float evaluation.
-    n_staged = @inbounds observed_int[cursor, col]
+    n_staged = _obsint(observed_int, cursor, col)
     n = n_staged >= 0 ? n_staged : _device_count_int(_device_dual_value(_device_eval(step.trials, slots, col)))
     cur = cursor + Int32(1)
     if step.value_source > Int32(0)
@@ -183,8 +198,8 @@ end
         k = _device_count_int(_device_dual_value(value))
         return (_device_binomial_logpdf(n, k, p) + lad, cur)
     end
-    k = @inbounds observed_int[cur, col]
-    value = @inbounds observed[cur, col]
+    k = _obsint(observed_int, cur, col)
+    value = _obsval(observed, cur, col)
     _device_store_binding!(slots, step.binding_slot, value, col)
     return (_device_binomial_logpdf(n, k, p), cur + Int32(1))
 end
@@ -265,12 +280,12 @@ end
 ) where {D}
     intercept = _device_eval(step.intercept, slots, col)
     terms = ntuple(
-        i -> @inbounds(params[step.coef_value_source+Int32(i-1), col] * observed[cursor+Int32(i-1), col]),
+        i -> @inbounds(params[step.coef_value_source+Int32(i-1), col]) * _obsval(observed, cursor + Int32(i - 1), col),
         Val(D),
     )
     eta = intercept + _device_tuple_sum(terms)
     cur = cursor + Int32(D)
-    value = @inbounds observed[cur, col]
+    value = _obsval(observed, cur, col)
     _device_store_binding!(slots, step.binding_slot, value, col)
     e, v = promote(eta, value)
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
@@ -290,7 +305,7 @@ end
         value, lad = _device_simplex_constrain(z)
         return (_device_dirichlet_logpdf(alpha, value) + lad, cursor)
     end
-    value = ntuple(i -> @inbounds(observed[cursor+Int32(i-1), col]), Val(length(step.alpha)))
+    value = ntuple(i -> _obsval(observed, cursor + Int32(i - 1), col), Val(length(step.alpha)))
     return (_device_dirichlet_logpdf(alpha, value), cursor + Int32(length(step.alpha)))
 end
 
@@ -311,14 +326,14 @@ end
         value, lad = _device_cholesky_corr_constrain(z, Val(D))
         return (_device_lkjcholesky_logpdf(eta, value, Val(D)) + lad, cursor)
     end
-    value = ntuple(i -> @inbounds(observed[cursor+Int32(i-1), col]), Val((D * (D + 1)) ÷ 2))
+    value = ntuple(i -> _obsval(observed, cursor + Int32(i - 1), col), Val((D * (D + 1)) ÷ 2))
     return (_device_lkjcholesky_logpdf(eta, value, Val(D)), cursor + Int32((D * (D + 1)) ÷ 2))
 end
 
 @inline function _device_score_step(step::DeviceMvNormalDenseChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
     mu = _device_eval_args(step.mu, slots, col)
     scale_packed = ntuple(
-        i -> @inbounds(observed[cursor+Int32(i-1), col]),
+        i -> _obsval(observed, cursor + Int32(i - 1), col),
         Val((length(step.mu) * (length(step.mu) + 1)) ÷ 2),
     )
     cur = cursor + Int32((length(step.mu) * (length(step.mu) + 1)) ÷ 2)

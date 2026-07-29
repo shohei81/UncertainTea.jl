@@ -561,3 +561,82 @@ end
     gref = batched_logjoint_gradient_unconstrained(devg_lkj8_model, params, (), choicemap())
     @test g ≈ gref rtol = 1e-9
 end
+
+# --- issue #153: observation-parallel tiled gradient ----------------------------
+# For a large observation loop the device lowers the loop to a tiled partial-sum
+# kernel + per-chain reduction (occupancy over the serial re-scan). The tile
+# reduction reassociates the observation sum, so the result is only STATISTICALLY
+# equal to the untiled serial scan; the authoritative CPU reference is the same
+# `batched_logjoint(_gradient)_unconstrained` used everywhere else, and Float64
+# agreement to rtol ~1e-6 confirms the reassociation is the only change. Below
+# `DEVICE_GRADIENT_TILE_MIN_OBS` the serial scan is kept, so small models stay on
+# the bitwise-identical path (covered by every other parity test in this file).
+
+@tea static function devg_tiled_glm(X, n)
+    alpha ~ normal(0.0, 2.5)
+    beta ~ mvnormal((0.0, 0.0, 0.0, 0.0), (2.5, 2.5, 2.5, 2.5))
+    for i = 1:n
+        {:y => i} ~ bernoullilogit(alpha + sum(beta .* X[:, i]))
+    end
+    return alpha
+end
+
+@testset "devg_tiled_gradient_parity" begin
+    tile_min = UncertainTea.DEVICE_GRADIENT_TILE_MIN_OBS
+
+    # gauss: large loop engages tiling, matches the serial reference to Float64 rtol.
+    let n = 1000, B = 4, rng = MersenneTwister(153)
+        ys = randn(rng, n)
+        cm = choicemap((:y => i, ys[i]) for i = 1:n)
+        params = randn(rng, 2, B)
+        ws = DeviceBatchedWorkspace(devg_gauss_model, B; precision=Float64, args=(n,), constraints=cm)
+        @test !isnothing(ws.tiled_gradient)
+        @test ws.tiled_gradient.n_obs == n
+        # shared constraints/args -> single staged observation column
+        @test size(ws.observed_device, 2) == 1
+        v, g = device_batched_logjoint_gradient!(ws, params)
+        @test v ≈ batched_logjoint_unconstrained(devg_gauss_model, params, (n,), cm) rtol = 1e-6
+        @test g ≈ batched_logjoint_gradient_unconstrained(devg_gauss_model, params, (n,), cm) rtol = 1e-6
+    end
+
+    # logistic GLM (fused linear predictor): tiled body seeds the per-coefficient
+    # gradient correctly; no count-family step, so the integer mirror is dropped.
+    let n = 800, D = 4, B = 4, rng = MersenneTwister(154)
+        X = randn(rng, D, n)
+        ys = Float64.(rand(rng, Bool, n))
+        cm = choicemap((:y => i, ys[i]) for i = 1:n)
+        params = 0.3 .* randn(rng, 1 + D, B)
+        ws = DeviceBatchedWorkspace(devg_tiled_glm, B; precision=Float64, args=(X, n), constraints=cm)
+        @test !isnothing(ws.tiled_gradient)
+        @test size(ws.observed_device, 2) == 1
+        @test size(ws.observed_int_device) == (1, 1)   # no count family -> dropped
+        v, g = device_batched_logjoint_gradient!(ws, params)
+        @test v ≈ batched_logjoint_unconstrained(devg_tiled_glm, params, (X, n), cm) rtol = 1e-6
+        @test g ≈ batched_logjoint_gradient_unconstrained(devg_tiled_glm, params, (X, n), cm) rtol = 1e-6
+    end
+
+    # just below the threshold keeps the serial scan (no tiled descriptor)
+    let n = tile_min - 1, B = 3, rng = MersenneTwister(155)
+        ys = randn(rng, n)
+        cm = choicemap((:y => i, ys[i]) for i = 1:n)
+        params = randn(rng, 2, B)
+        ws = DeviceBatchedWorkspace(devg_gauss_model, B; precision=Float64, args=(n,), constraints=cm)
+        @test isnothing(ws.tiled_gradient)
+        v, g = device_batched_logjoint_gradient!(ws, params)
+        @test g ≈ batched_logjoint_gradient_unconstrained(devg_gauss_model, params, (n,), cm) rtol = 1e-9
+    end
+
+    # per-chain (batched-argument) observations keep the C-column staging AND still
+    # tile: the accessor broadcasts a shared column but indexes per-chain otherwise.
+    let n = 400, B = 3, rng = MersenneTwister(156)
+        ys = randn(rng, n)
+        cm = choicemap((:y => i, ys[i]) for i = 1:n)
+        batched_args = [(n,) for _ = 1:B]
+        params = randn(rng, 2, B)
+        ws = DeviceBatchedWorkspace(devg_gauss_model, B; precision=Float64, args=batched_args, constraints=cm)
+        @test size(ws.observed_device, 2) == B    # genuinely per-chain columns
+        @test !isnothing(ws.tiled_gradient)
+        v, g = device_batched_logjoint_gradient!(ws, params)
+        @test g ≈ batched_logjoint_gradient_unconstrained(devg_gauss_model, params, (n,), cm) rtol = 1e-6
+    end
+end

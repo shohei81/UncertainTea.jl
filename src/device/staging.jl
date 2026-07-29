@@ -20,7 +20,31 @@ struct DeviceStagingBundle{T}
     observed_int::Matrix{Int64}
     trip_counts::Vector{Int32}
     loop_starts::Vector{Int32}
+    # When one column carries the whole batch (issue #153): the observation stream
+    # is identical in every chain (shared model arguments + a single constraint
+    # set), so `observed`/`observed_int` hold ONE column and the kernels broadcast
+    # it. `false` keeps the per-chain `C`-column staging for genuinely per-chain
+    # constraints (batched argument tuples).
+    shared::Bool
+    # Observation-parallel tiling anchors for the detected tileable loop (issue
+    # #153); zero when no loop was flagged. `base_cursor` is the number of observed
+    # rows emitted before the loop body (0-based), `stride` the observed rows one
+    # body iteration consumes, so iteration `t` (0-based) reads at 1-based cursor
+    # `base_cursor + 1 + t*stride`.
+    tile_base_cursor::Int32
+    tile_stride::Int32
 end
+
+# Mutable staging cursor threaded through the observation walk: the running loop
+# counter plus, for the one loop flagged tileable (issue #153), the captured
+# base-cursor / per-iteration stride. `tile_loop_id == 0` disables capture.
+mutable struct DeviceStageLoopState
+    count::Int32
+    tile_loop_id::Int32
+    base_cursor::Int32
+    stride::Int32
+end
+DeviceStageLoopState(tile_loop_id::Integer) = DeviceStageLoopState(Int32(0), Int32(tile_loop_id), Int32(0), Int32(0))
 
 # Round to an exact Int64 when the (Float64-staged) value is integral and within
 # the Int64-exact range; otherwise the out-of-support sentinel -1.
@@ -293,19 +317,26 @@ function _stage_step!(
     loop_counter,
     ::Type{T},
 ) where {T}
-    loop_counter[] += 1
-    lid = loop_counter[]
+    loop_counter.count += Int32(1)
+    lid = loop_counter.count
     reference = _batched_index_iterable_reference(env, step.iterable)
     Base.step(reference) == 1 ||
         throw(ArgumentError("device staging only supports unit-step loop ranges; see device_lowering_report(model)"))
     trip_counts[lid] = Int32(length(reference))
     loop_starts[lid] = isempty(reference) ? Int32(0) : Int32(first(reference))
 
+    capture = lid == loop_counter.tile_loop_id
+    capture && (loop_counter.base_cursor = Int32(length(rows)))
     had_previous = env.assigned[step.iterator_slot]
     previous = had_previous ? copy(env.index_values[step.iterator_slot, :]) : Int[]
+    first_iteration = true
     for item in reference
         _batched_environment_set_shared!(env, step.iterator_slot, item)
         _stage_steps!(rows, step.body, env, constraints, dummy_params, trip_counts, loop_starts, loop_counter, T)
+        if capture && first_iteration
+            loop_counter.stride = Int32(length(rows)) - loop_counter.base_cursor
+            first_iteration = false
+        end
     end
     _batched_environment_restore!(env, step.iterator_slot, previous, had_previous)
     return nothing
@@ -330,7 +361,8 @@ function _stage_device_observations(
     plan::DeviceExecutionPlan{T},
     args,
     constraints,
-    batch_size::Int,
+    batch_size::Int;
+    tile_loop_id::Integer=0,
 ) where {T}
     # `backend` is the SIGNATURE-specific backend plan (issue #95, PR-4): a step
     # is observed iff it carries no parameter slot in this signature, so a
@@ -346,17 +378,32 @@ function _stage_device_observations(
     rows = Vector{Vector{Float64}}()
     trip_counts = zeros(Int32, Int(plan.loop_count))
     loop_starts = zeros(Int32, Int(plan.loop_count))
-    loop_counter = Ref(0)
+    loop_counter = DeviceStageLoopState(tile_loop_id)
     _stage_steps!(rows, backend.steps, env, constraints, dummy_params, trip_counts, loop_starts, loop_counter, Float64)
 
-    observed = Matrix{T}(undef, length(rows), batch_size)
-    observed_int = Matrix{Int64}(undef, length(rows), batch_size)
+    # The observation stream is identical in every chain -- so it can be staged as
+    # ONE column and broadcast (issue #153) -- exactly when BOTH the model arguments
+    # AND the constraints are shared across the batch: a single argument tuple (not a
+    # per-chain vector of tuples) and a single constraint set (not a per-column vector
+    # of choicemaps). Either being per-chain keeps the full `C`-column staging.
+    shared = (args isa Tuple) && !(constraints isa AbstractVector)
+    ncols = shared ? 1 : batch_size
+    observed = Matrix{T}(undef, length(rows), ncols)
+    observed_int = Matrix{Int64}(undef, length(rows), ncols)
     for (row_index, row) in enumerate(rows)
-        for col = 1:batch_size
+        for col = 1:ncols
             @inbounds v = row[col]
             @inbounds observed[row_index, col] = T(v)
             @inbounds observed_int[row_index, col] = _device_exact_int(v)
         end
     end
-    return DeviceStagingBundle{T}(observed, observed_int, trip_counts, loop_starts)
+    return DeviceStagingBundle{T}(
+        observed,
+        observed_int,
+        trip_counts,
+        loop_starts,
+        shared,
+        loop_counter.base_cursor,
+        loop_counter.stride,
+    )
 end
