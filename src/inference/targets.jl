@@ -128,8 +128,8 @@ function batched_target_logdensity_and_gradient!(
     cache = target.gradient_cache
     if _batched_lane_compaction_beneficial(cache, active_count) &&
        _batched_compact_logjoint_and_gradient!(
-           values_destination, gradient_destination, cache, positions, active, active_count,
-       )
+        values_destination, gradient_destination, cache, positions, active, active_count,
+    )
         return values_destination, gradient_destination
     end
     return batched_target_logdensity_and_gradient!(
