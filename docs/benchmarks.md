@@ -193,13 +193,19 @@ model stays in the suite as the honesty check.
 | `eight_schools_centered` | hierarchical, funnel | divergence behaviour, gate honesty |
 | `eight_schools_noncentered` | hierarchical | `reparam=:noncentered`, `iid` latents |
 | `logistic` | GLM, N=500, D=8 | loop-addressed discrete observations |
+| `logistic_large` | GLM, N=8000, D=16 | heavy per-gradient GLM; host + device analytic path; chain-count scaling sweep |
 | `gauss` | mean/scale, N=1000 | device path; chain-count scaling sweep |
 
 Identical joint densities across frameworks; priors in
-`bench/crossppl/julia/models.jl` and `bench/crossppl/python/stan/*.stan`. A
-discrete-latent model (`marginalize=:enumerate` vs Stan's hand-marginalization)
-and an `lkjcholesky` model are planned additions; the scaling model is a
-loop-addressed gaussian rather than a regression because of #134/#135.
+`bench/crossppl/julia/models.jl` and `bench/crossppl/python/stan/*.stan`.
+`logistic_large` is a larger GLM whose per-observation D-dim dot product over N
+observations gives a genuinely heavy gradient — the case that exercises the
+device analytic path (#135) and many-chains scaling without being dominated by
+device dispatch overhead. Its D is 16 (rather than a larger value) because the
+device coefficient-dimension cap is 16 (`DEVICE_MAX_VECTOR_DIMENSION`); N is
+raised to 8000 to keep the per-gradient work budget large while the model still
+lowers to the device. A discrete-latent model (`marginalize=:enumerate` vs
+Stan's hand-marginalization) and an `lkjcholesky` model are planned additions.
 
 ## Methodology notes
 

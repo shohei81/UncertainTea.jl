@@ -46,6 +46,31 @@ end
     return alpha
 end
 
+# Large logistic regression (D=16, N=8000): the same GLM shape as
+# `bench_logistic`, scaled up so the per-observation D-dim dot product over N
+# observations makes the gradient genuinely heavy.  This is the model that
+# exercises the device analytic path (issue #135) and the many-chains scaling
+# sweep — the small logistic/gauss models are dominated by device dispatch
+# overhead, so device work cannot be measured on them.  Identical priors to
+# `bench_logistic` (alpha ~ N(0,2.5), beta_d ~ N(0,2.5) as a diagonal
+# `mvnormal`), so both the host analytic path (issue #150) and the device
+# analytic path (issue #135) apply.  D = 16 is literal (mvnormal tuple length)
+# and is the device coefficient-dimension cap (DEVICE_MAX_VECTOR_DIMENSION);
+# N = 8000 keeps D*N at the intended heavy per-gradient budget while the model
+# still lowers to the device.  The observation loop is loop-addressed because
+# only `normal.` broadcasts.
+@tea static function bench_logistic_large(X, n)
+    alpha ~ normal(0.0, 2.5)
+    beta ~ mvnormal(
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        (2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5),
+    )
+    for i = 1:n
+        {:y => i} ~ bernoullilogit(alpha + sum(beta .* X[:, i]))
+    end
+    return alpha
+end
+
 # Gaussian mean/scale estimation with a loop-addressed observation vector —
 # the device-supported form (same shape as test/gpu gpu_gauss_model) used for
 # the chain-count scaling sweep.  The logistic model above now rides the HOST

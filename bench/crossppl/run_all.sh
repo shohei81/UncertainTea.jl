@@ -37,7 +37,7 @@ SCALE_SEED=200
 GAUSS_PINNED_INIT="0.5,0.18232155679395463"
 scale_reps() { if [[ "$1" -ge 4096 ]]; then echo 1; else echo 3; fi; }
 
-MODELS=(eight_schools_centered eight_schools_noncentered logistic gauss)
+MODELS=(eight_schools_centered eight_schools_noncentered logistic logistic_large gauss)
 
 if [[ "${CROSSPPL_IN_CONTAINER:-0}" == "1" ]]; then
     PY=(uv run --project /opt/bench-python --no-sync python)
@@ -73,6 +73,22 @@ run_cpu() {
             --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
             --seed $SCALE_SEED --reps "$r"
     done
+    # logistic_large (D=16, N=8000) is the device-story model: a heavy
+    # per-gradient GLM that lowers to the device analytic path (issue #135), so
+    # the device/many-chains legs are no longer dominated by dispatch overhead.
+    echo "=== logistic_large: CPU scaling sweep ==="
+    for k in "${SCALE_CHAINS[@]}"; do
+        r=$(scale_reps "$k")
+        "${PY[@]}" python/run_numpyro.py --model logistic_large --chain-method vectorized --no-x64 \
+            --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
+            --seed $SCALE_SEED --reps "$r"
+        "${JL[@]}" julia/run.jl --model logistic_large --variant batched-cpu \
+            --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
+            --seed $SCALE_SEED --reps "$r"
+        "${JL[@]}" julia/run.jl --model logistic_large --variant batched-cpu-ka \
+            --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
+            --seed $SCALE_SEED --reps "$r"
+    done
 }
 
 run_metal() {
@@ -80,6 +96,12 @@ run_metal() {
     echo "=== gauss: Metal scaling sweep (native) ==="
     for k in "${SCALE_CHAINS[@]}"; do
         "${JL[@]}" julia/run.jl --model gauss --variant batched-metal \
+            --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
+            --seed $SCALE_SEED --reps "$(scale_reps "$k")"
+    done
+    echo "=== logistic_large: Metal scaling sweep (native) ==="
+    for k in "${SCALE_CHAINS[@]}"; do
+        "${JL[@]}" julia/run.jl --model logistic_large --variant batched-metal \
             --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
             --seed $SCALE_SEED --reps "$(scale_reps "$k")"
     done
