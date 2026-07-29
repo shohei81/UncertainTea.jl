@@ -90,6 +90,53 @@ function batched_target_logdensity_and_gradient!(
     return values, gradient_destination
 end
 
+# Active-aware batched logdensity+gradient (issue #160): `active`/`active_count`
+# describe which columns are still live in the masked-NUTS leapfrog leaf. The
+# generic fallback ignores the mask and evaluates the full width (correct for any
+# target); targets that can gather/scatter their independent columns override it
+# below. Callers hand this the mask so the target -- not the leapfrog kernel --
+# owns the decision of whether compaction pays for its gradient tier.
+function batched_target_logdensity_and_gradient!(
+    values_destination::AbstractVector,
+    gradient_destination::AbstractMatrix,
+    target::AbstractBatchedDensityTarget,
+    positions::AbstractMatrix,
+    active::AbstractVector{Bool},
+    active_count::Int,
+)
+    return batched_target_logdensity_and_gradient!(
+        values_destination, gradient_destination, target, positions,
+    )
+end
+
+# Lane-compaction override for the model target (issue #160). When most chains
+# have finished/diverged, gather the active columns, evaluate the analytic
+# backend gradient over just those k columns, and scatter back -- the active
+# lanes get BITWISE-identical values (see `_batched_compact_logjoint_and_gradient!`).
+# On the full-width branch (active fraction above threshold, a non-analytic tier,
+# or a thread plan) this is exactly the unmasked call, so the common early-round
+# leapfrog step is untouched. A compaction attempt that trips a recoverable
+# analytic-tier error falls back to the full-width call, which degrades per column.
+function batched_target_logdensity_and_gradient!(
+    values_destination::AbstractVector,
+    gradient_destination::AbstractMatrix,
+    target::BatchedModelDensityTarget,
+    positions::AbstractMatrix,
+    active::AbstractVector{Bool},
+    active_count::Int,
+)
+    cache = target.gradient_cache
+    if _batched_lane_compaction_beneficial(cache, active_count) &&
+       _batched_compact_logjoint_and_gradient!(
+           values_destination, gradient_destination, cache, positions, active, active_count,
+       )
+        return values_destination, gradient_destination
+    end
+    return batched_target_logdensity_and_gradient!(
+        values_destination, gradient_destination, target, positions,
+    )
+end
+
 mutable struct BatchedTemperedDensityTarget{M<:TeaModel,A<:Tuple,C<:ChoiceMap,G<:BatchedLogjointGradientCache} <:
                AbstractBatchedDensityTarget
     const model::M

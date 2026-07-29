@@ -142,6 +142,21 @@ struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix,T}
     # analytic-gradient chain-block threading plan, or `nothing` when serial
     # (issue #143). Only the `backend_cache` tier is threaded.
     thread_plan::T
+    # Lane-compaction scratch (issue #160). Masked batched NUTS runs a full-width
+    # gradient every leapfrog leaf even when most chains have finished/diverged;
+    # once the active fraction drops below ~50% the sampler gathers the active
+    # columns into `compact_params[:, 1:k]`, evaluates the analytic backend
+    # gradient over just those k columns into `compact_logjoint[1:k]` /
+    # `compact_gradient[:, 1:k]`, and scatters back to the active lanes (see
+    # `_batched_compact_logjoint_and_gradient!`). `compact_index[slot]` records the
+    # original column of the `slot`-th gathered lane. All are pre-sized to the full
+    # batch width so the gather/scatter layer never allocates per step; only the
+    # analytic tier is batch-width-independent enough to be compacted BITWISE, so
+    # these are unused for the ForwardDiff tiers.
+    compact_params::G
+    compact_gradient::G
+    compact_logjoint::Vector{Float64}
+    compact_index::Vector{Int}
 end
 
 # `reject_invalid_parameters=true` puts the workspace's compiled-plan walk in

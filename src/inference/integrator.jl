@@ -359,8 +359,13 @@ function batched_leapfrog_step_to!(
     copyto!(q, position)
     copyto!(p, momentum)
     fill!(valid, false)
+    # Count the live lanes while doing the momentum half-step / drift so lane
+    # compaction (issue #160) can skip the finished/diverged columns in the
+    # gradient below without a second pass over `active`.
+    active_count = 0
     for chain_index = 1:num_chains
         active[chain_index] || continue
+        active_count += 1
         valid[chain_index] = true
         signed_step = direction[chain_index] * step_size
         _add_scaled_column!(p, gradient, chain_index, signed_step / 2)
@@ -372,6 +377,8 @@ function batched_leapfrog_step_to!(
         destination_gradient,
         target,
         q,
+        active,
+        active_count,
     )
     for chain_index = 1:num_chains
         valid[chain_index] || continue
@@ -431,8 +438,12 @@ function batched_leapfrog_step_to!(
     copyto!(q, position)
     copyto!(p, momentum)
     fill!(valid, false)
+    # Count the live lanes for lane compaction (issue #160); see the shared-step
+    # overload above.
+    active_count = 0
     for chain_index = 1:num_chains
         active[chain_index] || continue
+        active_count += 1
         valid[chain_index] = true
         signed_step = direction[chain_index] * step_sizes[chain_index]
         _add_scaled_column!(p, gradient, chain_index, signed_step / 2)
@@ -444,6 +455,8 @@ function batched_leapfrog_step_to!(
         destination_gradient,
         target,
         q,
+        active,
+        active_count,
     )
     for chain_index = 1:num_chains
         valid[chain_index] || continue
