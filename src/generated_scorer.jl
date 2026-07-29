@@ -745,3 +745,41 @@ function _gen_interpreter_gradient!(objective::_GenGradientObjective, buffer, pa
     ForwardDiff.gradient!(buffer, interp, params)
     return buffer
 end
+
+# Interpreter VALUE for a generated cache whose constraints mutated into a
+# no-longer-densifiable shape: live-lookup logjoint, same reject flag as the
+# cache, mirroring `_gen_interpreter_gradient!` on the value path (issue #188).
+function _gen_interpreter_value(objective::_GenGradientObjective, position::AbstractVector)
+    return _logjoint_unconstrained(
+        objective.model, objective.resolved, position, objective.args, objective.constraints, nothing;
+        reject_invalid_parameters=objective.reject,
+    )
+end
+
+# Sampler VALUE path (issue #188): evaluate the unconstrained logjoint VALUE
+# through the observations the gradient cache already staged, instead of the
+# public `logjoint_unconstrained`, which re-stages all N observations (re-walks
+# the plan rebuilding `(:y,i)` addresses) on every call. Observations are
+# constant data, so the cache stages them once and this reuses them with an O(1)
+# staleness check; the numerics are the cache objective's own value evaluation,
+# so seeded draws stay bitwise identical. Reject semantics (issue #157) are
+# carried by the objective (the cache is built reject-on for the samplers).
+#
+# Generated objective: refresh the dense obs against an in-place constraint
+# mutation first (gibbs), matching `_logjoint_gradient!`; on a no-longer-
+# densifiable mutation fall back to the live-lookup interpreter value. The
+# scorer method is emitted after this caller's world, so the generated call
+# crosses the world-age boundary via `invokelatest` (as the gradient path does).
+function _logjoint_value_from_cache(cache::LogjointGradientCache, position::AbstractVector)
+    objective = cache.objective
+    if objective isa _GenGradientObjective
+        if _gen_refresh_obs!(objective)
+            return Base.invokelatest(objective, position)
+        end
+        return _gen_interpreter_value(objective, position)
+    end
+    # Interpreter objective (a plain closure over the pre-built ObservationStage):
+    # calling it reuses that stage, dropping back to live lookups only when the
+    # ChoiceMap mutated (its internal `_stage_is_current` check).
+    return objective(position)
+end

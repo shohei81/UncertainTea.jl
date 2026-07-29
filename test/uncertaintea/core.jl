@@ -59,6 +59,7 @@ core_test_files = [
     ("gradient_crosscheck.jl", "crosscheck"),
     ("generated_scorer_identity.jl", "crosscheck"),
     ("generated_scorer_suffstats.jl", "crosscheck"),
+    ("sampler_value_path_obs_cache.jl", "crosscheck"),
     # "inference": diagnostics, VI, predictive, and lighter-weight sampler checks.
     ("batched_advi_particle.jl", "inference"),
     ("proposal_diagnostics_overflow.jl", "inference"),
