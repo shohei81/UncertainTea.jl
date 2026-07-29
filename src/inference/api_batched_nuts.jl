@@ -8,6 +8,8 @@ function batched_nuts(
     step_size::Real=0.1,
     max_tree_depth::Int=10,
     initial_params=nothing,
+    init::Symbol=:prior,
+    init_max_retries::Int=100,
     target_accept::Real=0.8,
     adapt_step_size::Bool=true,
     adapt_mass_matrix::Bool=true,
@@ -26,6 +28,10 @@ function batched_nuts(
 )
     tree_strategy in (:hybrid, :masked) ||
         throw(ArgumentError("batched_nuts tree_strategy must be :hybrid or :masked, got $(repr(tree_strategy))"))
+    init in (:prior, :uniform) ||
+        throw(ArgumentError("batched_nuts init must be :prior or :uniform, got $(repr(init))"))
+    init_max_retries >= 0 ||
+        throw(ArgumentError("batched_nuts init_max_retries must be >= 0, got $init_max_retries"))
 
     # Per-chain step-size adaptation is the DEFAULT everywhere (issue #137): with
     # shared adaptation, prior-draw initialization strands the chains whose initial
@@ -97,21 +103,52 @@ function batched_nuts(
         rng,
         num_params,
         constrained_num_params,
-        num_chains,
+        num_chains;
+        init=init,
     )
     workspace = BatchedNUTSWorkspace(model, position, batch_args, batch_constraints, max_tree_depth)
     current_logjoint = Vector{Float64}(undef, num_chains)
     current_gradient = workspace.current_gradient
-    _, gradient = _batched_logjoint_and_gradient_unconstrained!(
-        current_logjoint,
-        workspace.gradient_cache,
-        position,
-    )
-    copyto!(current_gradient, gradient)
-    all(isfinite, current_logjoint) ||
-        throw(ArgumentError("initial batched NUTS parameters produced a non-finite unconstrained logjoint"))
-    all(isfinite, current_gradient) ||
-        throw(ArgumentError("initial batched NUTS parameters produced a non-finite unconstrained gradient"))
+    # Retry non-finite starting points instead of throwing outright (issue #162):
+    # heavy-tailed priors (e.g. the eight-schools HalfCauchy tau) can draw a
+    # chain arbitrarily far out. Only re-drawable inits (prior/uniform/Pathfinder)
+    # retry -- a fixed `initial_params` array reproduces the same value, so it
+    # fails fast. `position` is re-drawn in place, so the sampler and workspace
+    # (which read `position` directly) see the corrected starting point.
+    local gradient
+    init_attempt = 0
+    while true
+        _, gradient = _batched_logjoint_and_gradient_unconstrained!(
+            current_logjoint,
+            workspace.gradient_cache,
+            position,
+        )
+        copyto!(current_gradient, gradient)
+        bad_columns = _nonfinite_init_columns(current_logjoint, current_gradient)
+        isempty(bad_columns) && break
+        if !_init_is_redrawable(initial_params) || init_attempt >= init_max_retries
+            retried = _init_is_redrawable(initial_params) ? " after $init_max_retries re-draw(s)" : ""
+            throw(
+                ArgumentError(
+                    "initial batched NUTS parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init=:uniform or supply finite initial_params",
+                ),
+            )
+        end
+        init_attempt += 1
+        _redraw_batched_initial_positions!(
+            position,
+            bad_columns,
+            model,
+            batch_args,
+            batch_constraints,
+            initial_params,
+            init,
+            rng,
+            num_params,
+            constrained_num_params,
+            num_chains,
+        )
+    end
 
     unconstrained_samples = Array{Float64}(undef, num_params, num_samples, num_chains)
     constrained_samples = Array{Float64}(undef, constrained_num_params, num_samples, num_chains)
