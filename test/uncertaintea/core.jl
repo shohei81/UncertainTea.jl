@@ -58,6 +58,7 @@ core_test_files = [
     ("host_device_pooled_agreement.jl", "device"),
     ("gradient_crosscheck.jl", "crosscheck"),
     ("generated_scorer_identity.jl", "crosscheck"),
+    ("generated_scorer_suffstats.jl", "crosscheck"),
     # "inference": diagnostics, VI, predictive, and lighter-weight sampler checks.
     ("batched_advi_particle.jl", "inference"),
     ("proposal_diagnostics_overflow.jl", "inference"),

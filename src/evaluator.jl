@@ -535,10 +535,25 @@ mutable struct ResolvedSignaturePlan
     # `nothing` until then. See src/generated_scorer.jl. Untyped so this struct
     # need not see the generated-scorer types.
     generated_scorer_cache::Base.RefValue{Any}
+    # Single-slot memo of the dense obs vectors and their sufficient statistics
+    # (issue #138) derived from the last memoized `ObservationStage` in the
+    # public `logjoint_gradient_unconstrained`. Holds `(stage, obs, stats)`;
+    # reused while the same stage object is current, so repeated calls on an
+    # unmutated ChoiceMap skip the O(observations) statistics scan and the
+    # entry point becomes O(1) in the observation count. `nothing` until first
+    # populated. Untyped for the same reason as the other caches.
+    generated_obs_stats_cache::Base.RefValue{Any}
 end
 
-ResolvedSignaturePlan(plan::ExecutionPlan, compiled::CompiledExecutionPlan) =
-    ResolvedSignaturePlan(plan, compiled, Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing))
+ResolvedSignaturePlan(plan::ExecutionPlan, compiled::CompiledExecutionPlan) = ResolvedSignaturePlan(
+    plan,
+    compiled,
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+)
 
 # A representative single ChoiceMap for the conditioning signature. The batched
 # and device paths accept either a shared ChoiceMap or a per-column vector of
@@ -1235,12 +1250,21 @@ function _logjoint(
     # need not be type-inferred here.
     scorer = _generated_scorer(resolved, reject_invalid_parameters)
     if scorer !== nothing
-        obs =
-            isnothing(active_stage) ? _gen_obs_from_params(resolved, params, args, constraints) :
-            _gen_obs_from_stage(active_stage)
-        if !isnothing(obs)
+        # Sufficient statistics for fusable observation loops (issue #138),
+        # derived from the dense obs data alone (empty for non-fusable stages /
+        # data the closed form cannot represent); the scorer reads them in O(1)
+        # for a fusable loop and ignores them otherwise. When a memoized stage is
+        # current, the obs vectors AND their statistics are reused (O(1)); with
+        # no stage they are built once from this call's params (O(observations)).
+        obs_stats =
+            isnothing(active_stage) ?
+            let obs = _gen_obs_from_params(resolved, params, args, constraints)
+                isnothing(obs) ? nothing : (obs, _gen_stats(resolved, obs))
+            end : _gen_obs_and_stats_for_stage(resolved, active_stage)
+        if !isnothing(obs_stats)
+            obs, stats = obs_stats
             _GEN_SCORER_LAST_USED[] = true
-            return Base.invokelatest(scorer, args, params, obs)
+            return Base.invokelatest(scorer, args, params, obs, stats)
         end
     end
     _GEN_SCORER_LAST_USED[] = false
@@ -1258,8 +1282,18 @@ function logjoint_unconstrained(
     reject_invalid_parameters::Bool=false,
 )
     resolved = _resolve_signature_plan(model, constraints)
+    # Reuse the memoized dense observation stage (issue #145/#138): the samplers'
+    # density-value path (`target_logdensity`) calls this per leapfrog step with
+    # the SAME constraints object, and the observation data is param-independent,
+    # so one staged build serves every position. Without this the scalar value
+    # path re-stages O(observations) per call, keeping single-chain scoring
+    # O(observations) even though the fused gradient and sum are O(1). Reused
+    # while the stage is current; a different/mutated ChoiceMap rebuilds. A first
+    # call with non-Float64 (Dual) params simply misses and falls back to the
+    # per-call obs build, which is Dual-safe.
+    stage = _memoized_observation_stage(model, resolved, params, args, constraints)
     return _logjoint_unconstrained(
-        model, resolved, params, args, constraints, nothing;
+        model, resolved, params, args, constraints, stage;
         reject_invalid_parameters=reject_invalid_parameters,
     )
 end
@@ -1742,11 +1776,13 @@ function logjoint_gradient_unconstrained(
     resolved = _resolve_signature_plan(model, constraints)
     stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
     scorer = _generated_scorer(resolved, false)
-    obs = isnothing(scorer) ? nothing : _gen_obs_from_stage(stage)
-    if !isnothing(scorer) && !isnothing(obs)
+    obs_stats = isnothing(scorer) ? nothing : _gen_obs_and_stats_for_stage(resolved, stage)
+    if !isnothing(scorer) && !isnothing(obs_stats)
+        obs, stats = obs_stats
         _GEN_SCORER_LAST_USED[] = true
-        objective =
-            _gen_gradient_objective(scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs)
+        objective = _gen_gradient_objective(
+            scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs; stats=stats,
+        )
         config = _cached_gradient_config(resolved, objective, seed)
         gradient = similar(seed)
         Base.invokelatest(ForwardDiff.gradient!, gradient, objective, seed, config)
