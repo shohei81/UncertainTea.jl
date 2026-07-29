@@ -156,6 +156,19 @@ single-chain HMC, but it now supports the same basic warmup structure:
 - window-level mass-adaptation diagnostics are now exposed through
   `massadaptationwindows(chain)` so warmup updates can be inspected after
   sampling
+
+`batched_nuts` initialization is robust to non-finite starting points (issue
+#162):
+
+- `init=:prior` (default) draws each chain's start from the prior; `init=:uniform`
+  uses the Stan/NumPyro `Uniform(-2, 2)` protocol on the unconstrained scale
+  (ship alongside the per-chain step-size adaptation above, which is the default)
+- a chain whose initial unconstrained logjoint or gradient is non-finite is
+  re-drawn up to `init_max_retries` times (default 100, Stan's retry budget)
+  instead of throwing outright — heavy-tailed priors (e.g. a HalfCauchy scale)
+  can otherwise start a chain arbitrarily far out. Only re-drawable inits
+  (prior/uniform/`PathfinderResult`) retry; an explicit `initial_params` array
+  is a fixed value and so fails fast
 - `summarize(chains)` now includes aggregated diagnostics, so acceptance,
   divergence, step-size, and warmup mass-adaptation windows can be inspected
   from one summary object
