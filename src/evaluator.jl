@@ -535,10 +535,25 @@ mutable struct ResolvedSignaturePlan
     # `nothing` until then. See src/generated_scorer.jl. Untyped so this struct
     # need not see the generated-scorer types.
     generated_scorer_cache::Base.RefValue{Any}
+    # Single-slot memo of the dense obs vectors and their sufficient statistics
+    # (issue #138) derived from the last memoized `ObservationStage` in the
+    # public `logjoint_gradient_unconstrained`. Holds `(stage, obs, stats)`;
+    # reused while the same stage object is current, so repeated calls on an
+    # unmutated ChoiceMap skip the O(observations) statistics scan and the
+    # entry point becomes O(1) in the observation count. `nothing` until first
+    # populated. Untyped for the same reason as the other caches.
+    generated_obs_stats_cache::Base.RefValue{Any}
 end
 
-ResolvedSignaturePlan(plan::ExecutionPlan, compiled::CompiledExecutionPlan) =
-    ResolvedSignaturePlan(plan, compiled, Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing))
+ResolvedSignaturePlan(plan::ExecutionPlan, compiled::CompiledExecutionPlan) = ResolvedSignaturePlan(
+    plan,
+    compiled,
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+    Ref{Any}(nothing),
+)
 
 # A representative single ChoiceMap for the conditioning signature. The batched
 # and device paths accept either a shared ChoiceMap or a per-column vector of
@@ -1240,7 +1255,12 @@ function _logjoint(
             _gen_obs_from_stage(active_stage)
         if !isnothing(obs)
             _GEN_SCORER_LAST_USED[] = true
-            return Base.invokelatest(scorer, args, params, obs)
+            # sufficient statistics for fusable observation loops (issue #138),
+            # computed from the dense obs data alone (empty for non-fusable
+            # stages / data the closed form cannot represent); the scorer reads
+            # them in O(1) for a fusable loop and ignores them otherwise
+            stats = _gen_stats(resolved, obs)
+            return Base.invokelatest(scorer, args, params, obs, stats)
         end
     end
     _GEN_SCORER_LAST_USED[] = false
@@ -1742,11 +1762,13 @@ function logjoint_gradient_unconstrained(
     resolved = _resolve_signature_plan(model, constraints)
     stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
     scorer = _generated_scorer(resolved, false)
-    obs = isnothing(scorer) ? nothing : _gen_obs_from_stage(stage)
-    if !isnothing(scorer) && !isnothing(obs)
+    obs_stats = isnothing(scorer) ? nothing : _gen_obs_and_stats_for_stage(resolved, stage)
+    if !isnothing(scorer) && !isnothing(obs_stats)
+        obs, stats = obs_stats
         _GEN_SCORER_LAST_USED[] = true
-        objective =
-            _gen_gradient_objective(scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs)
+        objective = _gen_gradient_objective(
+            scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs; stats=stats,
+        )
         config = _cached_gradient_config(resolved, objective, seed)
         gradient = similar(seed)
         Base.invokelatest(ForwardDiff.gradient!, gradient, objective, seed, config)
