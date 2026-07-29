@@ -530,10 +530,15 @@ mutable struct ResolvedSignaturePlan
     # call via `_stage_is_current`, so a different or mutated ChoiceMap simply
     # rebuilds. `nothing` until first populated.
     observation_stage_cache::Base.RefValue{Any}
+    # Lazily emitted type-stable straight-line scorers (issue #144), keyed by
+    # the reject-mode flag. Holds a `_GeneratedScorerCache` once analyzed;
+    # `nothing` until then. See src/generated_scorer.jl. Untyped so this struct
+    # need not see the generated-scorer types.
+    generated_scorer_cache::Base.RefValue{Any}
 end
 
 ResolvedSignaturePlan(plan::ExecutionPlan, compiled::CompiledExecutionPlan) =
-    ResolvedSignaturePlan(plan, compiled, Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing))
+    ResolvedSignaturePlan(plan, compiled, Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing), Ref{Any}(nothing))
 
 # A representative single ChoiceMap for the conditioning signature. The batched
 # and device paths accept either a shared ChoiceMap or a per-column vector of
@@ -1220,6 +1225,25 @@ function _logjoint(
     # every evaluation: a mutated or different ChoiceMap silently drops back to
     # live lookups instead of scoring stale staged values
     active_stage = (stage isa ObservationStage && _stage_is_current(stage, constraints)) ? stage : nothing
+
+    # Type-stable generated scorer (issue #144) for the scalar scoring path.
+    # Any plan the generator or the dense observation-vector build cannot
+    # represent (Float32/scalar/broadcast observations, marginalize, ...) leaves
+    # `scorer`/`obs` as `nothing` and falls through to the interpreter, which
+    # stays the numerical source of truth. `invokelatest` crosses the world-age
+    # boundary from the (possibly just-emitted) scorer method; the scalar result
+    # need not be type-inferred here.
+    scorer = _generated_scorer(resolved, reject_invalid_parameters)
+    if scorer !== nothing
+        obs =
+            isnothing(active_stage) ? _gen_obs_from_params(resolved, params, args, constraints) :
+            _gen_obs_from_stage(active_stage)
+        if !isnothing(obs)
+            _GEN_SCORER_LAST_USED[] = true
+            return Base.invokelatest(scorer, args, params, obs)
+        end
+    end
+    _GEN_SCORER_LAST_USED[] = false
     return _score_compiled_steps(resolved.compiled.steps, env, params, constraints, active_stage)
 end
 
@@ -1624,16 +1648,44 @@ function _logjoint_gradient_cache(
         throw(DimensionMismatch("expected gradient buffer of length $(length(seed)), got $(length(buffer))"))
     resolved = _resolve_signature_plan(model, constraints)
     stage = _stage_observations(model, resolved, seed, args, constraints)
-    objective = _gradient_objective(
-        model, resolved, args, constraints, stage;
-        reject_invalid_parameters=reject_invalid_parameters,
-    )
+    # Prefer the type-stable generated scorer (issue #144) when the plan and its
+    # dense observation vectors are representable; otherwise the interpreter
+    # objective. The choice is fixed for the cache's lifetime, so its objective
+    # type -- and the `LogjointGradientCache{F}` -- stays concrete.
+    scorer = _generated_scorer(resolved, reject_invalid_parameters)
+    obs = isnothing(scorer) ? nothing : _gen_obs_from_stage(stage)
+    objective = if !isnothing(scorer) && !isnothing(obs)
+        _gen_gradient_objective(
+            scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs;
+            reject=reject_invalid_parameters,
+        )
+    else
+        _gradient_objective(
+            model, resolved, args, constraints, stage;
+            reject_invalid_parameters=reject_invalid_parameters,
+        )
+    end
     config = ForwardDiff.GradientConfig(objective, seed)
     return LogjointGradientCache(objective, config, buffer)
 end
 
 function _logjoint_gradient!(cache::LogjointGradientCache, params::AbstractVector)
-    ForwardDiff.gradient!(cache.buffer, cache.objective, params, cache.config)
+    # The generated objective's scorer method is emitted after this caller's
+    # world (see generated_scorer.jl); `invokelatest` runs the differentiation
+    # in the latest world so the concrete scorer resolves and stays type-stable.
+    # The interpreter objective keeps its direct, world-stable call path. A
+    # cache reused across an in-place constraint mutation (gibbs) re-stages its
+    # dense observations first; if the mutated constraints are no longer
+    # densifiable, it falls back to the interpreter for that call.
+    if cache.objective isa _GenGradientObjective
+        if _gen_refresh_obs!(cache.objective)
+            Base.invokelatest(ForwardDiff.gradient!, cache.buffer, cache.objective, params, cache.config)
+        else
+            Base.invokelatest(_gen_interpreter_gradient!, cache.objective, cache.buffer, params)
+        end
+    else
+        ForwardDiff.gradient!(cache.buffer, cache.objective, params, cache.config)
+    end
     return cache.buffer
 end
 
@@ -1689,6 +1741,18 @@ function logjoint_gradient_unconstrained(
     seed = collect(params)
     resolved = _resolve_signature_plan(model, constraints)
     stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
+    scorer = _generated_scorer(resolved, false)
+    obs = isnothing(scorer) ? nothing : _gen_obs_from_stage(stage)
+    if !isnothing(scorer) && !isnothing(obs)
+        _GEN_SCORER_LAST_USED[] = true
+        objective =
+            _gen_gradient_objective(scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs)
+        config = _cached_gradient_config(resolved, objective, seed)
+        gradient = similar(seed)
+        Base.invokelatest(ForwardDiff.gradient!, gradient, objective, seed, config)
+        return gradient
+    end
+    _GEN_SCORER_LAST_USED[] = false
     objective = _gradient_objective(model, resolved, args, constraints, stage)
     config = _cached_gradient_config(resolved, objective, seed)
     gradient = similar(seed)
