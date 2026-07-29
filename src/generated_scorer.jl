@@ -49,6 +49,18 @@
 const _USE_GENERATED_SCORER = Ref(true)
 const _GEN_SCORER_LAST_USED = Ref(false)
 
+# Sufficient-statistics fusion switch (issue #138). When on (production), a
+# fusable observation loop (single staged observed choice, exponential-family
+# family with LOOP-INVARIANT parameter expressions, no binding/reparam/
+# marginalize) is scored in O(1) from statistics computed ONCE at obs-build
+# time, instead of the O(observations) per-iteration logpdf loop. The emitted
+# scorer reads this Ref so the numerical-identity tests can compare the fused
+# and unfused generated paths in the same process without re-emitting: off ->
+# the per-observation loop (the #144 unfused path); on with data the closed
+# form cannot represent exactly (recorded as empty stats at build time) also
+# takes the per-observation loop.
+const _GEN_SCORER_SUFFSTATS = Ref(true)
+
 # Bound on emitted straight-line statements (loop bodies counted once). A plan
 # with thousands of distinct un-looped steps would blow up first-call compile
 # time; such plans fall back to the interpreter.
@@ -56,13 +68,19 @@ const _GEN_MAX_STEPS = 400
 
 struct _GeneratedScorerCache
     structural_ok::Bool
+    # per stage-index sufficient-statistics fusion family (issue #138): `:normal`
+    # / `:exponential` / `:poisson` for a fusable loop observation, `:none`
+    # otherwise. Length `stage_count`; drives which stages get statistics built
+    # (`_gen_build_stats`), consistently with what the emitter fuses (both derive
+    # from `_gen_loop_fusable_family`).
+    stage_fusion::Vector{Symbol}
     # emitted scorers keyed by reject flag; `nothing` until first requested
     scorer_noreject::Base.RefValue{Any}
     scorer_reject::Base.RefValue{Any}
 end
 
-_GeneratedScorerCache(structural_ok::Bool) =
-    _GeneratedScorerCache(structural_ok, Ref{Any}(nothing), Ref{Any}(nothing))
+_GeneratedScorerCache(structural_ok::Bool, stage_fusion::Vector{Symbol}) =
+    _GeneratedScorerCache(structural_ok, stage_fusion, Ref{Any}(nothing), Ref{Any}(nothing))
 
 # --- structural analysis ------------------------------------------------------
 
@@ -90,6 +108,165 @@ function _gen_structural_ok(compiled::CompiledExecutionPlan)
     _gen_steps_structural_ok(compiled.steps) || return false
     _gen_step_count(compiled.steps) <= _GEN_MAX_STEPS || return false
     return true
+end
+
+# --- sufficient-statistics fusion: structural analysis (issue #138) -----------
+#
+# A loop observation is fusable when its body is a single staged observed choice
+# of an exponential-family family (normal / exponential / poisson) whose
+# parameter expressions are LOOP-INVARIANT (never read the loop iterator). Then
+# the whole per-observation logpdf loop collapses to a closed form over
+# statistics of the data alone (computed once at obs-build time), read in O(1)
+# by the emitted scorer -- mirroring the batched #146 fusion. Anything else
+# (binding, reparam, marginalize, a parameter that reads the iterator, an
+# unsupported family) keeps the per-observation loop.
+
+# Does a compiled expression read the given environment slot? Conservative
+# (returns `true`) on any node the walker does not recognize, so an unanalyzable
+# parameter expression is never mistaken for loop-invariant.
+_gen_expr_reads_slot(e::CompiledLiteralExpr, slot::Int) = false
+_gen_expr_reads_slot(e::CompiledSlotExpr, slot::Int) = e.slot == slot
+_gen_expr_reads_slot(e::CompiledCallExpr, slot::Int) =
+    _gen_expr_reads_slot(e.callee, slot) || any(a -> _gen_expr_reads_slot(a, slot), e.arguments)
+_gen_expr_reads_slot(e::CompiledTupleExpr, slot::Int) = any(a -> _gen_expr_reads_slot(a, slot), e.arguments)
+_gen_expr_reads_slot(e::CompiledVectorExpr, slot::Int) = any(a -> _gen_expr_reads_slot(a, slot), e.arguments)
+_gen_expr_reads_slot(e::CompiledBlockExpr, slot::Int) = any(a -> _gen_expr_reads_slot(a, slot), e.arguments)
+_gen_expr_reads_slot(::Any, ::Int) = true
+
+# Map a choice-step constructor to its fusable family tag, or `nothing`. Only the
+# exact module builders match; a custom `builder` distribution keeps the loop.
+_gen_fusable_family(constructor) =
+    constructor === normal ? :normal :
+    constructor === exponential ? :exponential : constructor === poisson ? :poisson : nothing
+
+# The fusable family of a loop step, or `nothing` if the loop is not fusable.
+function _gen_loop_fusable_family(step::CompiledLoopPlanStep)
+    length(step.body) == 1 || return nothing
+    choice = step.body[1]
+    choice isa CompiledChoicePlanStep || return nothing
+    choice.stage_index == 0 && return nothing                 # must be a staged observation
+    isnothing(choice.binding_slot) || return nothing          # value not bound to a variable
+    isnothing(choice.parameter_value_indices) || return nothing  # observation, not a latent
+    isnothing(choice.marginalize) || return nothing
+    isnothing(choice.noncentered) || return nothing
+    family = _gen_fusable_family(choice.constructor)
+    isnothing(family) && return nothing
+    for arg in choice.arguments
+        _gen_expr_reads_slot(arg, step.iterator_slot) && return nothing  # loop-invariant params only
+    end
+    return family
+end
+
+# Per stage-index fusion family for the whole plan (`:none` where not fusable).
+function _gen_stage_fusion(compiled::CompiledExecutionPlan)
+    fusion = fill(:none, compiled.stage_count)
+    _gen_collect_fusion!(fusion, compiled.steps)
+    return fusion
+end
+_gen_collect_fusion!(::Vector{Symbol}, ::Tuple{}) = nothing
+function _gen_collect_fusion!(fusion::Vector{Symbol}, steps::Tuple)
+    _gen_collect_fusion_step!(fusion, first(steps))
+    _gen_collect_fusion!(fusion, Base.tail(steps))
+end
+_gen_collect_fusion_step!(::Vector{Symbol}, ::CompiledChoicePlanStep) = nothing
+_gen_collect_fusion_step!(::Vector{Symbol}, ::CompiledDeterministicPlanStep) = nothing
+function _gen_collect_fusion_step!(fusion::Vector{Symbol}, step::CompiledLoopPlanStep)
+    family = _gen_loop_fusable_family(step)
+    isnothing(family) || (fusion[step.body[1].stage_index] = family)
+    _gen_collect_fusion!(fusion, step.body)  # nested loops when this one is not fusable
+    return nothing
+end
+
+# --- sufficient-statistics fusion: data statistics (issue #138) ---------------
+#
+# Built ONCE per obs-vector build (obs-build time), from the Float64 observation
+# data alone -- never from the parameters -- so a single build is valid for
+# every parameter vector (Float64 or Dual) the cached scorer is later called
+# with. Each stage's stats are encoded as a small `Vector{Float64}` (kept type-
+# stable, unlike an Any-boxed struct, so the scorer reads them without dynamic
+# dispatch); an EMPTY vector means "not fused" -- either the stage is not a
+# fusable family or its data cannot take the closed form (an empty loop, a
+# non-finite normal value, a negative exponential value, a non-count poisson
+# value), in which case the emitted scorer runs the per-observation loop.
+
+# Normal: CENTERED statistics (n, ybar, residual = sum(y - ybar),
+# S2c = sum((y - ybar)^2)). The residual carries the ~1 ulp the stored mean drops
+# so the moment identity in `_gen_fused_sum_expr` is exact about `ybar`; the
+# centered second moment makes the sum cancellation-free even when |ybar| >>
+# sigma (the naive power-sum form is not). Mirrors `_NormalObservationStats`.
+function _gen_normal_stats(y::Vector{Float64})
+    n = length(y)
+    (n > 0 && all(isfinite, y)) || return Float64[]
+    mean = sum(y) / n
+    residual = sum(v -> v - mean, y)
+    centered_sum_squares = sum(v -> abs2(v - mean), y)
+    return Float64[n, mean, residual, centered_sum_squares]
+end
+
+# Exponential: (n, sum(y)). A negative observation scores -Inf in the per-obs
+# form, which the closed form cannot represent, so keep those loops unfused.
+function _gen_exponential_stats(y::Vector{Float64})
+    n = length(y)
+    (n > 0 && all(v -> isfinite(v) && v >= 0.0, y)) || return Float64[]
+    return Float64[n, sum(y)]
+end
+
+# Poisson: (n, sum(y), sum(log y!)); the log-factorial total is a data constant
+# accumulated with the same `_logfactorial_like` the per-observation logpdf uses.
+# A non-count observation scores -Inf per-obs, so keep those loops unfused.
+function _gen_poisson_stats(y::Vector{Float64})
+    n = length(y)
+    n > 0 || return Float64[]
+    total = 0.0
+    log_factorial_total = 0.0
+    for v in y
+        count = _poisson_count(v)
+        isnothing(count) && return Float64[]
+        total += count
+        log_factorial_total += _logfactorial_like(1.0, count)
+    end
+    return Float64[n, total, log_factorial_total]
+end
+
+function _gen_compute_stats(family::Symbol, y::Vector{Float64})
+    family === :normal && return _gen_normal_stats(y)
+    family === :exponential && return _gen_exponential_stats(y)
+    family === :poisson && return _gen_poisson_stats(y)
+    return Float64[]
+end
+
+# Statistics for every stage, parallel to the dense obs vectors.
+function _gen_build_stats(stage_fusion::Vector{Symbol}, obs::Vector{Vector{Float64}})
+    stats = Vector{Vector{Float64}}(undef, length(obs))
+    for k in eachindex(obs)
+        stats[k] = _gen_compute_stats(stage_fusion[k], obs[k])
+    end
+    return stats
+end
+
+# Statistics for the given obs vectors under a resolved plan's fusion map.
+function _gen_stats(resolved::ResolvedSignaturePlan, obs::Vector{Vector{Float64}})
+    return _gen_build_stats(_generated_scorer_cache(resolved).stage_fusion, obs)
+end
+
+# Dense obs vectors + their statistics for a memoized `ObservationStage`, cached
+# single-slot on the resolved plan (issue #138). The public
+# `logjoint_gradient_unconstrained` builds a fresh objective per call; without
+# this memo the O(observations) statistics scan would run every call, keeping
+# the entry point O(observations) even though the fused gradient evaluation is
+# O(1). Reused while the SAME stage object is current; a new/rebuilt stage
+# rebuilds obs+stats once. Returns `(obs, stats)` or `nothing` when the stage is
+# not densifiable.
+function _gen_obs_and_stats_for_stage(resolved::ResolvedSignaturePlan, stage::_MaybeObservationStage)
+    cached = resolved.generated_obs_stats_cache[]
+    if cached isa Tuple{Any,Vector{Vector{Float64}},Vector{Vector{Float64}}} && cached[1] === stage
+        return (cached[2], cached[3])
+    end
+    obs = _gen_obs_from_stage(stage)
+    isnothing(obs) && return nothing
+    stats = _gen_stats(resolved, obs)
+    resolved.generated_obs_stats_cache[] = (stage, obs, stats)
+    return (obs, stats)
 end
 
 # --- slot collection (which env slots become `local`s vs loop iterators) ------
@@ -216,6 +393,18 @@ function _gen_emit_step!(body::Vector{Any}, step::CompiledDeterministicPlanStep,
 end
 
 function _gen_emit_step!(body::Vector{Any}, step::CompiledLoopPlanStep, reject::Bool)
+    family = _gen_loop_fusable_family(step)
+    if isnothing(family)
+        _gen_emit_plain_loop!(body, step, reject)
+    else
+        _gen_emit_fusable_loop!(body, step, family, reject)
+    end
+    return nothing
+end
+
+# The per-observation loop: the fallback tier (also the whole body of a
+# non-fusable loop). Emits `for iter = iterable; <body>; end`.
+function _gen_emit_plain_loop!(body::Vector{Any}, step::CompiledLoopPlanStep, reject::Bool)
     inner = Any[]
     for s in step.body
         _gen_emit_step!(inner, s, reject)
@@ -225,6 +414,101 @@ function _gen_emit_step!(body::Vector{Any}, step::CompiledLoopPlanStep, reject::
         Expr(:for, Expr(:(=), _gen_slot_sym(step.iterator_slot), _gen_emit_expr(step.iterable)), Expr(:block, inner...)),
     )
     return nothing
+end
+
+# A fusable loop: read the stage's statistics once and, gated on the runtime
+# suffstats switch AND non-empty (closed-form-representable) stats, add the O(1)
+# fused sum; otherwise run the per-observation loop. The two branches contribute
+# the same accumulator type, so the scorer stays type-stable for ForwardDiff.
+function _gen_emit_fusable_loop!(body::Vector{Any}, step::CompiledLoopPlanStep, family::Symbol, reject::Bool)
+    choice = step.body[1]
+    statvec = gensym(:stats)
+    push!(body, Expr(:(=), statvec, Expr(:ref, :stats, choice.stage_index)))
+    fused = Any[]
+    _gen_push_fused_score!(fused, _gen_dist_expr(choice), d -> _gen_fused_sum_expr(family, d, statvec), reject)
+    fallback = Any[]
+    _gen_emit_plain_loop!(fallback, step, reject)
+    condition = Expr(:&&, Expr(:ref, :_GEN_SCORER_SUFFSTATS), Expr(:call, !, Expr(:call, isempty, statvec)))
+    push!(body, Expr(:if, condition, Expr(:block, fused...), Expr(:block, fallback...)))
+    return nothing
+end
+
+# Push the fused score contribution: construct the distribution ONCE (giving the
+# interpreter's parameter validation -- non-positive sigma/rate/lambda throw in
+# non-reject mode, score -Inf in reject mode, exactly as the per-observation
+# construction does), then add the closed-form sum built from the constructed
+# distribution's fields and the stored statistics. `sum_fn(d)` returns the sum
+# expression for the distribution symbol `d`. Mirrors `_gen_push_score!`.
+function _gen_push_fused_score!(body::Vector{Any}, dist_expr, sum_fn, reject::Bool)
+    d = gensym(:dist)
+    if !reject
+        push!(body, Expr(:(=), d, dist_expr))
+        push!(body, Expr(:(+=), :acc, sum_fn(d)))
+        return nothing
+    end
+    ok = gensym(:ok)
+    e = gensym(:err)
+    push!(body, Expr(:local, d))
+    push!(body, Expr(:(=), ok, true))
+    push!(
+        body,
+        Expr(
+            :try,
+            Expr(:block, Expr(:(=), d, dist_expr)),
+            e,
+            Expr(
+                :block,
+                Expr(
+                    :||,
+                    Expr(:call, |, Expr(:call, isa, e, ArgumentError), Expr(:call, isa, e, DomainError)),
+                    Expr(:call, rethrow),
+                ),
+                Expr(:(=), ok, false),
+            ),
+        ),
+    )
+    push!(
+        body,
+        Expr(
+            :if,
+            ok,
+            Expr(:(+=), :acc, sum_fn(d)),
+            Expr(:(+=), :acc, Expr(:call, oftype, :acc, -Inf)),
+        ),
+    )
+    return nothing
+end
+
+# The closed-form logpdf sum for a fusable family, over the constructed
+# distribution `d` (a symbol) and the stage statistics vector `statvec` (a
+# symbol). ForwardDiff differentiates these expressions w.r.t. the Dual
+# parameters carried by `d`'s fields, recovering the analytic gradient; the
+# result reassociates the per-observation sum, so it matches the interpreter to
+# tolerance, not bitwise. Normal uses the cancellation-free centered form.
+function _gen_fused_sum_expr(family::Symbol, d::Symbol, statvec::Symbol)
+    if family === :normal
+        return quote
+            let n = $statvec[1], ybar = $statvec[2], residual = $statvec[3], centered_sum_squares = $statvec[4], mu = $d.mu,
+                sigma = $d.sigma
+
+                delta = ybar - mu
+                squared_z_sum = (centered_sum_squares + delta * (2 * residual + n * delta)) / (sigma * sigma)
+                -n * (log(sigma) + log(2 * pi) / 2) - squared_z_sum / 2
+            end
+        end
+    elseif family === :exponential
+        return quote
+            let n = $statvec[1], total = $statvec[2], rate = $d.rate
+                n * log(rate) - rate * total
+            end
+        end
+    else # :poisson
+        return quote
+            let n = $statvec[1], total = $statvec[2], log_factorial_total = $statvec[3], lambda = $d.lambda
+                total * log(lambda) - n * lambda - log_factorial_total
+            end
+        end
+    end
 end
 
 # --- function body assembly + @eval ------------------------------------------
@@ -258,7 +542,14 @@ function _gen_build_function(resolved::ResolvedSignaturePlan, reject::Bool)
     name = gensym(reject ? :gen_scorer_reject : :gen_scorer)
     fnexpr = Expr(
         :function,
-        Expr(:call, name, Expr(:(::), :args, :Tuple), :params, Expr(:(::), :obs, :(Vector{Vector{Float64}}))),
+        Expr(
+            :call,
+            name,
+            Expr(:(::), :args, :Tuple),
+            :params,
+            Expr(:(::), :obs, :(Vector{Vector{Float64}})),
+            Expr(:(::), :stats, :(Vector{Vector{Float64}})),
+        ),
         Expr(:block, body...),
     )
     return @eval $fnexpr
@@ -274,7 +565,10 @@ function _generated_scorer_cache(resolved::ResolvedSignaturePlan)
     return lock(_PLAN_MEMO_LOCK) do
         again = resolved.generated_scorer_cache[]
         if isnothing(again)
-            again = _GeneratedScorerCache(_gen_structural_ok(resolved.compiled))
+            again = _GeneratedScorerCache(
+                _gen_structural_ok(resolved.compiled),
+                _gen_stage_fusion(resolved.compiled),
+            )
             resolved.generated_scorer_cache[] = again
         end
         again::_GeneratedScorerCache
@@ -389,6 +683,10 @@ mutable struct _GenGradientObjective{S,M,R,A,C}
     constraints::C
     seed::Vector{Float64}
     obs::Vector{Vector{Float64}}
+    # sufficient statistics parallel to `obs` (issue #138), rebuilt with `obs`
+    # whenever the constraints mutate. Data-derived, so one build serves every
+    # parameter vector the cached scorer is called with.
+    stats::Vector{Vector{Float64}}
     obs_mutation_count::Int
     reject::Bool
 end
@@ -397,7 +695,7 @@ function (objective::_GenGradientObjective)(theta)
     constrained, logabsdet = _transform_to_constrained_with_logabsdet(
         objective.model, objective.resolved, theta, objective.args, objective.constraints,
     )
-    return objective.scorer(objective.args, constrained, objective.obs) + logabsdet
+    return objective.scorer(objective.args, constrained, objective.obs, objective.stats) + logabsdet
 end
 
 function _gen_gradient_objective(
@@ -409,9 +707,12 @@ function _gen_gradient_objective(
     seed::Vector{Float64},
     obs::Vector{Vector{Float64}};
     reject::Bool=false,
+    stats::Union{Nothing,Vector{Vector{Float64}}}=nothing,
 )
+    resolved_stats = isnothing(stats) ? _gen_stats(resolved, obs) : stats
     return _GenGradientObjective(
-        scorer, model, resolved, args, constraints, seed, obs, constraints.mutation_count, reject,
+        scorer, model, resolved, args, constraints, seed, obs, resolved_stats,
+        constraints.mutation_count, reject,
     )
 end
 
@@ -426,6 +727,7 @@ function _gen_refresh_obs!(objective::_GenGradientObjective)
     new_obs = _gen_obs_from_stage(stage)
     isnothing(new_obs) && return false
     objective.obs = new_obs
+    objective.stats = _gen_stats(objective.resolved, new_obs)
     objective.obs_mutation_count = objective.constraints.mutation_count
     return true
 end
