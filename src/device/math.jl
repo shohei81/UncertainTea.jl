@@ -130,6 +130,28 @@ end
     return ifelse(in_support, base, _device_neginf(T))
 end
 
+# Numerically stable `log(1 + exp(eta))` (issues #149/#150), mirroring the CPU
+# `_bernoullilogit_log1p_exp`: the branch keeps the exponentiated argument
+# non-positive so it never overflows (finite at |eta| = 90). Exception-free
+# (`ifelse`) for the device; both branches are evaluated but only one selected,
+# and neither can produce a NaN on a finite eta.
+@inline _device_log1p_exp(eta::T) where {T} =
+    ifelse(eta > zero(T), eta + log1p(exp(-eta)), log1p(exp(eta)))
+
+# Logit-parameterized Bernoulli logpdf `x*eta - log1p(exp(eta))` (issues
+# #149/#150), mirroring the CPU `_backend_bernoullilogit_logpdf`. Support matches
+# `_device_bernoulli_logpdf` (only 0/1 in support; anything else scores -Inf under
+# the exception-free device contract). The well-conditioned gradient
+# `d/d_eta = x - logistic(eta)` falls out of forward-mode through this closed form
+# (log1p_exp differentiates to the logistic), so the gradient kernel needs no
+# special seeding beyond the duals that already flow through `eta`.
+@inline function _device_bernoullilogit_logpdf(eta::T, x::T) where {T}
+    log_normalizer = _device_log1p_exp(eta)
+    base = x * eta - log_normalizer
+    in_support = (x == zero(T)) | (x == one(T))
+    return ifelse(in_support, base, _device_neginf(T))
+end
+
 # Nonnegative exact-integer support check shared by the count families; mirrors the
 # CPU `_poisson_count` acceptance (staged integer counts are exact in Float32/64).
 @inline _device_count_ok(x::T, k::T) where {T} = (x >= zero(T)) & (x == k)

@@ -361,6 +361,61 @@ end
 end
 
 @inline function _device_grad_score_step(
+    step::DeviceBernoulliLogitChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    eta = _device_grad_eval(step.eta, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    e, v = promote(eta, value)
+    return (_device_bernoullilogit_logpdf(e, v) + lad, cur)
+end
+
+# Fused GLM linear predictor in duals: `eta = intercept + sum_d coef[d]*X[d]`.
+# Each coefficient dual seeds derivative 1 iff its unconstrained row is the
+# thread's differentiation target `pidx`, so forward-mode reproduces the CPU
+# analytic `d_eta/d_coef[d] = X[d, index]` seed; the intercept dual carries
+# `d_eta/d_intercept = 1` through its slot read. The covariate column is constant
+# data (zero derivative). The whole density (value + gradient) differentiates
+# through `_device_bernoullilogit_logpdf`, giving `d/d_eta = y - logistic(eta)`.
+@inline function _device_grad_score_step(
+    step::DeviceBernoulliLogitGLMChoiceStep{D},
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+) where {D}
+    T = _device_dual_basetype(eltype(slots))
+    intercept = _device_grad_eval(step.intercept, slots, pidx, b)
+    terms = ntuple(Val(D)) do i
+        row = step.coef_value_source + Int32(i - 1)
+        raw = @inbounds params[row, b]
+        coef = DeviceDual{T}(convert(T, raw), ifelse(row == Int32(pidx), one(T), zero(T)))
+        x = @inbounds observed[cursor+Int32(i-1), b]
+        coef * x
+    end
+    eta = intercept + _device_tuple_sum(terms)
+    cur = cursor + Int32(D)
+    y = DeviceDual{T}(convert(T, @inbounds(observed[cur, b])), zero(T))
+    _device_grad_store_binding!(slots, step.binding_slot, y, pidx, b)
+    e, v = promote(eta, y)
+    return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
+end
+
+@inline function _device_grad_score_step(
     step::DevicePoissonChoiceStep,
     slots,
     params,
