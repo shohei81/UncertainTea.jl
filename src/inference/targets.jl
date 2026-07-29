@@ -11,10 +11,16 @@ end
 function target_logdensity(target::ModelDensityTarget, position::AbstractVector)
     # sampler-owned evaluation: Stan-style reject semantics (issue #157) --
     # invalid distribution parameters at a trajectory position score -Inf (a
-    # rejected proposal / divergence) instead of aborting the run
-    return logjoint_unconstrained(
-        target.model, position, target.args, target.constraints; reject_invalid_parameters=true,
-    )
+    # rejected proposal / divergence) instead of aborting the run.
+    #
+    # Evaluate through the observations the gradient cache already staged (issue
+    # #188): the public `logjoint_unconstrained` re-stages all N observations on
+    # every call (O(N) plan re-walk rebuilding `(:y,i)` addresses), which NUTS
+    # runs at every Hamiltonian evaluation and which dominated the per-draw cost
+    # once scoring became O(1) (#144/#189). The gradient cache holds the staged
+    # observations (built reject-on for the samplers), so this reuses them with an
+    # O(1) staleness check; draws stay bitwise identical (pure caching).
+    return _logjoint_value_from_cache(target.gradient_cache, position)
 end
 
 function target_gradient!(target::ModelDensityTarget, position::AbstractVector)
