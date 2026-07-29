@@ -35,58 +35,15 @@
 # masked column copies, the checkpoint store, and the two U-turn reductions are
 # new here.
 
-# Direction-aware momentum kick: p += sign[b] * factor * grad, over active chains.
-@kernel function _device_nuts_kick!(p, @Const(grad), @Const(active), @Const(sign), factor)
-    idx = @index(Global, NTuple)
-    pidx = idx[1]
-    b = idx[2]
-    if @inbounds(active[b]) != 0x00
-        @inbounds p[pidx, b] += sign[b] * factor * grad[pidx, b]
-    end
-end
-
-# Direction-aware position drift, over active chains. The arithmetic must MATCH the
-# host integrator's association bit-for-bit -- `signed_step * (inverse_mass * p)`
-# with `signed_step = direction * step` -- because floating-point multiply is not
-# associative and a 1-ulp energy difference amplifies through dual-averaging step
-# adaptation into a macroscopic trajectory divergence (see device_masked_nuts.jl's tight oracle).
-@kernel function _device_nuts_drift!(q, @Const(p), @Const(inverse_mass), @Const(active), @Const(sign), step)
-    idx = @index(Global, NTuple)
-    pidx = idx[1]
-    b = idx[2]
-    if @inbounds(active[b]) != 0x00
-        signed = sign[b] * step
-        @inbounds q[pidx, b] += signed * (inverse_mass[pidx] * p[pidx, b])
-    end
-end
-
-# Per-chain-step variants (issue #137): the step size is a C-length device vector
-# `step[b]` instead of a scalar. `scale` folds the leapfrog half-factor into the
-# kick (0.5 for a half-kick). The shared `inverse_mass` P-vector is unchanged, and
-# the `signed_step * (inverse_mass * p)` association is preserved per chain. These
-# power ONLY the pooled-mass / per-chain-step device path; the scalar kernels above
-# still drive the bitwise-oracle-pinned shared path untouched.
-@kernel function _device_nuts_kick_perchain!(p, @Const(grad), @Const(active), @Const(sign), @Const(step), scale)
-    idx = @index(Global, NTuple)
-    pidx = idx[1]
-    b = idx[2]
-    if @inbounds(active[b]) != 0x00
-        @inbounds p[pidx, b] += sign[b] * (scale * step[b]) * grad[pidx, b]
-    end
-end
-
-@kernel function _device_nuts_drift_perchain!(q, @Const(p), @Const(inverse_mass), @Const(active), @Const(sign), @Const(step))
-    idx = @index(Global, NTuple)
-    pidx = idx[1]
-    b = idx[2]
-    if @inbounds(active[b]) != 0x00
-        signed = sign[b] * step[b]
-        @inbounds q[pidx, b] += signed * (inverse_mass[pidx] * p[pidx, b])
-    end
-end
+# The direction-aware leaf integrator (kick + drift, shared step and per-chain
+# step) and the full-column copy are FUSED into the leaf micro-kernels below
+# (`_device_nuts_leaf_pre[_perchain]!` / `_device_nuts_leaf_post[_perchain]!`,
+# issue #152) -- the standalone kick/drift/copy-all kernels are no longer launched.
 
 # Masked column copy of a (position, momentum, gradient) triple: for each chain
-# whose UInt8 mask is set, copy the whole column from source to destination.
+# whose UInt8 mask is set, copy the whole column from source to destination. Still
+# used for the single-mask accept-copy and final-proposal copy; the multi-mask
+# scatters are fused (see `_device_nuts_scatter3!` / `_device_nuts_merge_copy!`).
 @kernel function _device_nuts_copy_columns!(
     dest_position, dest_momentum, dest_gradient,
     @Const(src_position), @Const(src_momentum), @Const(src_gradient), @Const(mask),
@@ -101,17 +58,264 @@ end
     end
 end
 
-# Unconditional full column copy of a (position, momentum, gradient) triple.
-@kernel function _device_nuts_copy_columns_all!(
-    dest_position, dest_momentum, dest_gradient,
+# ---- fused leaf micro-kernels (issue #152 Tier 1) ------------------------------
+# These fuse the sequences of per-element micro-kernels in `_device_nuts_leaf!`
+# and the round stages into single launches WITHOUT changing the order of any
+# floating-point op. Every arithmetic expression is copied verbatim from the
+# component kernels above (same association `signed * (inverse_mass * p)`, same
+# reduction order over `pidx`), so the CPU()-Float64 device-vs-host bitwise oracle
+# is preserved.
+
+# Pre-gradient leaf: full column copy (tree_current -> working q/p/grad) fused with
+# the initial half-kick and drift over active chains. Replaces
+# copy_columns_all + kick + drift (3 launches -> 1). Element-wise (P x C); each
+# thread owns one (pidx, b) so the kicked `pv` it drifts with is its own register.
+@kernel function _device_nuts_leaf_pre!(
+    q, p, grad,
     @Const(src_position), @Const(src_momentum), @Const(src_gradient),
+    @Const(inverse_mass), @Const(active), @Const(sign), step, half,
 )
     idx = @index(Global, NTuple)
     pidx = idx[1]
     b = idx[2]
-    @inbounds dest_position[pidx, b] = src_position[pidx, b]
-    @inbounds dest_momentum[pidx, b] = src_momentum[pidx, b]
-    @inbounds dest_gradient[pidx, b] = src_gradient[pidx, b]
+    qv = @inbounds src_position[pidx, b]
+    pv = @inbounds src_momentum[pidx, b]
+    gv = @inbounds src_gradient[pidx, b]
+    if @inbounds(active[b]) != 0x00
+        s = @inbounds sign[b]
+        pv += s * half * gv
+        signed = s * step
+        qv += signed * (@inbounds(inverse_mass[pidx]) * pv)
+    end
+    @inbounds q[pidx, b] = qv
+    @inbounds p[pidx, b] = pv
+    @inbounds grad[pidx, b] = gv
+end
+
+# Per-chain-step pre-gradient leaf (issue #137): `half_scale` folds the leapfrog
+# half factor into the per-chain step kick (0.5), mirroring
+# `_device_nuts_kick_perchain!` + `_device_nuts_drift_perchain!`.
+@kernel function _device_nuts_leaf_pre_perchain!(
+    q, p, grad,
+    @Const(src_position), @Const(src_momentum), @Const(src_gradient),
+    @Const(inverse_mass), @Const(active), @Const(sign), @Const(step), half_scale,
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    qv = @inbounds src_position[pidx, b]
+    pv = @inbounds src_momentum[pidx, b]
+    gv = @inbounds src_gradient[pidx, b]
+    if @inbounds(active[b]) != 0x00
+        s = @inbounds sign[b]
+        sb = @inbounds step[b]
+        pv += s * (half_scale * sb) * gv
+        signed = s * sb
+        qv += signed * (@inbounds(inverse_mass[pidx]) * pv)
+    end
+    @inbounds q[pidx, b] = qv
+    @inbounds p[pidx, b] = pv
+    @inbounds grad[pidx, b] = gv
+end
+
+# Post-gradient leaf: final-step validity fold, closing half-kick over valid
+# chains, and the proposed Hamiltonian, all in one per-chain (ndrange = C) launch.
+# Replaces validity_update_final + kick + hamiltonian (3 launches -> 1). Seeds
+# `valid` from `active` directly (so the leaf no longer needs a device valid<-active
+# copy). The closing kick and the kinetic reduction run in the same per-element
+# order as the component kernels.
+@kernel function _device_nuts_leaf_post!(
+    valid, proposed_energy, p,
+    @Const(grad), @Const(logjoint), @Const(active), @Const(sign), @Const(inverse_mass),
+    half, num_params::Int,
+)
+    b = @index(Global)
+    if @inbounds(active[b]) != 0x00
+        ok = isfinite(@inbounds logjoint[b])
+        for pidx = 1:num_params
+            ok &= isfinite(@inbounds grad[pidx, b])
+        end
+        if ok
+            s = @inbounds sign[b]
+            for pidx = 1:num_params
+                @inbounds p[pidx, b] += s * half * grad[pidx, b]
+            end
+        end
+        @inbounds valid[b] = ok ? 0x01 : 0x00
+    else
+        @inbounds valid[b] = 0x00
+    end
+    kinetic = zero(eltype(proposed_energy))
+    for pidx = 1:num_params
+        m = @inbounds p[pidx, b]
+        kinetic += m * m * @inbounds(inverse_mass[pidx])
+    end
+    @inbounds proposed_energy[b] = kinetic / 2 - @inbounds(logjoint[b])
+end
+
+# Per-chain-step post-gradient leaf (issue #137).
+@kernel function _device_nuts_leaf_post_perchain!(
+    valid, proposed_energy, p,
+    @Const(grad), @Const(logjoint), @Const(active), @Const(sign), @Const(step), @Const(inverse_mass),
+    half_scale, num_params::Int,
+)
+    b = @index(Global)
+    if @inbounds(active[b]) != 0x00
+        ok = isfinite(@inbounds logjoint[b])
+        for pidx = 1:num_params
+            ok &= isfinite(@inbounds grad[pidx, b])
+        end
+        if ok
+            s = @inbounds sign[b]
+            sb = @inbounds step[b]
+            for pidx = 1:num_params
+                @inbounds p[pidx, b] += s * (half_scale * sb) * grad[pidx, b]
+            end
+        end
+        @inbounds valid[b] = ok ? 0x01 : 0x00
+    else
+        @inbounds valid[b] = 0x00
+    end
+    kinetic = zero(eltype(proposed_energy))
+    for pidx = 1:num_params
+        m = @inbounds p[pidx, b]
+        kinetic += m * m * @inbounds(inverse_mass[pidx])
+    end
+    @inbounds proposed_energy[b] = kinetic / 2 - @inbounds(logjoint[b])
+end
+
+# Fused subtree-state seed (mirror `_device_initialize_subtree_states!`): each of
+# the four subtree endpoints (current/left/right/proposal) receives the SAME chosen
+# frontier column -- the left frontier for `mask[b,1]` (copy_left) chains, the right
+# frontier for `mask[b,2]` (copy_right) chains. copy_left/copy_right are mutually
+# exclusive by construction (direction sign), so the `elseif` matches the two
+# independent masked copies exactly. Replaces 8 masked-copy launches with 1.
+@kernel function _device_nuts_init_states!(
+    cur_p, cur_m, cur_g, tl_p, tl_m, tl_g, tr_p, tr_m, tr_g, pr_p, pr_m, pr_g,
+    @Const(l_p), @Const(l_m), @Const(l_g), @Const(r_p), @Const(r_m), @Const(r_g), @Const(mask),
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(mask[b, 1]) != 0x00
+        vp = @inbounds l_p[pidx, b]
+        vm = @inbounds l_m[pidx, b]
+        vg = @inbounds l_g[pidx, b]
+        @inbounds cur_p[pidx, b] = vp
+        @inbounds cur_m[pidx, b] = vm
+        @inbounds cur_g[pidx, b] = vg
+        @inbounds tl_p[pidx, b] = vp
+        @inbounds tl_m[pidx, b] = vm
+        @inbounds tl_g[pidx, b] = vg
+        @inbounds tr_p[pidx, b] = vp
+        @inbounds tr_m[pidx, b] = vm
+        @inbounds tr_g[pidx, b] = vg
+        @inbounds pr_p[pidx, b] = vp
+        @inbounds pr_m[pidx, b] = vm
+        @inbounds pr_g[pidx, b] = vg
+    elseif @inbounds(mask[b, 2]) != 0x00
+        vp = @inbounds r_p[pidx, b]
+        vm = @inbounds r_m[pidx, b]
+        vg = @inbounds r_g[pidx, b]
+        @inbounds cur_p[pidx, b] = vp
+        @inbounds cur_m[pidx, b] = vm
+        @inbounds cur_g[pidx, b] = vg
+        @inbounds tl_p[pidx, b] = vp
+        @inbounds tl_m[pidx, b] = vm
+        @inbounds tl_g[pidx, b] = vg
+        @inbounds tr_p[pidx, b] = vp
+        @inbounds tr_m[pidx, b] = vm
+        @inbounds tr_g[pidx, b] = vg
+        @inbounds pr_p[pidx, b] = vp
+        @inbounds pr_m[pidx, b] = vm
+        @inbounds pr_g[pidx, b] = vg
+    end
+end
+
+# Fused cohort scatter (mirror the three masked copies in
+# `_device_advance_cohort_impl!`): tree_left/right/proposal <- tree_current under
+# copy_left (mask[b,1]) / copy_right (mask[b,2]) / select_proposal (mask[b,3]). The
+# three destinations are distinct buffers, so the independent `if`s cannot collide.
+# Replaces 3 masked-copy launches with 1.
+@kernel function _device_nuts_scatter3!(
+    dl_p, dl_m, dl_g, dr_p, dr_m, dr_g, dp_p, dp_m, dp_g,
+    @Const(s_p), @Const(s_m), @Const(s_g), @Const(mask),
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    sp = @inbounds s_p[pidx, b]
+    sm = @inbounds s_m[pidx, b]
+    sg = @inbounds s_g[pidx, b]
+    if @inbounds(mask[b, 1]) != 0x00
+        @inbounds dl_p[pidx, b] = sp
+        @inbounds dl_m[pidx, b] = sm
+        @inbounds dl_g[pidx, b] = sg
+    end
+    if @inbounds(mask[b, 2]) != 0x00
+        @inbounds dr_p[pidx, b] = sp
+        @inbounds dr_m[pidx, b] = sm
+        @inbounds dr_g[pidx, b] = sg
+    end
+    if @inbounds(mask[b, 3]) != 0x00
+        @inbounds dp_p[pidx, b] = sp
+        @inbounds dp_m[pidx, b] = sm
+        @inbounds dp_g[pidx, b] = sg
+    end
+end
+
+# Fused continuation-frontier merge copy (mirror the two masked copies in
+# `_device_merge_cohort!`): left <- tree_left (copy_left, mask[b,1]) and
+# right <- tree_right (copy_right, mask[b,2]). Distinct source/destination pairs,
+# mutually exclusive masks. Replaces 2 masked-copy launches with 1.
+@kernel function _device_nuts_merge_copy!(
+    l_p, l_m, l_g, r_p, r_m, r_g,
+    @Const(tl_p), @Const(tl_m), @Const(tl_g), @Const(tr_p), @Const(tr_m), @Const(tr_g), @Const(mask),
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    if @inbounds(mask[b, 1]) != 0x00
+        @inbounds l_p[pidx, b] = tl_p[pidx, b]
+        @inbounds l_m[pidx, b] = tl_m[pidx, b]
+        @inbounds l_g[pidx, b] = tl_g[pidx, b]
+    end
+    if @inbounds(mask[b, 2]) != 0x00
+        @inbounds r_p[pidx, b] = tr_p[pidx, b]
+        @inbounds r_m[pidx, b] = tr_m[pidx, b]
+        @inbounds r_g[pidx, b] = tr_g[pidx, b]
+    end
+end
+
+# Fused merge reductions: the whole-trajectory frontier U-turn test and the tree
+# proposal kinetic energy, both per-chain (ndrange = C). The two reductions read
+# disjoint inputs and write disjoint outputs, and each keeps its component kernel's
+# `pidx` reduction order. Replaces frontier_turning + kinetic (2 launches -> 1).
+@kernel function _device_nuts_frontier_turning_kinetic!(
+    turning, kinetic,
+    @Const(left_position), @Const(right_position), @Const(left_momentum), @Const(right_momentum),
+    @Const(proposal_momentum), @Const(active), @Const(inverse_mass), num_params::Int,
+)
+    b = @index(Global)
+    if @inbounds(active[b]) != 0x00
+        left_dot = zero(eltype(left_position))
+        right_dot = zero(eltype(left_position))
+        for pidx = 1:num_params
+            delta = @inbounds(right_position[pidx, b]) - @inbounds(left_position[pidx, b])
+            im = @inbounds inverse_mass[pidx]
+            left_dot += delta * im * @inbounds(left_momentum[pidx, b])
+            right_dot += delta * im * @inbounds(right_momentum[pidx, b])
+        end
+        @inbounds turning[b] = (left_dot <= 0 || right_dot <= 0) ? 0x01 : 0x00
+    else
+        @inbounds turning[b] = 0x00
+    end
+    acc = zero(eltype(kinetic))
+    for pidx = 1:num_params
+        m = @inbounds proposal_momentum[pidx, b]
+        acc += m * m * @inbounds(inverse_mass[pidx])
+    end
+    @inbounds kinetic[b] = acc / 2
 end
 
 # Store the current leaf (position, momentum) into checkpoint slot `slot` for each
@@ -170,41 +374,9 @@ end
     end
 end
 
-# Whole-trajectory (merge-level) U-turn over the continuation frontier: for each
-# active chain, delta = right - left, turn if delta.M^{-1}left_mom <= 0 ||
-# delta.M^{-1}right_mom <= 0 (metric-aware, mirrors host _batched_is_turning!).
-@kernel function _device_nuts_frontier_turning!(
-    turning,
-    @Const(left_position), @Const(right_position),
-    @Const(left_momentum), @Const(right_momentum),
-    @Const(active), @Const(inverse_mass), num_params::Int,
-)
-    b = @index(Global)
-    if @inbounds(active[b]) != 0x00
-        left_dot = zero(eltype(left_position))
-        right_dot = zero(eltype(left_position))
-        for pidx = 1:num_params
-            delta = @inbounds(right_position[pidx, b]) - @inbounds(left_position[pidx, b])
-            im = @inbounds inverse_mass[pidx]
-            left_dot += delta * im * @inbounds(left_momentum[pidx, b])
-            right_dot += delta * im * @inbounds(right_momentum[pidx, b])
-        end
-        @inbounds turning[b] = (left_dot <= 0 || right_dot <= 0) ? 0x01 : 0x00
-    else
-        @inbounds turning[b] = 0x00
-    end
-end
-
-# Per-chain kinetic energy: kinetic[b] = 0.5 * sum_p (momentum^2 * inverse_mass).
-@kernel function _device_nuts_kinetic!(kinetic, @Const(momentum), @Const(inverse_mass), num_params::Int)
-    b = @index(Global)
-    acc = zero(eltype(kinetic))
-    for pidx = 1:num_params
-        m = @inbounds momentum[pidx, b]
-        acc += m * m * @inbounds(inverse_mass[pidx])
-    end
-    @inbounds kinetic[b] = acc / 2
-end
+# The merge-level whole-trajectory U-turn and the tree-proposal kinetic energy are
+# FUSED into `_device_nuts_frontier_turning_kinetic!` (issue #152); the standalone
+# frontier-turning and kinetic kernels are no longer launched.
 
 # Per-chain "did the proposal move off the current state" flag, computed in the
 # backend's OWN precision. This mirrors the host `_batched_positions_moved!`
@@ -272,8 +444,13 @@ mutable struct DeviceNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     mask_a::Any              # UInt8 generic mask upload buffer
     mask_b::Any              # UInt8
     mask_c::Any              # UInt8
+    # Batched mask upload buffer (issue #152): a C x 3 UInt8 device matrix holding up
+    # to three per-chain masks packed for the fused init / scatter / merge-copy
+    # kernels, so several small mask uploads collapse into one copyto! per stage.
+    mask_batch::Any          # C x 3 UInt8
     # host staging (avoid per-call allocation)
     host_u8::Vector{UInt8}
+    host_mask_batch::Matrix{UInt8}   # C x 3
     host_energy::Vector{T}
     sign_host::Vector{T}
     step_host::Vector{T}
@@ -338,7 +515,9 @@ function DeviceNUTSWorkspace(
         vecU8(), vecU8(), vecU8(),
         vecT(), vecT(),
         vecU8(), vecU8(), vecU8(),
+        fill!(KernelAbstractions.allocate(backend, UInt8, C, 3), 0x00),
         Vector{UInt8}(undef, C),
+        Matrix{UInt8}(undef, C, 3),
         Vector{T}(undef, C),
         Vector{T}(undef, C),
         Vector{T}(undef, C),
@@ -358,6 +537,21 @@ end
 _upload_mask!(dev, host_bits::AbstractVector{Bool}, stage::Vector{UInt8}) = begin
     @inbounds for i in eachindex(host_bits)
         stage[i] = host_bits[i] ? 0x01 : 0x00
+    end
+    copyto!(dev, stage)
+    return dev
+end
+
+# Batched mask upload (issue #152): pack several C-length host Bool masks into the
+# columns of a C x 3 UInt8 staging matrix and push them to the device in ONE
+# copyto!. `cols` is a tuple of host Bool vectors (1..3 of them); columns of
+# `stage`/`dev` beyond `length(cols)` are left as-is (the consuming kernel never
+# reads them). Replaces N separate `_upload_mask!` transfers with one.
+_upload_masks!(dev, cols::Tuple, stage::Matrix{UInt8}) = begin
+    @inbounds for (k, bits) in enumerate(cols)
+        for i in eachindex(bits)
+            stage[i, k] = bits[i] ? 0x01 : 0x00
+        end
     end
     copyto!(dev, stage)
     return dev
@@ -424,23 +618,23 @@ function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, step_size::Real) wh
     h = convert(T, step_size)
     half = convert(T, step_size / 2)
 
+    # One mask upload (active); the fused post-gradient kernel seeds `valid` from
+    # `active` on-device, so the old device valid<-active copy is gone.
     _upload_mask!(dws.active, ws.subtree_active, dws.host_u8)
-    copyto!(dws.valid, dws.active)
-    _device_nuts_copy_columns_all!(be)(
-        q,
-        p,
-        grad,
-        dws.tree_current_position,
-        dws.tree_current_momentum,
-        dws.tree_current_gradient;
-        ndrange=(P, C),
+    # Fused pre-gradient leaf: copy tree_current -> (q, p, grad) + initial half-kick
+    # + drift, in one launch (was copy_columns_all + kick + drift).
+    _device_nuts_leaf_pre!(be)(
+        q, p, grad,
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.inverse_mass, dws.active, dws.sign, h, half; ndrange=(P, C),
     )
-    _device_nuts_kick!(be)(p, dws.tree_current_gradient, dws.active, dws.sign, half; ndrange=(P, C))
-    _device_nuts_drift!(be)(q, p, dws.inverse_mass, dws.active, dws.sign, h; ndrange=(P, C))
     _device_launch_gradient!(inner)
-    _device_hmc_validity_update_final!(be)(dws.valid, grad, logj, P; ndrange=C)
-    _device_nuts_kick!(be)(p, grad, dws.valid, dws.sign, half; ndrange=(P, C))
-    _device_hmc_hamiltonian!(be)(dws.proposed_energy, p, dws.inverse_mass, logj, P; ndrange=C)
+    # Fused post-gradient leaf: final-step validity + closing half-kick + proposed
+    # Hamiltonian, in one launch (was validity_update_final + kick + hamiltonian).
+    _device_nuts_leaf_post!(be)(
+        dws.valid, dws.proposed_energy, p,
+        grad, logj, dws.active, dws.sign, dws.inverse_mass, half, P; ndrange=C,
+    )
     KernelAbstractions.synchronize(be)
 
     _download_bits!(ws.control.step_valid, dws.valid, dws.host_u8)
@@ -465,22 +659,16 @@ function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, ::Nothing) where {T
     half = convert(T, 0.5)
 
     _upload_mask!(dws.active, ws.subtree_active, dws.host_u8)
-    copyto!(dws.valid, dws.active)
-    _device_nuts_copy_columns_all!(be)(
-        q,
-        p,
-        grad,
-        dws.tree_current_position,
-        dws.tree_current_momentum,
-        dws.tree_current_gradient;
-        ndrange=(P, C),
+    _device_nuts_leaf_pre_perchain!(be)(
+        q, p, grad,
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.inverse_mass, dws.active, dws.sign, dws.step, half; ndrange=(P, C),
     )
-    _device_nuts_kick_perchain!(be)(p, dws.tree_current_gradient, dws.active, dws.sign, dws.step, half; ndrange=(P, C))
-    _device_nuts_drift_perchain!(be)(q, p, dws.inverse_mass, dws.active, dws.sign, dws.step; ndrange=(P, C))
     _device_launch_gradient!(inner)
-    _device_hmc_validity_update_final!(be)(dws.valid, grad, logj, P; ndrange=C)
-    _device_nuts_kick_perchain!(be)(p, grad, dws.valid, dws.sign, dws.step, half; ndrange=(P, C))
-    _device_hmc_hamiltonian!(be)(dws.proposed_energy, p, dws.inverse_mass, logj, P; ndrange=C)
+    _device_nuts_leaf_post_perchain!(be)(
+        dws.valid, dws.proposed_energy, p,
+        grad, logj, dws.active, dws.sign, dws.step, dws.inverse_mass, half, P; ndrange=C,
+    )
     KernelAbstractions.synchronize(be)
 
     _download_bits!(ws.control.step_valid, dws.valid, dws.host_u8)
@@ -514,36 +702,19 @@ function _device_initialize_subtree_states!(dws::DeviceNUTSWorkspace{T}, ws, act
         ws.tree_right_logjoint[c] = start_logjoint
         ws.tree_proposal_logjoint[c] = start_logjoint
     end
-    _upload_mask!(dws.mask_a, ws.subtree_copy_left, dws.host_u8)
-    _upload_mask!(dws.mask_b, ws.subtree_copy_right, dws.host_u8)
-    # tree_current / tree_left / tree_right / tree_proposal <- left (copy_left) or right (copy_right)
-    for (dp, dm, dg) in (
-        (dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient),
-        (dws.tree_left_position, dws.tree_left_momentum, dws.tree_left_gradient),
-        (dws.tree_right_position, dws.tree_right_momentum, dws.tree_right_gradient),
-        (dws.tree_proposal_position, dws.tree_proposal_momentum, dws.tree_proposal_gradient),
+    # One batched upload of both direction masks, one fused seed kernel:
+    # tree_current / tree_left / tree_right / tree_proposal <- left (copy_left,
+    # mask col 1) or right (copy_right, mask col 2). Was 2 uploads + 8 launches.
+    _upload_masks!(dws.mask_batch, (ws.subtree_copy_left, ws.subtree_copy_right), dws.host_mask_batch)
+    _device_nuts_init_states!(be)(
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.tree_left_position, dws.tree_left_momentum, dws.tree_left_gradient,
+        dws.tree_right_position, dws.tree_right_momentum, dws.tree_right_gradient,
+        dws.tree_proposal_position, dws.tree_proposal_momentum, dws.tree_proposal_gradient,
+        dws.left_position, dws.left_momentum, dws.left_gradient,
+        dws.right_position, dws.right_momentum, dws.right_gradient,
+        dws.mask_batch; ndrange=(P, C),
     )
-        _device_nuts_copy_columns!(be)(
-            dp,
-            dm,
-            dg,
-            dws.left_position,
-            dws.left_momentum,
-            dws.left_gradient,
-            dws.mask_a;
-            ndrange=(P, C),
-        )
-        _device_nuts_copy_columns!(be)(
-            dp,
-            dm,
-            dg,
-            dws.right_position,
-            dws.right_momentum,
-            dws.right_gradient,
-            dws.mask_b;
-            ndrange=(P, C),
-        )
-    end
     KernelAbstractions.synchronize(be)
     return dws
 end
@@ -645,39 +816,19 @@ function _device_advance_cohort_impl!(dws::DeviceNUTSWorkspace{T}, ws, max_delta
         end
     end
 
-    # device: scatter tree_left/right/proposal <- tree_current.
-    _upload_mask!(dws.mask_a, ws.subtree_copy_left, dws.host_u8)
-    _upload_mask!(dws.mask_b, ws.subtree_copy_right, dws.host_u8)
-    _upload_mask!(dws.mask_c, ws.subtree_select_proposal, dws.host_u8)
-    _device_nuts_copy_columns!(be)(
-        dws.tree_left_position,
-        dws.tree_left_momentum,
-        dws.tree_left_gradient,
-        dws.tree_current_position,
-        dws.tree_current_momentum,
-        dws.tree_current_gradient,
-        dws.mask_a;
-        ndrange=(P, C),
+    # device: scatter tree_left/right/proposal <- tree_current, one batched upload of
+    # the three masks (copy_left/copy_right/select_proposal) + one fused kernel.
+    _upload_masks!(
+        dws.mask_batch,
+        (ws.subtree_copy_left, ws.subtree_copy_right, ws.subtree_select_proposal),
+        dws.host_mask_batch,
     )
-    _device_nuts_copy_columns!(be)(
-        dws.tree_right_position,
-        dws.tree_right_momentum,
-        dws.tree_right_gradient,
-        dws.tree_current_position,
-        dws.tree_current_momentum,
-        dws.tree_current_gradient,
-        dws.mask_b;
-        ndrange=(P, C),
-    )
-    _device_nuts_copy_columns!(be)(
-        dws.tree_proposal_position,
-        dws.tree_proposal_momentum,
-        dws.tree_proposal_gradient,
-        dws.tree_current_position,
-        dws.tree_current_momentum,
-        dws.tree_current_gradient,
-        dws.mask_c;
-        ndrange=(P, C),
+    _device_nuts_scatter3!(be)(
+        dws.tree_left_position, dws.tree_left_momentum, dws.tree_left_gradient,
+        dws.tree_right_position, dws.tree_right_momentum, dws.tree_right_gradient,
+        dws.tree_proposal_position, dws.tree_proposal_momentum, dws.tree_proposal_gradient,
+        dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
+        dws.mask_batch; ndrange=(P, C),
     )
     KernelAbstractions.synchronize(be)
 
@@ -714,44 +865,25 @@ function _device_merge_cohort!(dws::DeviceNUTSWorkspace{T}, ws, rng::AbstractRNG
             ws.right_logjoint[c] = ws.tree_right_logjoint[c]
         end
     end
-    _upload_mask!(dws.mask_a, ws.subtree_copy_left, dws.host_u8)
-    _upload_mask!(dws.mask_b, ws.subtree_copy_right, dws.host_u8)
-    _device_nuts_copy_columns!(be)(
-        dws.left_position,
-        dws.left_momentum,
-        dws.left_gradient,
-        dws.tree_left_position,
-        dws.tree_left_momentum,
-        dws.tree_left_gradient,
-        dws.mask_a;
-        ndrange=(P, C),
-    )
-    _device_nuts_copy_columns!(be)(
-        dws.right_position,
-        dws.right_momentum,
-        dws.right_gradient,
-        dws.tree_right_position,
-        dws.tree_right_momentum,
-        dws.tree_right_gradient,
-        dws.mask_b;
-        ndrange=(P, C),
+    # One batched upload of both direction masks + one fused merge-copy kernel:
+    # left <- tree_left (copy_left, col 1), right <- tree_right (copy_right, col 2).
+    _upload_masks!(dws.mask_batch, (ws.subtree_copy_left, ws.subtree_copy_right), dws.host_mask_batch)
+    _device_nuts_merge_copy!(be)(
+        dws.left_position, dws.left_momentum, dws.left_gradient,
+        dws.right_position, dws.right_momentum, dws.right_gradient,
+        dws.tree_left_position, dws.tree_left_momentum, dws.tree_left_gradient,
+        dws.tree_right_position, dws.tree_right_momentum, dws.tree_right_gradient,
+        dws.mask_batch; ndrange=(P, C),
     )
 
-    # merge-level whole-trajectory turning.
+    # merge-level whole-trajectory turning + tree-proposal kinetic, fused (both are
+    # per-chain reductions with disjoint inputs/outputs).
     _upload_mask!(dws.mask_c, ws.subtree_active, dws.host_u8)
-    _device_nuts_frontier_turning!(be)(
-        dws.turning,
-        dws.left_position,
-        dws.right_position,
-        dws.left_momentum,
-        dws.right_momentum,
-        dws.mask_c,
-        dws.inverse_mass,
-        P;
-        ndrange=C,
+    _device_nuts_frontier_turning_kinetic!(be)(
+        dws.turning, dws.kinetic,
+        dws.left_position, dws.right_position, dws.left_momentum, dws.right_momentum,
+        dws.tree_proposal_momentum, dws.mask_c, dws.inverse_mass, P; ndrange=C,
     )
-    # kinetic of the tree proposal momentum (for selected chains' proposal energy).
-    _device_nuts_kinetic!(be)(dws.kinetic, dws.tree_proposal_momentum, dws.inverse_mass, P; ndrange=C)
     KernelAbstractions.synchronize(be)
     _download_bits!(ws.subtree_merged_turning, dws.turning, dws.host_u8)
     _download_reals!(dws.kinetic_host, dws.kinetic, dws.host_energy)
