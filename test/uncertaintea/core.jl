@@ -84,6 +84,7 @@ core_test_files = [
     ("reject_invalid_parameters.jl", "sampling"),
     ("dense_mass_matrix_single_chain.jl", "sampling"),
     ("masked_batched_nuts.jl", "sampling"),
+    ("masked_lane_compaction.jl", "sampling"),
     ("init_robustness_batched.jl", "sampling"),
     ("allocfree_leapfrog_bitwise.jl", "sampling"),
     ("sbc_calibration.jl", "sampling"),

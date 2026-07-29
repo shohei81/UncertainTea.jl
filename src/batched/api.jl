@@ -315,8 +315,17 @@ function BatchedLogjointGradientCache(
     batch_constraints = _validate_batched_constraints(constraints, batch_size)
     parameter_count = size(params, 1)
     gradient_buffer = Matrix{float(eltype(params))}(undef, parameter_count, batch_size)
+    # Lane-compaction scratch (issue #160), pre-sized to the full batch width so the
+    # masked-NUTS gather/scatter never allocates per leapfrog step.
+    compact_params = Matrix{float(eltype(params))}(undef, parameter_count, batch_size)
+    compact_gradient = Matrix{float(eltype(params))}(undef, parameter_count, batch_size)
+    compact_logjoint = Vector{Float64}(undef, batch_size)
+    compact_index = Vector{Int}(undef, batch_size)
     if batch_size == 0
-        return BatchedLogjointGradientCache(model, Any[], nothing, nothing, gradient_buffer, parameter_count, batch_size, nothing)
+        return BatchedLogjointGradientCache(
+            model, Any[], nothing, nothing, gradient_buffer, parameter_count, batch_size, nothing,
+            compact_params, compact_gradient, compact_logjoint, compact_index,
+        )
     end
 
     backend_cache = _batched_backend_gradient_cache(
@@ -330,6 +339,7 @@ function BatchedLogjointGradientCache(
         )
         return BatchedLogjointGradientCache(
             model, Any[], backend_cache, nothing, gradient_buffer, parameter_count, batch_size, thread_plan,
+            compact_params, compact_gradient, compact_logjoint, compact_index,
         )
     end
 
@@ -349,6 +359,10 @@ function BatchedLogjointGradientCache(
             parameter_count,
             batch_size,
             nothing,
+            compact_params,
+            compact_gradient,
+            compact_logjoint,
+            compact_index,
         )
     end
 
@@ -379,6 +393,10 @@ function BatchedLogjointGradientCache(
         parameter_count,
         batch_size,
         nothing,
+        compact_params,
+        compact_gradient,
+        compact_logjoint,
+        compact_index,
     )
 end
 
@@ -555,6 +573,114 @@ function _batched_logjoint_and_gradient_unconstrained!(
     batched_logjoint_gradient_unconstrained!(cache, params)
     _batched_logjoint_unconstrained_from_gradient_cache!(destination, cache, params)
     return destination, cache.gradient_buffer
+end
+
+# --- lane compaction (issue #160) -------------------------------------------
+#
+# Masked batched NUTS runs a FULL-WIDTH batched gradient at every leapfrog leaf,
+# even once most chains have finished/diverged (measured waste 60.8% at 64
+# chains, 68.3% at 256). The batched gradient of column c depends ONLY on
+# `params[:, c]` -- columns are fully independent -- so once the active fraction
+# drops below a threshold the sampler gathers the active columns, evaluates the
+# gradient over just those k columns, and scatters the results back to the active
+# lanes. Because gather -> gradient -> scatter is a pure permutation over
+# independent columns, the active lanes receive BITWISE-identical logjoint/
+# gradient values; the inactive lanes are downstream don't-cares (gated out by
+# `valid`), so leaving their destination entries stale is equivalent to the
+# full-width path overwriting them with never-read values. No RNG lives in the
+# gradient, so the masked-doubling draw order is untouched.
+
+# Compact once the active fraction falls below this. Above it, the gather/scatter
+# + narrower-batch bookkeeping overhead would eat the saved lane work, so the
+# full-width path stays in charge (and the all-active leapfrog step -- the common
+# early-round case -- is completely unchanged, including its zero-allocation
+# guarantee).
+const _BATCHED_LANE_COMPACTION_ACTIVE_FRACTION = 0.5
+
+# Only the analytic backend tier is compacted: its per-column arithmetic is
+# provably batch-width-independent (the observed-loop reduction runs per chain and
+# the sufficient-statistics fusion is per column), so a k-column evaluation is
+# bitwise identical to the same columns inside the full C-column batch. The
+# ForwardDiff flat/column tiers differentiate a batch-shaped objective, so they
+# stay full width. A chain-block thread plan (issue #143) also keeps the full
+# width -- compacting would drop it to a single analytic block; threaded-block
+# compaction is a follow-up.
+#
+# The backend cache's args/constraints must be SHARED (a single tuple / ChoiceMap
+# broadcast to every column), not PER-COLUMN vectors: the compact call reuses the
+# cache's own fixed args/constraints, so a k-column params slice with a length-C
+# per-column constraints vector would mis-length the observed-value gather. Shared
+# args/constraints apply identically to any column subset, so the gathered lanes
+# score exactly as they would full width. Per-column args/constraints keep the
+# full-width path (compacting them would need a rebuilt cache).
+function _batched_lane_compaction_beneficial(cache::BatchedLogjointGradientCache, active_count::Int)
+    backend_cache = cache.backend_cache
+    backend_cache === nothing && return false
+    cache.thread_plan === nothing || return false
+    backend_cache.args isa Tuple || return false
+    backend_cache.constraints isa ChoiceMap || return false
+    active_count >= 1 || return false
+    active_count < cache.batch_size || return false
+    return active_count < _BATCHED_LANE_COMPACTION_ACTIVE_FRACTION * cache.batch_size
+end
+
+# Gather the `active_count` active columns of `params` to the front of the compact
+# scratch, evaluate the analytic backend logjoint+gradient over just those
+# columns, and scatter back into `values_destination` / `gradient_destination` at
+# the active lanes (inactive lanes left untouched -- don't-cares). Returns `true`
+# on success; returns `false` WITHOUT completing if the analytic tier hits a
+# recoverable capability gap or (reject mode, issue #157) a lane parameter-
+# validation throw, so the caller redoes the call full width -- where the
+# per-column degradation in `_batched_backend_gradient_or_columns!` handles it and
+# overwrites any partial scatter.
+function _batched_compact_logjoint_and_gradient!(
+    values_destination::AbstractVector,
+    gradient_destination::AbstractMatrix,
+    cache::BatchedLogjointGradientCache,
+    params::AbstractMatrix,
+    active::AbstractVector{Bool},
+    active_count::Int,
+)
+    backend_cache = cache.backend_cache
+    parameter_count = cache.parameter_count
+    compact_params = cache.compact_params
+    index = cache.compact_index
+    slot = 0
+    @inbounds for chain_index in eachindex(active)
+        active[chain_index] || continue
+        slot += 1
+        index[slot] = chain_index
+        for row = 1:parameter_count
+            compact_params[row, slot] = params[row, chain_index]
+        end
+    end
+
+    totals = view(cache.compact_logjoint, 1:active_count)
+    gradients = view(cache.compact_gradient, :, 1:active_count)
+    try
+        _batched_backend_logjoint_and_gradient_unconstrained!(
+            totals,
+            gradients,
+            cache.model,
+            backend_cache,
+            view(compact_params, :, 1:active_count),
+        )
+    catch err
+        reject = backend_cache.workspace.environment.reject_invalid_parameters
+        if err isa BatchedBackendFallback || (reject && (err isa ArgumentError || err isa DomainError))
+            return false
+        end
+        rethrow()
+    end
+
+    @inbounds for slot = 1:active_count
+        chain_index = index[slot]
+        values_destination[chain_index] = cache.compact_logjoint[slot]
+        for row = 1:parameter_count
+            gradient_destination[row, chain_index] = cache.compact_gradient[row, slot]
+        end
+    end
+    return true
 end
 
 function batched_logjoint_gradient_unconstrained(
