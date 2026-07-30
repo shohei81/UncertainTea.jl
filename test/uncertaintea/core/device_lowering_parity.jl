@@ -882,9 +882,13 @@ end
     @test occursin("device_lowering_report", err.msg)
 end
 
-# issue #71: integer distribution inputs (binomial trials/count) must stay EXACT
-# at any compute precision. They are staged into a separate integer observation
-# buffer, so Float32 (2^24 mantissa) can no longer collapse `n` and `k`.
+# issue #71: integer distribution inputs (binomial trials/count) are staged into a
+# separate integer observation buffer, so Float32 (2^24 mantissa) can no longer
+# collapse `n` and `k` -- the exact `n - k` distinction survives into the log
+# binomial coefficient, keeping the gradient exact at any compute precision. The
+# coefficient's absolute value is computed in the compute type T (Float64 on the
+# CPU, Float32 on Metal per issue #218); in Float32 it loses a constant offset for
+# huge n, which the value assertions below account for.
 @tea static function dev_large_binomial(n)
     p ~ beta(2.0, 2.0)
     {:k} ~ binomial(n, p)
@@ -913,7 +917,16 @@ end
     v64 = device_batched_logjoint(dev_large_binomial, params64, (n,), cm; precision=Float64)
     vref64 = batched_logjoint_unconstrained(dev_large_binomial, params64, (n,), cm)
     @test v64 ≈ vref64 rtol = 1e-6
-    @test isapprox(Float64(v32[1]), v64[1]; rtol=1e-3) # Float32 tracks the Float64 value
+    # Float32: the log binomial coefficient must be computed in the compute type T
+    # (Float32) rather than always in Float64, because Metal has no Float64 and the
+    # F64 helpers fail to compile there (issue #218). For huge n ~ 2^24 the constant
+    # log C(n, n-1) = log(n) ~ 16.6 is then unresolvable: loggamma(n+1) ~ 2.5e8 has a
+    # ~16-ULP Float32 gap that swallows the ~16.6 difference. This is a fundamental
+    # Float32 limit (identical on Metal) and affects only the constant offset -- the
+    # gradient wrt p is exact (the coefficient is constant in p, asserted above), so
+    # inference is unaffected. The Float32 logjoint therefore drops exactly log(n):
+    lost = log(Float64(n)) # = log C(n, n - 1), the coefficient Float32 cannot resolve
+    @test isapprox(Float64(v32[1]) + lost, v64[1]; rtol=1e-3)
 
     # Small-count binomial is unchanged: Float64 matches the CPU tightly and
     # Float32 matches within precision. Use a moderate p (logit 0.5 -> ~0.62); the
