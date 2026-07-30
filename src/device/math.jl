@@ -217,28 +217,39 @@ end
 # Exception-free count round: a non-finite / out-of-Int64-range value maps to -1
 # (out of support -> -Inf) instead of throwing an InexactError inside the kernel.
 @inline function _device_count_int(x::Real)
-    (isfinite(x) & (abs(x) < 9.0e15)) || return Int64(-1)
+    # Keep the finiteness/range guard in `x`'s own precision: a Float64 literal
+    # here promotes the comparison to double and makes the kernel fail to compile
+    # on Metal (no Float64), so use `oftype` to stay Float32-clean (issue #218).
+    (isfinite(x) & (abs(x) < oftype(x, 9.0e15))) || return Int64(-1)
     return round(Int64, x)
 end
 
 # Exact-integer log binomial coefficient computed in Float64 (integers <= 2^53 are
 # exact), so the n-vs-k distinction survives regardless of the compute precision
 # T (issue #71).
-@inline function _device_log_binom_coeff(n::Integer, k::Integer)
-    return _device_loggamma(Float64(n) + 1.0) - _device_loggamma(Float64(k) + 1.0) -
-           _device_loggamma(Float64(n - k) + 1.0)
+# The combinatorial term is formed in the device precision `T` (issue #218):
+# `Float64` on the CPU() reference backend (integer-exact, matching the #71
+# intent) but `Float32` on Metal, which has NO Float64 support -- the old
+# `Float64(n)` path forced `_device_loggamma` into Float64 arithmetic (and its
+# reflection branch into Payne-Hanek `sin` with Int128), so every binomial model
+# failed to compile on Metal with `unsupported use of double/i128 value`. `n`/`k`
+# are exact integers threaded through the integer observation buffer, so `n - k`
+# is computed in `Int` before the cast and stays exact.
+@inline function _device_log_binom_coeff(n::Integer, k::Integer, ::Type{T}) where {T}
+    return _device_loggamma(T(n) + one(T)) - _device_loggamma(T(k) + one(T)) -
+           _device_loggamma(T(n - k) + one(T))
 end
 
 # `n` (trials) and `k` (count) are EXACT integers threaded through the integer
 # observation buffer (issue #71); `p` is a plain real (logjoint kernel) or a
 # `DeviceDual` (gradient kernel). The p-independent combinatorial term is formed
-# in Float64 and folded in as a zero-derivative constant, so the difference
-# `n - k` stays exact and the gradient flows only through the p-dependent terms
-# whose integer coefficients are exact.
+# in the device precision `T` (issue #218 -- Float64 on CPU(), Float32 on Metal)
+# and folded in as a zero-derivative constant; the gradient flows only through
+# the p-dependent terms whose integer coefficients are exact.
 @inline function _device_binomial_logpdf(n::Integer, k::Integer, p::P) where {P}
     T = _device_real_basetype(P)
     in_support = (k >= 0) & (n >= 0) & (k <= n)
-    log_combination = convert(P, T(_device_log_binom_coeff(n, k)))
+    log_combination = convert(P, _device_log_binom_coeff(n, k, T))
     # guard the k == 0 / k == n corners so p in {0, 1} cannot produce 0 * -Inf
     base = log_combination + ifelse(k > 0, k * log(p), zero(p)) + ifelse(k < n, (n - k) * log1p(-p), zero(p))
     return ifelse(in_support, base, oftype(base, -Inf))
