@@ -93,6 +93,7 @@ core_test_files = [
     ("discrete_enum_cpu.jl", "sampling"),
     ("mh_within_gibbs.jl", "sampling"),
     ("multichain_threaded_reproducibility.jl", "sampling"),
+    ("batched_chees_scaffold.jl", "sampling"),
 ]
 
 let registered = Set(first.(core_test_files)), on_disk = Set(f for f in readdir(joinpath(@__DIR__, "core")) if endswith(f, ".jl"))
