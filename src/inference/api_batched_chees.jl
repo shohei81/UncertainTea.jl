@@ -268,6 +268,30 @@ function _chees_harmonic_mean_accept(accept_prob::AbstractVector, divergent::Abs
     return isfinite(harmonic_mean) ? harmonic_mean : 0.0
 end
 
+"""
+    batched_chees(model, args=(), constraints=choicemap(); num_chains, num_samples, kwargs...) -> HMCChains
+
+Run ChEES-HMC (Hoffman, Radul & Sountsov, AISTATS 2021): many parallel chains of
+fixed-length **jittered** HMC whose trajectory length is adapted from
+cross-chain statistics. Every chain does identical work each step (no
+control-flow divergence, no per-leaf host sync), so it maps to a handful of
+kernels with one sync per iteration — the GPU-native route. Returns an
+[`HMCChains`](@ref).
+
+Key keyword arguments:
+
+- `num_chains`, `num_samples` (required), `num_warmup`.
+- `step_size`, `num_leapfrog_steps`, `jitter_amount` (in `[0, 1]`).
+- `adapt_trajectory_length` and the `trajectory_*` Adam controls for the
+  ChEES trajectory-length ascent; `max_leapfrog_steps` clamps the result.
+- `target_accept` (defaults to the ChEES-optimal `0.651`), `adapt_step_size`,
+  `adapt_mass_matrix`.
+- `backend`, `precision`: pass a `KernelAbstractions.Backend` to run
+  device-resident.
+
+See also [`batched_nuts`](@ref) (the reference/default sampler) and
+[`batched_hmc`](@ref).
+"""
 function batched_chees(
     model::TeaModel,
     args=(),

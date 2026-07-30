@@ -607,6 +607,16 @@ function ess(chains::HMCChains; space::Symbol=:constrained)
     return values
 end
 
+"""
+    summarize(chains::HMCChains; space=:constrained, quantiles=(0.05, 0.5, 0.95), per_chain=false) -> HMCSummary
+
+Summarize sampled `chains`: per-parameter posterior mean, standard deviation,
+the requested `quantiles`, R-hat, bulk/tail effective sample size, and Monte
+Carlo standard errors, together with run-level diagnostics and any sampler
+warnings. `space` selects `:constrained` (default) or `:unconstrained` draws;
+`per_chain=true` also reports per-chain means and standard deviations. See also
+`rhat`, `ess`, and `check_diagnostics`.
+"""
 function summarize(chains::HMCChains; space::Symbol=:constrained, quantiles=(0.05, 0.5, 0.95), per_chain::Bool=false)
     num_params, _ = _validate_hmc_diagnostics(chains, space)
     quantile_probs = _validate_summary_quantiles(quantiles)

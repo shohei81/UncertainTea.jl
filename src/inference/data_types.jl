@@ -42,6 +42,14 @@ struct HMCDiagnosticsSummary
     mass_adaptation_windows::Vector{HMCMassAdaptationSummary}
 end
 
+"""
+    HMCChain
+
+A single sampled chain: the constrained and unconstrained draws plus per-draw
+diagnostics (acceptance, energy, divergences, tree depths / integration steps)
+and the adapted step size and mass matrix. Produced by [`hmc`](@ref) and
+[`nuts`](@ref), and held per-chain inside an [`HMCChains`](@ref).
+"""
 struct HMCChain
     sampler::Symbol
     model::TeaModel
@@ -69,6 +77,15 @@ struct HMCChain
     dense_mass_matrix::Union{Nothing,Matrix{Float64}}
 end
 
+"""
+    HMCChains
+
+A collection of [`HMCChain`](@ref)s from the same model and conditioning, as
+returned by [`hmc_chains`](@ref), [`nuts_chains`](@ref), [`batched_nuts`](@ref),
+[`batched_hmc`](@ref), and [`batched_chees`](@ref). Pass it to
+[`summarize`](@ref), `rhat`, `ess`, and the export helpers (`posterior_array`,
+`to_arviz_dict`, `to_mcmcchains`).
+"""
 struct HMCChains{A,C}
     model::TeaModel
     args::A
@@ -80,6 +97,14 @@ end
 # samples and frozen adaptation, plus per-site discrete samples in trace
 # order. `constraints` holds the user observations only; the discrete values
 # live in `discrete_samples` (sites x samples, Bool sites stored as 0/1).
+"""
+    GibbsChain
+
+Result of [`gibbs`](@ref) (Metropolis-within-Gibbs): the continuous block's
+constrained/unconstrained draws and frozen adaptation, plus per-site discrete
+samples in trace order and their acceptance rates. `constraints` holds only the
+user observations; sampled discrete values live in `discrete_samples`.
+"""
 struct GibbsChain
     model::TeaModel
     args::Tuple
