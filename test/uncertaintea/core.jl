@@ -48,6 +48,7 @@ core_test_files = [
     ("batched_observed_loop_suffstats.jl", "backend"),
     ("threaded_batched_gradient.jl", "backend"),
     # "device": the KernelAbstractions device kernels (heavier compile).
+    ("device_rng.jl", "device"),
     ("device_lowering_parity.jl", "device"),
     ("signature_batched_device_parity.jl", "device"),
     ("device_gradient_dual.jl", "device"),

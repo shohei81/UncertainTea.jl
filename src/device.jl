@@ -1,5 +1,6 @@
 include("device/dual.jl")
 include("device/math.jl")
+include("device/rng.jl")
 include("device/plan.jl")
 include("device/staging.jl")
 include("device/logjoint_kernel.jl")
