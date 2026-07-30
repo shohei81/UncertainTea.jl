@@ -197,7 +197,21 @@ function _broadcast_operator_function(callee)
     return value isa Function ? value : nothing
 end
 
-function _resolve_compile_symbol(model::TeaModel, layout::EnvironmentLayout, sym::Symbol)
+# Per-model plan-BUILD de-specialization (issue #155 part 2). The plan
+# compilers below run ONCE per (model, signature) -- their results are memoized
+# in `model.evaluator_cache`/`model.signature_cache` -- yet Julia used to
+# recompile them for every distinct `TeaModel{M,F,S}` because the `impl` field
+# `F` is a unique closure type per `@tea` model. That per-model JIT was the
+# ~7-11 s tax #155 measured. `model` is used here only as a DATA source (its
+# evaluation module, name, and IR); it never enters the type of the
+# `Compiled*` plan the compiler returns -- that type is driven entirely by the
+# `expr`/`step` structure. So `@nospecialize(model)` lets these builders
+# compile a SINGLE time (against the abstract `TeaModel`) and be reused across
+# every model without changing the emitted plan or any numeric result. This is
+# deliberately confined to the plan-build layer: the generated scorer (#144,
+# `_gen_*`) still specializes on the concrete plan for run-time speed, and the
+# hot batched/scalar scoring walks are untouched.
+function _resolve_compile_symbol(@nospecialize(model::TeaModel), layout::EnvironmentLayout, sym::Symbol)
     slot = _environment_slot(layout, sym)
     if !isnothing(slot)
         return CompiledSlotExpr(slot)
@@ -262,7 +276,7 @@ function _rewrite_compiled_call(expr::CompiledCallExpr)
     return expr
 end
 
-function _compile_plan_expr(model::TeaModel, layout::EnvironmentLayout, expr)
+function _compile_plan_expr(@nospecialize(model::TeaModel), layout::EnvironmentLayout, expr)
     if expr isa QuoteNode
         return CompiledLiteralExpr(expr.value)
     elseif expr isa Symbol
@@ -307,7 +321,7 @@ function _compile_plan_expr(model::TeaModel, layout::EnvironmentLayout, expr)
     return CompiledLiteralExpr(expr)
 end
 
-function _compile_address(layout::EnvironmentLayout, model::TeaModel, address::AddressSpec)
+function _compile_address(layout::EnvironmentLayout, @nospecialize(model::TeaModel), address::AddressSpec)
     parts = tuple((
         begin
             if part isa AddressLiteralPart
@@ -346,7 +360,7 @@ function _stage_observation_marker(
 end
 
 function _compile_plan_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -426,7 +440,7 @@ function _marginalize_support(rhs::DistributionSpec)
 end
 
 function _compile_plan_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::DeterministicPlanStep,
@@ -437,7 +451,7 @@ function _compile_plan_step(
 end
 
 function _compile_plan_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::LoopPlanStep,
@@ -468,7 +482,7 @@ function _reject_branchful_compiled_scoring(model::TeaModel)
     )
 end
 
-function _compile_execution_plan(model::TeaModel, raw_plan::ExecutionPlan)
+function _compile_execution_plan(@nospecialize(model::TeaModel), raw_plan::ExecutionPlan)
     stage_counter = Ref(0)
     compiled_steps = tuple(
         (
@@ -479,7 +493,7 @@ function _compile_execution_plan(model::TeaModel, raw_plan::ExecutionPlan)
     return CompiledExecutionPlan(compiled_steps, _required_walk_slots(compiled_steps), stage_counter[])
 end
 
-_compile_execution_plan(model::TeaModel) = _compile_execution_plan(model, executionplan(model))
+_compile_execution_plan(@nospecialize(model::TeaModel)) = _compile_execution_plan(model, executionplan(model))
 
 # Serializes the lazy plan memoizations (`model.evaluator_cache` below and
 # `model.signature_cache` in `_resolve_signature_plan`) so concurrent inference
@@ -489,7 +503,7 @@ _compile_execution_plan(model::TeaModel) = _compile_execution_plan(model, execut
 # lookup is cheap next to a logjoint evaluation.
 const _PLAN_MEMO_LOCK = ReentrantLock()
 
-function _compiled_execution_plan(model::TeaModel)
+function _compiled_execution_plan(@nospecialize(model::TeaModel))
     _reject_branchful_compiled_scoring(model)
     return lock(_PLAN_MEMO_LOCK) do
         cached = model.evaluator_cache[]
@@ -580,7 +594,7 @@ function _conditioning_signature(model::TeaModel, constraints::ChoiceMap)
     return observed
 end
 
-function _resolve_signature_plan(model::TeaModel, signature::Set{Address})
+function _resolve_signature_plan(@nospecialize(model::TeaModel), signature::Set{Address})
     _reject_branchful_compiled_scoring(model)
     return lock(_PLAN_MEMO_LOCK) do
         cache = model.signature_cache[]

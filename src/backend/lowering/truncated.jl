@@ -49,7 +49,7 @@ struct BackendTruncatedStudentTChoicePlanStep{
 end
 
 function _backend_lower_truncatednormal_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -84,7 +84,7 @@ function _backend_lower_truncatednormal_choice_step(
 end
 
 function _backend_lower_truncatedstudentt_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,

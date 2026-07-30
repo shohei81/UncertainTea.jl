@@ -204,7 +204,18 @@ function _supported_backend_distribution(family::Symbol)
     return family in GPU_BACKEND_SUPPORTED_DISTRIBUTIONS
 end
 
-function _backend_primitive_name(model::TeaModel, callee)
+# Per-model plan-BUILD de-specialization (issue #155 part 2). Like the compiled
+# plan builders in evaluator.jl, backend lowering runs ONCE per (model,
+# signature) -- its `BackendLoweringResult` is memoized in
+# `ResolvedSignaturePlan.backend_lowering` -- but used to recompile for every
+# distinct `TeaModel{M,F,S}` because the model's `impl` type `F` is unique per
+# `@tea` model. `model` is a DATA source here (evaluation module, name, IR); it
+# never enters the type of the lowered backend plan (that follows the step
+# structure). `@nospecialize(model)` lets each lowering method compile once
+# against the abstract `TeaModel` and be reused across models, leaving the
+# lowered plan and every numeric result unchanged. The device/backed hot
+# scoring kernels consume the concrete lowered plan and are untouched.
+function _backend_primitive_name(@nospecialize(model::TeaModel), callee)
     if callee isa Symbol
         return _supported_backend_primitive(callee) ? callee : nothing
     elseif callee isa GlobalRef
@@ -216,7 +227,13 @@ function _backend_primitive_name(model::TeaModel, callee)
     return nothing
 end
 
-function _backend_lower_expr(model::TeaModel, layout::EnvironmentLayout, expr, issues::Vector{String}, context::String)
+function _backend_lower_expr(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    expr,
+    issues::Vector{String},
+    context::String,
+)
     if expr isa QuoteNode
         return BackendLiteralExpr(expr.value)
     elseif expr isa Symbol
@@ -265,7 +282,12 @@ function _backend_lower_expr(model::TeaModel, layout::EnvironmentLayout, expr, i
     return nothing
 end
 
-function _backend_lower_address(model::TeaModel, layout::EnvironmentLayout, address::AddressSpec, issues::Vector{String})
+function _backend_lower_address(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    address::AddressSpec,
+    issues::Vector{String},
+)
     parts = map(address.parts) do part
         if part isa AddressLiteralPart
             BackendAddressLiteralPart(part.value)
@@ -295,7 +317,7 @@ function _backend_scalar_parameter_row(parameter_layout::ParameterLayout, parame
 end
 
 function _backend_lower_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -466,7 +488,7 @@ function _backend_lower_step(
 end
 
 function _backend_lower_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::DeterministicPlanStep,
@@ -478,7 +500,7 @@ function _backend_lower_step(
 end
 
 function _backend_lower_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::LoopPlanStep,
@@ -854,7 +876,7 @@ _backend_marginalized_choice_step(step) =
 # becomes the marginalize step's body and nested flagged latents nest as
 # nested steps. Everything else lowers step-by-step as before.
 function _backend_lower_steps(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     steps::AbstractVector,
@@ -881,7 +903,7 @@ function _backend_lower_steps(
     return lowered
 end
 
-function _lower_backend_execution_plan(model::TeaModel; target::Symbol=:gpu)
+function _lower_backend_execution_plan(@nospecialize(model::TeaModel); target::Symbol=:gpu)
     return _lower_backend_execution_plan(model, executionplan(model); target=target)
 end
 
@@ -890,7 +912,7 @@ end
 # latent/observation split -- and therefore whether a choice step carries a
 # `parameter_slot` -- is baked into `plan` already, so the backend classification
 # stays consistent with the CPU signature layout by construction (issue #95).
-function _lower_backend_execution_plan(model::TeaModel, plan::ExecutionPlan; target::Symbol=:gpu)
+function _lower_backend_execution_plan(@nospecialize(model::TeaModel), plan::ExecutionPlan; target::Symbol=:gpu)
     target === :gpu || throw(ArgumentError("only :gpu backend lowering is currently supported"))
     if model.branchful
         # a (dynamic-mode) body with if/else control flow: the linear plan
@@ -977,7 +999,7 @@ function _backend_noncentered_dependencies_ok!(issues::Vector{String}, steps::Tu
     return ok
 end
 
-function _backend_lowering(model::TeaModel; target::Symbol=:gpu)
+function _backend_lowering(@nospecialize(model::TeaModel); target::Symbol=:gpu)
     target === :gpu || throw(ArgumentError("only :gpu backend lowering is currently supported"))
     cached = model.backend_cache[]
     if isnothing(cached)
@@ -987,7 +1009,7 @@ function _backend_lowering(model::TeaModel; target::Symbol=:gpu)
     return cached::BackendLoweringResult
 end
 
-function _backend_execution_plan(model::TeaModel; target::Symbol=:gpu)
+function _backend_execution_plan(@nospecialize(model::TeaModel); target::Symbol=:gpu)
     return _backend_lowering(model; target=target).plan
 end
 
@@ -998,7 +1020,7 @@ end
 # model's `signature_cache`), so repeated batched/device runs at the same
 # conditioning reuse the lowering.
 function _signature_backend_lowering(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     resolved::ResolvedSignaturePlan;
     target::Symbol=:gpu,
 )
@@ -1011,14 +1033,14 @@ function _signature_backend_lowering(
     return cached::BackendLoweringResult
 end
 
-_signature_backend_plan(model::TeaModel, resolved::ResolvedSignaturePlan; target::Symbol=:gpu) =
+_signature_backend_plan(@nospecialize(model::TeaModel), resolved::ResolvedSignaturePlan; target::Symbol=:gpu) =
     _signature_backend_lowering(model, resolved; target=target).plan
 
-function backend_report(model::TeaModel; target::Symbol=:gpu)
+function backend_report(@nospecialize(model::TeaModel); target::Symbol=:gpu)
     return _backend_lowering(model; target=target).report
 end
 
-function backend_execution_plan(model::TeaModel; target::Symbol=:gpu)
+function backend_execution_plan(@nospecialize(model::TeaModel); target::Symbol=:gpu)
     result = _backend_lowering(model; target=target)
     isnothing(result.plan) && throw(
         ArgumentError("model $(model.name) is not supported for $(target) backend lowering; see backend_report(model)"),
@@ -1030,7 +1052,13 @@ end
 # `Inf`/`-Inf`, which arrive as the symbol `:Inf` in the captured AST) become
 # literal backend expressions; anything else (a latent-flowing bound) reuses the
 # standard numeric lowering.
-function _backend_lower_bound_expr(model::TeaModel, layout::EnvironmentLayout, expr, issues::Vector{String}, context::String)
+function _backend_lower_bound_expr(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    expr,
+    issues::Vector{String},
+    context::String,
+)
     static_value = _static_bound_value(expr)
     isnothing(static_value) || return BackendLiteralExpr(float(static_value))
     return _backend_lower_expr(model, layout, expr, issues, context)

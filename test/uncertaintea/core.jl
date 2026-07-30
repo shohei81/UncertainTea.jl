@@ -62,6 +62,7 @@ core_test_files = [
     ("device_perchain_stranding.jl", "device"),
     ("host_device_pooled_agreement.jl", "device"),
     ("device_chees.jl", "device"),
+    ("plan_build_nospecialize.jl", "backend"),
     ("gradient_crosscheck.jl", "crosscheck"),
     ("generated_scorer_identity.jl", "crosscheck"),
     ("generated_scorer_suffstats.jl", "crosscheck"),
