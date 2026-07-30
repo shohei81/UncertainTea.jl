@@ -1,9 +1,16 @@
-# ChEES-HMC scaffold (issue #161, increment 1). `batched_chees` is Halton-jittered
-# fixed-length HMC with a shared dual-averaging step size + pooled diagonal mass;
-# the cross-chain ChEES trajectory-length adaptation is deferred to increment 2
-# (see docs/chees-hmc.md). These tests pin the scaffold: it samples the conjugate
-# gauss posterior, is deterministic under a seed, validates its arguments, and the
-# Halton generator emits the exact van der Corput sequence.
+# ChEES-HMC scaffold (issue #161). `batched_chees` is Halton-jittered HMC with a
+# shared dual-averaging step size + pooled diagonal mass; the cross-chain ChEES
+# trajectory-length adaptation (increment 2) is exercised separately in
+# batched_chees_adaptation.jl. These tests pin the scaffold surface: it samples the
+# conjugate gauss posterior, is deterministic under a seed, validates its arguments,
+# and the Halton generator emits the exact van der Corput sequence.
+#
+# NOTE (increment 2): the jittered step count is now
+# `L_iter = max(1, ceil(jitter_val * T / ε))` with
+# `jitter_val = halton(i)*jitter_amount + (1 - jitter_amount)` and `T` the adapted
+# trajectory TIME, matching BlackJAX. This REPLACED the increment-1 formula
+# `floor(num_leapfrog_steps * (1 + jitter_amount * h))`; the jitter tests below are
+# written against the new (ceil / fraction-of-full) semantics.
 
 @testset "batched_chees scaffold" begin
     @tea static function chees_conjugate()
@@ -54,8 +61,10 @@
     end
 
     @testset "jitter_amount=0 fixed-length smoke" begin
-        # With no jitter every iteration integrates exactly num_leapfrog_steps and
-        # the sampler still recovers the posterior.
+        # With no jitter jitter_val == 1, so L_iter = ceil(T/ε). Freezing both T
+        # (adapt_trajectory_length=false) and ε (adapt_step_size=false) keeps
+        # T/ε == num_leapfrog_steps exactly, so every iteration integrates exactly
+        # num_leapfrog_steps and the sampler still recovers the posterior.
         chees0 = batched_chees(
             chees_conjugate,
             (),
@@ -65,6 +74,8 @@
             num_warmup=400,
             num_leapfrog_steps=12,
             jitter_amount=0.0,
+            adapt_trajectory_length=false,
+            adapt_step_size=false,
             rng=MersenneTwister(99),
         )
         @test all(steps -> all(==(12), steps), (c.integration_steps for c in chees0.chains))
@@ -74,6 +85,10 @@
     end
 
     @testset "jitter varies trajectory length" begin
+        # New semantics: jitter takes a fraction in [1-jitter_amount, 1) of the
+        # full trajectory, so with jitter_amount=1 and no warmup (T frozen at
+        # num_leapfrog_steps*ε), L_iter = max(1, ceil(jitter_val * num_leapfrog))
+        # ranges over 1..num_leapfrog and varies iteration to iteration.
         chees_jit = batched_chees(
             chees_conjugate,
             (),
@@ -86,8 +101,10 @@
             rng=MersenneTwister(7),
         )
         steps = chees_jit.chains[1].integration_steps
-        @test all(>=(10), steps)
-        @test any(>(10), steps)
+        @test all(>=(1), steps)
+        @test all(<=(10), steps)
+        @test any(<(10), steps)
+        @test length(unique(steps)) > 1
     end
 
     @testset "argument validation" begin
