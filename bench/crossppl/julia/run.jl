@@ -33,11 +33,13 @@ using JSON3
 using NPZ
 
 # Metal is macOS-only; load it lazily so the CPU variants run inside the
-# Linux benchmark container.
-if any(i -> ARGS[i] == "--variant" && ARGS[i+1] == "batched-metal", 1:(length(ARGS)-1))
+# Linux benchmark container. `batched-metal-persistent` (issue #154) also needs it.
+if any(i -> ARGS[i] == "--variant" && startswith(ARGS[i+1], "batched-metal"), 1:(length(ARGS)-1))
     using Metal
 end
-if any(i -> ARGS[i] == "--variant" && ARGS[i+1] == "batched-cpu-ka", 1:(length(ARGS)-1))
+# The KernelAbstractions CPU() backend backs `batched-cpu-ka` and the Float64
+# `batched-cpu-persistent` gate variant (issue #154).
+if any(i -> ARGS[i] == "--variant" && ARGS[i+1] in ("batched-cpu-ka", "batched-cpu-persistent"), 1:(length(ARGS)-1))
     using KernelAbstractions
 end
 
@@ -161,6 +163,23 @@ function run_once(model, args, cons, opts; num_samples, seed)
             num_chains, num_samples, num_warmup, target_accept,
             num_leapfrog_steps, jitter_amount, initial_params, rng)
         return (chains, t)
+    elseif variant == "batched-metal-persistent"
+        # Persistent per-chain tree kernel (issue #154): one device kernel launch per
+        # NUTS iteration builds the whole tree, GPU-native. Metal Float32.
+        backend = Metal.MetalBackend()
+        t = @elapsed chains = batched_nuts(model, args, cons;
+            num_chains, num_samples, num_warmup, target_accept, max_tree_depth,
+            tree_strategy=:persistent, backend, precision=Float32, initial_params, rng)
+        return (chains, t)
+    elseif variant == "batched-cpu-persistent"
+        # Same persistent strategy on the KernelAbstractions CPU() backend at Float64:
+        # the debuggable reference for the #121 correctness gate (the Metal leg is
+        # Float32 and statistically -- not bitwise -- equivalent to the host).
+        backend = KernelAbstractions.CPU()
+        t = @elapsed chains = batched_nuts(model, args, cons;
+            num_chains, num_samples, num_warmup, target_accept, max_tree_depth,
+            tree_strategy=:persistent, backend, precision=Float64, initial_params, rng)
+        return (chains, t)
     else
         error("unknown variant $(variant)")
     end
@@ -230,11 +249,18 @@ function main(argv)
                     "target_accept" => parse(Float64, opts["target-accept"]),
                     "max_tree_depth" => parse(Int, opts["max-tree-depth"]),
                     "metric" => "diag",
+                    # `:persistent` (issue #154) builds each chain's whole tree in one
+                    # device kernel launch; the other device/CPU variants use :masked/
+                    # :hybrid. Recorded so the analyzed rows are self-describing.
+                    "tree_strategy" =>
+                        endswith(variant, "-persistent") ? "persistent" :
+                        variant == "batched-cpu-ka" || variant == "batched-metal" ? "masked" :
+                        variant == "batched-cpu" ? "hybrid" : "hybrid",
                     "chain_parallelism" =>
                         variant == "cpu" ? "sequential" :
                         variant == "batched-cpu-ka" ?
                         "vectorized-threads-$(Threads.nthreads())" : "vectorized",
-                    "precision" => variant == "batched-metal" ? "Float32" : "Float64",
+                    "precision" => startswith(variant, "batched-metal") ? "Float32" : "Float64",
                 ),
             "diagnostics" => Dict("divergence_rate" => divergencerate(chains)),
             "env" => Dict(
