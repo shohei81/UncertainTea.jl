@@ -472,6 +472,47 @@ end
     @test all(<(1.3), rhat(chains))
 end
 
+# --- device-resident ChEES-HMC smoke (issue #161 increment 4) ----------------
+# Mirrors test/uncertaintea/core/device_chees.jl on a Metal.MetalBackend at Float32.
+# The Halton-jittered leapfrog trajectory runs device-resident (one sync per
+# iteration); the cross-chain ChEES trajectory-length adaptation runs on the host
+# during warmup from a per-iteration proposal/momentum download. RNG stays host-side,
+# so results are statistically (not bitwise) equivalent to the CPU path; we assert
+# finite results, posterior-mean sanity, and that the adapted T converges finite.
+
+@testset "device Metal GPU batched ChEES smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping GPU ChEES smoke test."
+        @test true
+        return
+    end
+
+    backend = Metal.MetalBackend()
+    constraints = choicemap((:y, 0.3))
+
+    trace = Float64[]
+    chains = batched_chees(
+        gpu_conjugate_gauss,
+        (),
+        constraints;
+        num_chains=32,
+        num_samples=2000,
+        num_warmup=600,
+        backend=backend,
+        precision=Float32,
+        rng=MersenneTwister(161),
+        _trajectory_trace=trace,
+    )
+    samples = posterior_array(chains)
+    @test all(isfinite, samples)
+    @test isapprox(sum(samples) / length(samples), 0.15; atol=0.15)
+    @test all(<(1.3), rhat(chains))
+    # Adapted trajectory time converged to a finite, sensible value.
+    @test length(trace) == 600
+    @test all(isfinite, trace)
+    @test 0.5 < trace[end] < 200.0
+end
+
 @tea static function gpu_noncentered_funnel()
     v ~ normal(0.0, 3.0)
     x ~ normal(0.0, exp(v / 2); reparam=:noncentered)

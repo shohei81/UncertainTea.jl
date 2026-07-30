@@ -298,17 +298,10 @@ function batched_chees(
     callback=nothing,
     callback_every::Int=10,
     backend=nothing,
+    precision=nothing,
     rng::AbstractRNG=Random.default_rng(),
     _trajectory_trace::Union{Nothing,AbstractVector{Float64}}=nothing,
 )
-    # The device ChEES loop is increment 4 (docs/chees-hmc.md). Fail clearly if a
-    # backend is requested before then rather than silently ignoring it.
-    backend === nothing ||
-        throw(
-            ArgumentError(
-                "batched_chees `backend` (device execution) is not yet supported; it lands in increment 4 per docs/chees-hmc.md",
-            ),
-        )
     init in (:prior, :uniform) ||
         throw(ArgumentError("batched_chees init must be :prior or :uniform, got $(repr(init))"))
     init_max_retries >= 0 ||
@@ -327,6 +320,55 @@ function batched_chees(
         throw(ArgumentError("batched_chees trajectory_adam_beta2 must be in [0, 1), got $trajectory_adam_beta2"))
     trajectory_adam_epsilon > 0.0 ||
         throw(ArgumentError("batched_chees trajectory_adam_epsilon must be > 0, got $trajectory_adam_epsilon"))
+
+    # Device-resident ChEES-HMC (issue #161 increment 4). When `backend` is given the
+    # jittered leapfrog trajectory runs device-resident (host-side RNG + O(num_chains)
+    # bookkeeping, one sync per iteration); the cross-chain ChEES trajectory-length
+    # adaptation runs on the host during warmup from a per-iteration proposal/momentum
+    # download, and sampling downloads nothing for adaptation. Results are
+    # statistically -- and, on the CPU() reference backend at Float64, numerically --
+    # equivalent to the host path below, which is untouched when `backend === nothing`.
+    # The ChEES-specific kwargs are validated above so a bad argument fails before the
+    # device workspace lowers/allocates.
+    if backend !== nothing
+        backend isa KernelAbstractions.Backend ||
+            throw(ArgumentError("batched_chees `backend` must be a KernelAbstractions.Backend or nothing, got $(typeof(backend))"))
+        device_precision = precision === nothing ? default_device_precision(backend) : precision
+        return _run_device_batched_chees(
+            model,
+            args,
+            constraints;
+            num_chains=num_chains,
+            num_samples=num_samples,
+            num_warmup=num_warmup,
+            step_size=step_size,
+            num_leapfrog_steps=num_leapfrog_steps,
+            jitter_amount=jitter_amount,
+            adapt_trajectory_length=adapt_trajectory_length,
+            max_leapfrog_steps=max_leapfrog_steps,
+            trajectory_decay_rate=trajectory_decay_rate,
+            trajectory_learning_rate=trajectory_learning_rate,
+            trajectory_adam_beta1=trajectory_adam_beta1,
+            trajectory_adam_beta2=trajectory_adam_beta2,
+            trajectory_adam_epsilon=trajectory_adam_epsilon,
+            initial_params=initial_params,
+            init=init,
+            init_max_retries=init_max_retries,
+            target_accept=target_accept,
+            adapt_step_size=adapt_step_size,
+            adapt_mass_matrix=adapt_mass_matrix,
+            find_reasonable_step_size=find_reasonable_step_size,
+            divergence_threshold=divergence_threshold,
+            mass_matrix_regularization=mass_matrix_regularization,
+            mass_matrix_min_samples=mass_matrix_min_samples,
+            callback=callback,
+            callback_every=callback_every,
+            backend=backend,
+            precision=device_precision,
+            rng=rng,
+            _trajectory_trace=_trajectory_trace,
+        )
+    end
 
     # Signature-aware sizing (#95), mirroring batched_hmc/batched_nuts.
     signature_layout = _batched_signature_layout(model, constraints)
