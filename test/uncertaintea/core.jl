@@ -91,6 +91,7 @@ core_test_files = [
     ("allocfree_leapfrog_bitwise.jl", "sampling"),
     ("sbc_calibration.jl", "sampling"),
     ("reparam_noncentered_cpu.jl", "sampling"),
+    ("noncentered_reject_hmc.jl", "sampling"),
     ("discrete_enum_cpu.jl", "sampling"),
     ("mh_within_gibbs.jl", "sampling"),
     ("multichain_threaded_reproducibility.jl", "sampling"),

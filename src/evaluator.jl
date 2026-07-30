@@ -1293,7 +1293,10 @@ function _logjoint_unconstrained(
     stage::_MaybeObservationStage;
     reject_invalid_parameters::Bool=false,
 )
-    constrained, logabsdet = _transform_to_constrained_with_logabsdet(model, resolved, params, args, constraints)
+    constrained, logabsdet = _transform_to_constrained_with_logabsdet(
+        model, resolved, params, args, constraints;
+        reject_invalid_parameters=reject_invalid_parameters,
+    )
     return _logjoint(
         model,
         resolved,
@@ -1450,10 +1453,11 @@ function _dependent_transform_walk!(
     params::AbstractVector,
     args::Tuple,
     inverse::Bool,
-    constraints::ChoiceMap=choicemap(),
+    constraints::ChoiceMap=choicemap();
+    reject_invalid_parameters::Bool=false,
 )
     args = _complete_model_args(model, args)
-    env = PlanEnvironment(plan.environment_layout)
+    env = PlanEnvironment(plan.environment_layout; reject_invalid_parameters=reject_invalid_parameters)
     for (slot, value) in zip(plan.environment_layout.argument_slots, args)
         _environment_set!(env, slot, value)
     end
@@ -1475,7 +1479,8 @@ function _dependent_transform_walk!(
     params::AbstractVector,
     args::Tuple,
     inverse::Bool,
-    constraints::ChoiceMap=choicemap(),
+    constraints::ChoiceMap=choicemap();
+    reject_invalid_parameters::Bool=false,
 )
     return _dependent_transform_walk!(
         destination,
@@ -1485,7 +1490,8 @@ function _dependent_transform_walk!(
         params,
         args,
         inverse,
-        constraints,
+        constraints;
+        reject_invalid_parameters=reject_invalid_parameters,
     )
 end
 
@@ -1497,7 +1503,8 @@ function _transform_to_constrained_with_logabsdet(
     resolved::ResolvedSignaturePlan,
     params::AbstractVector,
     args::Tuple,
-    constraints::ChoiceMap=choicemap(),
+    constraints::ChoiceMap=choicemap();
+    reject_invalid_parameters::Bool=false,
 )
     layout = resolved.plan.parameter_layout
     expected = parametercount(layout)
@@ -1514,7 +1521,8 @@ function _transform_to_constrained_with_logabsdet(
             params,
             args,
             false,
-            constraints,
+            constraints;
+            reject_invalid_parameters=reject_invalid_parameters,
         )
         return constrained, logabsdet
     end
@@ -1568,6 +1576,26 @@ function _walk_transform_step!(destination, step::CompiledLoopPlanStep, env, lay
     return total
 end
 
+# Reject-mode handling for a noncentered step whose location/scale evaluated to a
+# non-finite Real (issue #202). Mirrors `_compiled_distribution` returning
+# `nothing` (scored as -Inf): the change of variables cannot be evaluated here, so
+# this step contributes -Inf to the total unconstrained log-joint, which the
+# sampler already treats as a divergent/rejected proposal. The destination slot is
+# still filled with a finite placeholder so the downstream (reject-mode) scoring
+# walk reads valid memory and returns a finite value -- `finite + (-Inf)` is -Inf,
+# whereas leaving the non-finite affine in place could make it `NaN`. The binding
+# is left unset: a genuinely-unknown binding is only consulted when it feeds
+# another noncentered loc/scale (it would be in `required` and poison loudly), and
+# the -Inf already forces rejection.
+function _reject_noncentered_transform_step!(destination, slot, inverse)
+    placeholder = zero(eltype(destination))
+    indices = inverse ? parameterindices(slot) : parametervalueindices(slot)
+    for index in indices
+        destination[index] = placeholder
+    end
+    return -oftype(placeholder, Inf)
+end
+
 function _walk_transform_step!(destination, step::CompiledChoicePlanStep, env, layout, params, inverse, constraints, required)
     if isnothing(step.parameter_slot)
         # Slotless choice. Unified value resolution (issue #95, doc section 2):
@@ -1601,12 +1629,30 @@ function _walk_transform_step!(destination, step::CompiledChoicePlanStep, env, l
     scale = _walk_transform_eval(env, step.noncentered.scale)
     (location isa _TransformUnknownValue || scale isa _TransformUnknownValue) &&
         throw(ArgumentError(_TRANSFORM_UNKNOWN_MESSAGE))
-    (location isa Real && scale isa Real && isfinite(location) && isfinite(scale)) || throw(
-        ArgumentError(
-            "reparam=:noncentered location/scale must evaluate to finite reals; got " *
-            "location=$location, scale=$scale for the choice bound to :$(slot.binding)",
-        ),
-    )
+    if !(location isa Real && scale isa Real && isfinite(location) && isfinite(scale))
+        # A non-finite (Inf/NaN) location/scale is a #157-class parameter-VALUE
+        # failure: a leapfrog trajectory on a funnel/heavy-tailed model overshoots
+        # to where a finite unconstrained tau maps to a non-finite constrained one,
+        # and the noncentered change of variables can no longer be evaluated. In
+        # reject mode (sampler-owned workspaces) treat it exactly like
+        # `_compiled_distribution` treats an invalid distribution: drive the
+        # log-joint to -Inf so the sampler rejects the proposal as divergent,
+        # instead of throwing out of the batched gradient. Gated strictly on
+        # `env.reject_invalid_parameters`, and -- mirroring the narrowness of the
+        # #157 catch (ArgumentError/DomainError only, never structural errors) --
+        # only when both are Reals, so a non-Real loc/scale (a genuine structural
+        # bug) still throws. Outside reject mode the check throws unchanged, so it
+        # keeps catching real model bugs.
+        if env.reject_invalid_parameters && location isa Real && scale isa Real
+            return _reject_noncentered_transform_step!(destination, slot, inverse)
+        end
+        throw(
+            ArgumentError(
+                "reparam=:noncentered location/scale must evaluate to finite reals; got " *
+                "location=$location, scale=$scale for the choice bound to :$(slot.binding)",
+            ),
+        )
+    end
     logspace = step.noncentered.logspace
     if inverse
         for (parameter_index, value_index) in zip(parameterindices(slot), parametervalueindices(slot))

@@ -114,15 +114,19 @@ run_chees() {
     # accept is 0.651 (vs NUTS's 0.8). The Stan/NumPyro/NUTS reference rows come
     # from the `cpu` leg.
     #
-    # Scoped to gauss (the many-chain GPU-story model). The eight-schools funnel is
-    # NOT run under ChEES: `batched_hmc`/`batched_chees` currently THROW on
-    # eight_schools_noncentered because the noncentered-reparam finite-check is not
-    # caught by the reject-invalid-parameters path inside the batched HMC leapfrog
-    # gradient (a #157-class gap in the HMC path; `batched_nuts` is unaffected).
-    # Tracked separately; add the funnel models here once that is fixed.
+    # gauss is the many-chain GPU-story model; eight_schools_noncentered is the
+    # funnel/heavy-tailed leg. The funnel was previously excluded (#203) because
+    # `batched_hmc`/`batched_chees` THREW on it -- the noncentered-reparam
+    # finite-check was not routed through the reject-invalid-parameters path inside
+    # the batched HMC leapfrog gradient (a #157-class gap; `batched_nuts` was
+    # unaffected). Fixed in #202: a non-finite loc/scale is now a rejected/divergent
+    # proposal (-Inf log-joint), so ChEES samples the funnel robustly.
     "${JL[@]}" -e 'using Pkg; Pkg.instantiate()'
     echo "=== gauss: ChEES pass ==="
     "${JL[@]}" julia/run.jl --model gauss --variant chees --target-accept 0.651 \
+        --chains $CHAINS --samples $SAMPLES --warmup $WARMUP --seed $SEED --reps $REPS
+    echo "=== eight_schools_noncentered: ChEES pass ==="
+    "${JL[@]}" julia/run.jl --model eight_schools_noncentered --variant chees --target-accept 0.651 \
         --chains $CHAINS --samples $SAMPLES --warmup $WARMUP --seed $SEED --reps $REPS
     echo "=== gauss: ChEES scaling sweep ==="
     for k in "${SCALE_CHAINS[@]}"; do

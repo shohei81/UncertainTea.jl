@@ -488,7 +488,8 @@ function _logjoint_unconstrained_with_workspace!(
             params,
             args,
             false,
-            constraints,
+            constraints;
+            reject_invalid_parameters=workspace.environment.reject_invalid_parameters,
         )
         return _logjoint_with_workspace!(workspace, constrained, args, constraints) + logabsdet
     end
