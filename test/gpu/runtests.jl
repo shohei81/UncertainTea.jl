@@ -770,3 +770,43 @@ end
     @test maximum(rhat(res)) < 1.05
     @test divrate < 0.05
 end
+
+# issue #227: an observation-consuming step AFTER a tiled loop. The tiled gradient
+# splits the plan into prelude + per-tile body; the post-loop observed choice must
+# resume its observation cursor past the loop's full consumption, else it silently
+# reads the loop's first row. Engages only at n_obs >= DEVICE_GRADIENT_TILE_MIN_OBS,
+# so the loop is sized above the threshold on device.
+@testset "device Metal GPU tiled post-loop observation smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping GPU tiled post-loop smoke test."
+        @test true
+        return
+    end
+
+    backend = Metal.MetalBackend()
+
+    @tea static function gpu_post_loop_model(n)
+        mu ~ normal(0.0, 1.0)
+        s ~ gamma(2.0, 1.0)
+        for i = 1:n
+            {:y => i} ~ normal(mu, s)
+        end
+        z ~ normal(mu, s)   # observation AFTER the tiled loop
+        return mu
+    end
+
+    n = 512
+    rng = Random.MersenneTwister(227)
+    ys = randn(rng, n)
+    params = randn(rng, 2, 4)
+    cm = choicemap(((:y => i, ys[i]) for i = 1:n)..., (:z, 10.0))
+
+    ws = DeviceBatchedWorkspace(gpu_post_loop_model, 4; backend=backend, precision=Float32, args=(n,), constraints=cm)
+    @test !isnothing(ws.tiled_gradient)
+
+    vref = batched_logjoint_unconstrained(gpu_post_loop_model, params, (n,), cm)
+    gref = batched_logjoint_gradient_unconstrained(gpu_post_loop_model, params, (n,), cm)
+    v, g = device_batched_logjoint_gradient!(ws, Float32.(params))
+    @test gpu_check_float32(Float64.(v), vref)
+    @test gpu_check_float32(vec(Float64.(g)), vec(gref))
+end
