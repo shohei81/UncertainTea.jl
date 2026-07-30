@@ -127,8 +127,13 @@ end
     # #121 gate for the WIDE path on a heavy GLM (CPU() Float64): finite, R-hat < 1.02,
     # essentially divergence-free, and posterior mean/sd agreeing with the masked device
     # path (the authoritative device reference) within a few MCSE.
-    X, N, cons = dptiled_logistic_data(8, 600)
-    kwargs = (num_chains=16, num_samples=500, num_warmup=500, backend=CPU())
+    # N/chains/draws are kept small for CI wall-time on the CPU() KA backend (which
+    # emulates the device kernel serially per lane). N drives the per-gradient cost but
+    # NOT the wide-vs-masked agreement tolerances -- both target the same posterior at
+    # the same N -- so it is cut hardest; the heavy-model speedup is measured separately
+    # (docs/persistent-nuts.md), not asserted here.
+    X, N, cons = dptiled_logistic_data(8, 120)
+    kwargs = (num_chains=8, num_samples=300, num_warmup=300, backend=CPU())
     wide = batched_nuts(
         dptiled_logistic, (X, N), cons;
         tree_strategy=:persistent, persistent_gradient=:wide, rng=MersenneTwister(7), kwargs...,
@@ -158,9 +163,9 @@ end
     # flip a proposal selection and send a chain to a different leaf -- an O(1) per-draw
     # difference that is inherent to NUTS, not a defect. What MUST hold is that the two
     # sample the SAME posterior; assert distributional agreement on a full adaptive run.
-    X, N, cons = dptiled_logistic_data(8, 400)
+    X, N, cons = dptiled_logistic_data(8, 120)
     full = (
-        num_chains=12, num_samples=400, num_warmup=400, backend=CPU(),
+        num_chains=8, num_samples=300, num_warmup=300, backend=CPU(),
         tree_strategy=:persistent, rng=MersenneTwister(3),
     )
     scalar = batched_nuts(dptiled_logistic, (X, N), cons; persistent_gradient=:scalar, full...)
@@ -177,7 +182,7 @@ end
     # walk at N==2 partials and the transform/log-abs-det path through DeviceGradN.
     res = batched_nuts(
         dptiled_two_param, (), choicemap((:y, 0.7));
-        num_chains=64, num_samples=800, num_warmup=500,
+        num_chains=32, num_samples=400, num_warmup=300,
         tree_strategy=:persistent, persistent_gradient=:wide, backend=CPU(), rng=MersenneTwister(2),
     )
     draws = posterior_array(res)
