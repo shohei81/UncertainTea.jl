@@ -29,6 +29,24 @@
     return nothing
 end
 
+"""
+    hmc(model, args=(), constraints=choicemap(); num_samples, kwargs...) -> HMCChain
+
+Run a single Hamiltonian Monte Carlo chain against `model` conditioned on
+`constraints`, returning an [`HMCChain`](@ref).
+
+Warmup adapts the step size (dual averaging to `target_accept`) and, optionally,
+the mass matrix. Key keyword arguments:
+
+- `num_samples` (required) and `num_warmup`: post-warmup and warmup iterations.
+- `step_size`, `num_leapfrog_steps`: leapfrog integrator settings.
+- `target_accept`, `adapt_step_size`, `adapt_mass_matrix`,
+  `find_reasonable_step_size`: adaptation controls.
+- `metric`: `:diag` (default) or `:dense` mass matrix.
+- `initial_params`, `rng`: initialization and randomness.
+
+See also [`nuts`](@ref), [`hmc_chains`](@ref), and [`batched_hmc`](@ref).
+"""
 function hmc(
     model::TeaModel,
     args::Tuple=(),
@@ -207,6 +225,25 @@ function hmc(
     )
 end
 
+"""
+    nuts(model, args=(), constraints=choicemap(); num_samples, kwargs...) -> HMCChain
+
+Run a single No-U-Turn Sampler chain against `model` conditioned on
+`constraints`, returning an [`HMCChain`](@ref). NUTS is the reference sampler:
+it builds a per-iteration trajectory that adapts its own length instead of using
+a fixed leapfrog-step count.
+
+Key keyword arguments:
+
+- `num_samples` (required) and `num_warmup`.
+- `step_size`, `max_tree_depth`, `max_delta_energy`: trajectory controls.
+- `target_accept`, `adapt_step_size`, `adapt_mass_matrix`,
+  `find_reasonable_step_size`: adaptation controls.
+- `metric`: `:diag` (default) or `:dense` mass matrix.
+- `initial_params`, `rng`.
+
+See also [`hmc`](@ref), [`nuts_chains`](@ref), and [`batched_nuts`](@ref).
+"""
 function nuts(
     model::TeaModel,
     args::Tuple=(),

@@ -1,3 +1,24 @@
+"""
+    batched_nuts(model, args=(), constraints=choicemap(); num_chains, num_samples, kwargs...) -> HMCChains
+
+Run many NUTS chains together over a dense parameter-by-chain layout — the
+layout that lowers to the device backend. Returns an [`HMCChains`](@ref).
+
+Key keyword arguments:
+
+- `num_chains`, `num_samples` (required), `num_warmup`.
+- `step_size`, `max_tree_depth`, `max_delta_energy`.
+- `target_accept`, `adapt_step_size`, `adapt_mass_matrix`,
+  `per_chain_adaptation` (per-chain step-size adaptation is the default).
+- `init` (`:prior` or `:uniform`), `init_max_retries`, `initial_params`.
+- `tree_strategy`: `:hybrid` (default), `:masked`, or `:persistent` (a
+  device-only, one-launch-per-iteration tree kernel that requires `backend`).
+- `backend`, `precision`, `persistent_gradient`: pass a
+  `KernelAbstractions.Backend` to run the inner loop device-resident.
+- `rng`.
+
+See also [`nuts`](@ref), [`batched_hmc`](@ref), and [`batched_chees`](@ref).
+"""
 function batched_nuts(
     model::TeaModel,
     args=(),

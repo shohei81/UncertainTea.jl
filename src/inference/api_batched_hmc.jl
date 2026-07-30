@@ -1,4 +1,18 @@
 
+"""
+    batched_hmc(model, args=(), constraints=choicemap(); num_chains, num_samples, kwargs...) -> HMCChains
+
+Run many fixed-length HMC chains together over a dense parameter-by-chain
+layout. Returns an [`HMCChains`](@ref).
+
+Key keyword arguments mirror [`batched_nuts`](@ref), with fixed-length
+integration (`num_leapfrog_steps`, `divergence_threshold`) instead of a NUTS
+tree. Pass a `KernelAbstractions.Backend` as `backend` to run the inner loop
+device-resident (with per-chain step size and a shared pooled diagonal mass);
+`per_chain_adaptation` defaults to `true`.
+
+See also [`hmc`](@ref), [`batched_nuts`](@ref), and [`batched_chees`](@ref).
+"""
 function batched_hmc(
     model::TeaModel,
     args=(),
