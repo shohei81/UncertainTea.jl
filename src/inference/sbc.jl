@@ -26,7 +26,11 @@ function Base.show(io::IO, ::MIME"text/plain", result::SBCResult)
         " posterior draws",
     )
     for (name, pvalue) in zip(result.parameter_names, result.pvalues)
-        println(io, "  ", name, ": rank-uniformity p = ", round(pvalue; sigdigits=3))
+        if isnan(pvalue)
+            println(io, "  ", name, ": rank-uniformity p = n/a (constant prior)")
+        else
+            println(io, "  ", name, ": rank-uniformity p = ", round(pvalue; sigdigits=3))
+        end
     end
     if has_warnings(result)
         println(io, "  warnings:")
@@ -79,7 +83,10 @@ sample `num_posterior_draws * thin` posterior draws (keeping every `thin`-th
 to reduce autocorrelation), and record the rank of the true parameter within
 the kept draws. Correct inference makes each rank uniform on
 `0:num_posterior_draws`; per-parameter chi-squared uniformity p-values below
-`warn_threshold` produce warnings (see `has_warnings`).
+`warn_threshold` produce warnings (see `has_warnings`). A coordinate with a
+point-mass prior (e.g. the unit diagonal of an `lkjcholesky` Cholesky factor)
+is structurally constant and cannot be calibrated, so it is reported as
+`p = NaN` and never warns.
 
 `observation_addresses` defaults to every choice address in a prior trace
 that is not a latent parameter slot. `sampler=:gibbs` runs [`gibbs`](@ref)
@@ -138,6 +145,14 @@ function sbc(
     ranks = Matrix{Int}(undef, 0, 0)
     signature_layout = nothing
     num_values = 0
+    # Track each signature coordinate's prior spread across simulations: a
+    # structurally constant coordinate (a point-mass prior, e.g. the unit
+    # diagonal `L[1,1] == 1` of an lkjcholesky Cholesky factor, or a derived
+    # packed entry that never varies) carries no calibration information -- its
+    # rank is degenerately pinned, so a uniformity test would always false-alarm.
+    # Such coordinates are excluded from the p-values/warnings below (issue #226).
+    truth_lo = Float64[]
+    truth_hi = Float64[]
     for simulation = 1:num_simulations
         prior_trace, _ = generate(model, args, choicemap(); rng=rng)
         if isnothing(data_addresses)
@@ -156,12 +171,18 @@ function sbc(
             num_values > 0 ||
                 throw(ArgumentError("sbc requires at least one free latent after conditioning on the observations"))
             ranks = Matrix{Int}(undef, num_values, num_simulations)
+            truth_lo = fill(Inf, num_values)
+            truth_hi = fill(-Inf, num_values)
         end
         # truth = the conditioned latents' values read from the prior trace, in
         # the signature layout that the sampler's constrained_samples follow.
         truth = Vector{Float64}(undef, num_values)
         for slot in signature_layout.slots
             _write_slot_value!(truth, slot, prior_trace[_static_address(slot.address)])
+        end
+        for value_index = 1:num_values
+            truth_lo[value_index] = min(truth_lo[value_index], truth[value_index])
+            truth_hi[value_index] = max(truth_hi[value_index], truth[value_index])
         end
         chain = if sampler === :gibbs
             gibbs(
@@ -222,13 +243,18 @@ function sbc(
     end
 
     names = _export_parameter_names(signature_layout, :constrained)
+    # A coordinate whose prior never moved it across simulations is a structural
+    # constant (point-mass prior); report NaN and skip its warning rather than
+    # false-alarm on the degenerate rank statistic (issue #226).
+    is_constant = truth_hi .== truth_lo
     pvalues = [
+        is_constant[value_index] ? NaN :
         _sbc_uniformity_pvalue(view(ranks, value_index, :), num_posterior_draws, num_bins) for
         value_index = 1:num_values
     ]
     warnings = String[]
     for (name, pvalue) in zip(names, pvalues)
-        pvalue < warn_threshold && push!(
+        (isnan(pvalue) || pvalue >= warn_threshold) || push!(
             warnings,
             "rank distribution for $name deviates from uniform (p = $(round(pvalue; sigdigits=3)))",
         )
