@@ -99,6 +99,44 @@ struct DeviceLaplaceChoiceStep{M,S} <: AbstractDeviceChoiceStep
     binding_slot::Int32
 end
 
+struct DeviceCauchyChoiceStep{M,S} <: AbstractDeviceChoiceStep
+    mu::M
+    sigma::S
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+struct DeviceHalfNormalChoiceStep{S} <: AbstractDeviceChoiceStep
+    sigma::S
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+struct DeviceHalfCauchyChoiceStep{S} <: AbstractDeviceChoiceStep
+    scale::S
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+struct DeviceLogisticChoiceStep{M,S} <: AbstractDeviceChoiceStep
+    mu::M
+    scale::S
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+struct DeviceGumbelChoiceStep{M,S} <: AbstractDeviceChoiceStep
+    mu::M
+    scale::S
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
 struct DeviceBetaChoiceStep{A,B} <: AbstractDeviceChoiceStep
     alpha::A
     beta::B
@@ -584,6 +622,88 @@ function _lower_device_step!(
     in_loop,
 ) where {T}
     _lower_device_two_arg!(out, step, step.mu, step.scale, DeviceLaplaceChoiceStep, backend, layout, T, issues, in_loop, "laplace")
+end
+function _lower_device_step!(
+    out,
+    step::BackendCauchyChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    _lower_device_two_arg!(out, step, step.mu, step.sigma, DeviceCauchyChoiceStep, backend, layout, T, issues, in_loop, "cauchy")
+end
+function _lower_device_step!(
+    out,
+    step::BackendHalfNormalChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    src = _device_choice_value_source(step, layout, in_loop, issues, "halfnormal")
+    sigma = _lower_device_expr(step.sigma, backend.generic_slots, T, issues, "halfnormal argument")
+    (isnothing(src) || isnothing(sigma)) && return nothing
+    value_source, tcode = src
+    push!(out, DeviceHalfNormalChoiceStep(sigma, value_source, tcode, _device_slot32(step.binding_slot)))
+    return nothing
+end
+function _lower_device_step!(
+    out,
+    step::BackendHalfCauchyChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    src = _device_choice_value_source(step, layout, in_loop, issues, "halfcauchy")
+    scale = _lower_device_expr(step.scale, backend.generic_slots, T, issues, "halfcauchy argument")
+    (isnothing(src) || isnothing(scale)) && return nothing
+    value_source, tcode = src
+    push!(out, DeviceHalfCauchyChoiceStep(scale, value_source, tcode, _device_slot32(step.binding_slot)))
+    return nothing
+end
+function _lower_device_step!(
+    out,
+    step::BackendLogisticChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    _lower_device_two_arg!(
+        out,
+        step,
+        step.mu,
+        step.scale,
+        DeviceLogisticChoiceStep,
+        backend,
+        layout,
+        T,
+        issues,
+        in_loop,
+        "logistic",
+    )
+end
+function _lower_device_step!(
+    out,
+    step::BackendGumbelChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    _lower_device_two_arg!(out, step, step.mu, step.scale, DeviceGumbelChoiceStep, backend, layout, T, issues, in_loop, "gumbel")
 end
 function _lower_device_step!(
     out,

@@ -150,6 +150,44 @@ end
     return (_device_laplace_logpdf(loc, scale, value) + lad, cur)
 end
 
+@inline function _device_score_step(step::DeviceCauchyChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    mu = _device_eval(step.mu, slots, col)
+    sigma = _device_eval(step.sigma, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_cauchy_logpdf(mu, sigma, value) + lad, cur)
+end
+
+@inline function _device_score_step(step::DeviceHalfNormalChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    sigma = _device_eval(step.sigma, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_halfnormal_logpdf(sigma, value) + lad, cur)
+end
+
+@inline function _device_score_step(step::DeviceHalfCauchyChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    scale = _device_eval(step.scale, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_halfcauchy_logpdf(scale, value) + lad, cur)
+end
+
+@inline function _device_score_step(step::DeviceLogisticChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    mu = _device_eval(step.mu, slots, col)
+    scale = _device_eval(step.scale, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_logistic_logpdf(mu, scale, value) + lad, cur)
+end
+
+@inline function _device_score_step(step::DeviceGumbelChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    mu = _device_eval(step.mu, slots, col)
+    scale = _device_eval(step.scale, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_gumbel_logpdf(mu, scale, value) + lad, cur)
+end
+
 @inline function _device_score_step(step::DeviceBetaChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
     alpha = _device_eval(step.alpha, slots, col)
     beta = _device_eval(step.beta, slots, col)

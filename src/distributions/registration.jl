@@ -41,6 +41,12 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :truncatedstudentt,
     :mixture,
     :iid,
+    :cauchy,
+    :halfnormal,
+    :halfcauchy,
+    :uniform,
+    :logistic,
+    :gumbel,
 )
 
 struct UserDistributionRegistration

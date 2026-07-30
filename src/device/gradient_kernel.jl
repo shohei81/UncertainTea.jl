@@ -175,6 +175,104 @@ end
     return (_device_laplace_logpdf(l, s, v) + lad, cur)
 end
 
+@inline function _device_grad_score_step(
+    step::DeviceCauchyChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    mu = _device_grad_eval(step.mu, slots, pidx, b)
+    sigma = _device_grad_eval(step.sigma, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    m, s, v = promote(mu, sigma, value)
+    return (_device_cauchy_logpdf(m, s, v) + lad, cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceHalfNormalChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    sigma = _device_grad_eval(step.sigma, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    s, v = promote(sigma, value)
+    return (_device_halfnormal_logpdf(s, v) + lad, cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceHalfCauchyChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    scale = _device_grad_eval(step.scale, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    s, v = promote(scale, value)
+    return (_device_halfcauchy_logpdf(s, v) + lad, cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceLogisticChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    mu = _device_grad_eval(step.mu, slots, pidx, b)
+    scale = _device_grad_eval(step.scale, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    m, s, v = promote(mu, scale, value)
+    return (_device_logistic_logpdf(m, s, v) + lad, cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceGumbelChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    mu = _device_grad_eval(step.mu, slots, pidx, b)
+    scale = _device_grad_eval(step.scale, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    m, s, v = promote(mu, scale, value)
+    return (_device_gumbel_logpdf(m, s, v) + lad, cur)
+end
+
 @inline function _device_grad_score_step(step::DeviceBetaChoiceStep, slots, params, observed, observed_int, tc, ls, pidx, b, cursor)
     alpha = _device_grad_eval(step.alpha, slots, pidx, b)
     beta = _device_grad_eval(step.beta, slots, pidx, b)

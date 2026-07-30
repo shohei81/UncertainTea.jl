@@ -95,6 +95,64 @@ struct StudentTDist{T<:Real} <: AbstractTeaDistribution
     end
 end
 
+struct CauchyDist{T<:Real} <: AbstractTeaDistribution
+    mu::T
+    sigma::T
+
+    function CauchyDist(mu::T, sigma::T) where {T<:Real}
+        sigma > zero(T) || throw(ArgumentError("cauchy requires sigma > 0"))
+        new{T}(mu, sigma)
+    end
+end
+
+struct HalfNormalDist{T<:Real} <: AbstractTeaDistribution
+    sigma::T
+
+    function HalfNormalDist(sigma::T) where {T<:Real}
+        sigma > zero(T) || throw(ArgumentError("halfnormal requires sigma > 0"))
+        new{T}(sigma)
+    end
+end
+
+struct HalfCauchyDist{T<:Real} <: AbstractTeaDistribution
+    scale::T
+
+    function HalfCauchyDist(scale::T) where {T<:Real}
+        scale > zero(T) || throw(ArgumentError("halfcauchy requires scale > 0"))
+        new{T}(scale)
+    end
+end
+
+struct UniformDist{T<:Real} <: AbstractTeaDistribution
+    lower::T
+    upper::T
+
+    function UniformDist(lower::T, upper::T) where {T<:Real}
+        upper > lower || throw(ArgumentError("uniform requires upper > lower"))
+        new{T}(lower, upper)
+    end
+end
+
+struct LogisticDist{T<:Real} <: AbstractTeaDistribution
+    mu::T
+    scale::T
+
+    function LogisticDist(mu::T, scale::T) where {T<:Real}
+        scale > zero(T) || throw(ArgumentError("logistic requires scale > 0"))
+        new{T}(mu, scale)
+    end
+end
+
+struct GumbelDist{T<:Real} <: AbstractTeaDistribution
+    mu::T
+    scale::T
+
+    function GumbelDist(mu::T, scale::T) where {T<:Real}
+        scale > zero(T) || throw(ArgumentError("gumbel requires scale > 0"))
+        new{T}(mu, scale)
+    end
+end
+
 # Builders normalize parameters through `float` so integer (or other non-float
 # real) literals reach the samplers as float storage (issue #73); `float` keeps
 # ForwardDiff Duals intact.
@@ -140,6 +198,34 @@ end
 function studentt(nu, mu, sigma)
     promoted_nu, promoted_mu, promoted_sigma = promote(float(nu), float(mu), float(sigma))
     return StudentTDist(promoted_nu, promoted_mu, promoted_sigma)
+end
+
+function cauchy(mu, sigma)
+    promoted_mu, promoted_sigma = promote(float(mu), float(sigma))
+    return CauchyDist(promoted_mu, promoted_sigma)
+end
+
+function halfnormal(sigma)
+    return HalfNormalDist(float(sigma))
+end
+
+function halfcauchy(scale)
+    return HalfCauchyDist(float(scale))
+end
+
+function uniform(lower, upper)
+    promoted_lower, promoted_upper = promote(float(lower), float(upper))
+    return UniformDist(promoted_lower, promoted_upper)
+end
+
+function logistic(mu, scale)
+    promoted_mu, promoted_scale = promote(float(mu), float(scale))
+    return LogisticDist(promoted_mu, promoted_scale)
+end
+
+function gumbel(mu, scale)
+    promoted_mu, promoted_scale = promote(float(mu), float(scale))
+    return GumbelDist(promoted_mu, promoted_scale)
 end
 
 function Random.rand(rng::AbstractRNG, dist::NormalDist{T}) where {T<:AbstractFloat}
@@ -220,6 +306,44 @@ function Random.rand(rng::AbstractRNG, dist::StudentTDist)
     sigma = float(dist.sigma)
     scale = randn(rng, typeof(mu)) / sqrt(_rand_gamma_marsaglia(rng, nu / 2, nu / 2))
     return mu + sigma * scale
+end
+
+function Random.rand(rng::AbstractRNG, dist::CauchyDist)
+    mu = float(dist.mu)
+    sigma = float(dist.sigma)
+    u = rand(rng, typeof(mu))
+    return mu + sigma * tan(oftype(mu, pi) * (u - oftype(mu, 0.5)))
+end
+
+function Random.rand(rng::AbstractRNG, dist::HalfNormalDist)
+    sigma = float(dist.sigma)
+    return abs(sigma * randn(rng, typeof(sigma)))
+end
+
+function Random.rand(rng::AbstractRNG, dist::HalfCauchyDist)
+    scale = float(dist.scale)
+    u = rand(rng, typeof(scale))
+    return abs(scale * tan(oftype(scale, pi) * (u - oftype(scale, 0.5))))
+end
+
+function Random.rand(rng::AbstractRNG, dist::UniformDist)
+    lower = float(dist.lower)
+    upper = float(dist.upper)
+    return lower + (upper - lower) * rand(rng, typeof(lower))
+end
+
+function Random.rand(rng::AbstractRNG, dist::LogisticDist)
+    mu = float(dist.mu)
+    scale = float(dist.scale)
+    u = rand(rng, typeof(mu))
+    return mu + scale * (log(u) - log1p(-u))
+end
+
+function Random.rand(rng::AbstractRNG, dist::GumbelDist)
+    mu = float(dist.mu)
+    scale = float(dist.scale)
+    u = rand(rng, typeof(mu))
+    return mu - scale * log(-log(u))
 end
 
 function _std_t_cdf(z, nu)
@@ -511,4 +635,43 @@ function logpdf(dist::StudentTDist, x)
     z = (xx - mu) / sigma
     return _studentt_log_constant(nu) - log(sigma) -
            (nu + one(nu)) * log1p((z * z) / nu) / 2
+end
+
+function logpdf(dist::CauchyDist, x)
+    xx, mu, sigma = promote(x, dist.mu, dist.sigma)
+    z = (xx - mu) / sigma
+    return -log(oftype(xx, pi)) - log(sigma) - log1p(z * z)
+end
+
+function logpdf(dist::HalfNormalDist, x)
+    xx, sigma = promote(x, dist.sigma)
+    xx >= zero(xx) || return oftype(xx, -Inf)
+    z = xx / sigma
+    return log(oftype(xx, 2)) - log(sigma) - log(2 * oftype(xx, pi)) / 2 - z * z / 2
+end
+
+function logpdf(dist::HalfCauchyDist, x)
+    xx, scale = promote(x, dist.scale)
+    xx >= zero(xx) || return oftype(xx, -Inf)
+    z = xx / scale
+    return log(oftype(xx, 2)) - log(oftype(xx, pi)) - log(scale) - log1p(z * z)
+end
+
+function logpdf(dist::UniformDist, x)
+    xx, lower, upper = promote(x, dist.lower, dist.upper)
+    lower <= xx <= upper || return oftype(xx, -Inf)
+    return -log(upper - lower)
+end
+
+function logpdf(dist::LogisticDist, x)
+    xx, mu, scale = promote(x, dist.mu, dist.scale)
+    z = (xx - mu) / scale
+    az = abs(z)
+    return -log(scale) - az - 2 * log1p(exp(-az))
+end
+
+function logpdf(dist::GumbelDist, x)
+    xx, mu, scale = promote(x, dist.mu, dist.scale)
+    z = (xx - mu) / scale
+    return -log(scale) - z - exp(-z)
 end
