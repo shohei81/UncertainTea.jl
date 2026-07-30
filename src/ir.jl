@@ -562,6 +562,18 @@ function _uniform_static_bounds(arguments)
     return (lower, upper)
 end
 
+# pareto(x_m, alpha) has support x >= x_m, so a latent slot unconstrains through
+# a LowerBoundedTransform whose bound must be a literal (static) positive Number,
+# reusing the static-bounds discipline of the truncated/uniform families. Returns
+# the static x_m when arg 1 is a static finite positive Number, else nothing.
+function _pareto_static_lower(arguments)
+    length(arguments) == 2 || return nothing
+    xm = _static_bound_value(arguments[1])
+    isnothing(xm) && return nothing
+    (isfinite(xm) && xm > 0) || return nothing
+    return xm
+end
+
 function _truncated_bound_transform(lower::Real, upper::Real)
     lower_finite = isfinite(lower)
     upper_finite = isfinite(upper)
@@ -628,8 +640,13 @@ function _parameter_transform(rhs::DistributionSpec)
         size = _mvnormaldense_static_size(rhs.arguments)
         isnothing(size) || return VectorIdentityTransform(size)
     elseif rhs.family === :lognormal || rhs.family === :exponential || rhs.family === :gamma ||
-           rhs.family === :inversegamma || rhs.family === :weibull
+           rhs.family === :inversegamma || rhs.family === :weibull ||
+           rhs.family === :frechet || rhs.family === :rayleigh || rhs.family === :inversegaussian
         return LogTransform()
+    elseif rhs.family === :pareto
+        xm = _pareto_static_lower(rhs.arguments)
+        isnothing(xm) && return nothing
+        return LowerBoundedTransform(xm)
     elseif rhs.family === :beta
         return LogitTransform()
     elseif rhs.family === :dirichlet
@@ -680,7 +697,8 @@ function _iid_parameter_transform(arguments)
         return VectorIdentityTransform(size)
     elseif family === :lognormal || family === :exponential || family === :gamma ||
            family === :inversegamma || family === :weibull ||
-           family === :halfnormal || family === :halfcauchy
+           family === :halfnormal || family === :halfcauchy ||
+           family === :frechet || family === :rayleigh || family === :inversegaussian
         return VectorLogTransform(size)
     elseif family === :beta
         return VectorLogitTransform(size)

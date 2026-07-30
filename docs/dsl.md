@@ -378,6 +378,9 @@ The initial GPU-targeted distribution set should stay small:
 - `uniform`
 - `logistic`
 - `gumbel`
+- `frechet`
+- `rayleigh`
+- `inversegaussian`
 - `categorical`
 - `truncatednormal`
 - `truncatedstudentt`
@@ -508,6 +511,19 @@ Requirements:
   bounds** (the same restriction the truncated families use); a dynamic bound is
   allowed only for an observation and otherwise raises an `ArgumentError` at
   macro-expansion time.
+- The positive-support / heavy-tail families `pareto(x_m, alpha)`,
+  `frechet(shape, scale)`, `rayleigh(scale)`, and `inversegaussian(mu, lambda)`
+  (Wald) are first-class elementary densities. `frechet`/`rayleigh`/
+  `inversegaussian` are positive (`LogTransform`, like `lognormal`) with full
+  CPU-reference, backend-native (analytic batched gradient), and device
+  (KernelAbstractions) support. `pareto` has support `x >= x_m`, so a latent
+  unconstrains through a `LowerBoundedTransform` and therefore requires a
+  **literal (static) positive lower bound** `x_m` (the same static-bounds rule the
+  truncated/`uniform` families use); as with `uniform`, that transform is not a
+  batched/device transform, so a latent `pareto` honestly falls back to the
+  ForwardDiff column path and `device_report` reports it unsupported, while a
+  `pareto` observation (with an arbitrary, possibly dynamic `x_m`) is
+  backend-native.
 
 ## Non-Centered Reparameterization
 

@@ -124,6 +124,24 @@ end
     return -log(scale) - z - exp(-z)
 end
 
+# positive-support / heavy-tail families (issue #230). log(2pi)/2 = 0.9189385332046727.
+@inline function _device_frechet_logpdf(shape::T, scale::T, x::T) where {T}
+    logz = log(x) - log(scale)
+    base = log(shape) - log(scale) - (one(T) + shape) * logz - exp(-shape * logz)
+    return ifelse(x > zero(T), base, _device_neginf(T))
+end
+
+@inline function _device_rayleigh_logpdf(scale::T, x::T) where {T}
+    base = log(x) - T(2) * log(scale) - x * x / (T(2) * scale * scale)
+    return ifelse(x > zero(T), base, _device_neginf(T))
+end
+
+@inline function _device_inversegaussian_logpdf(mu::T, lambda::T, x::T) where {T}
+    d = x - mu
+    base = T(0.5) * log(lambda) - T(0.9189385332046727) - T(1.5) * log(x) - lambda * d * d / (T(2) * mu * mu * x)
+    return ifelse(x > zero(T), base, _device_neginf(T))
+end
+
 @inline function _device_beta_logpdf(alpha::T, beta::T, x::T) where {T}
     logbeta = _device_loggamma(alpha) + _device_loggamma(beta) - _device_loggamma(alpha + beta)
     base = (alpha - one(T)) * log(x) + (beta - one(T)) * log1p(-x) - logbeta

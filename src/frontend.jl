@@ -59,6 +59,10 @@ function _qualify_builtin_distribution(name)
         :uniform,
         :logistic,
         :gumbel,
+        :pareto,
+        :frechet,
+        :rayleigh,
+        :inversegaussian,
     )
         return _qualify(name)
     end
@@ -82,6 +86,7 @@ const _KNOWN_DISTRIBUTION_FAMILIES = (
     :betabinomial, :multinomial, :discreteuniform, :geometric,
     :negativebinomial, :poisson, :studentt, :categorical, :truncatednormal, :truncatedstudentt, :mixture,
     :cauchy, :halfnormal, :halfcauchy, :uniform, :logistic, :gumbel,
+    :pareto, :frechet, :rayleigh, :inversegaussian,
 )
 
 # Detects a dot-call distribution observation `family.(args...)` on the RHS of `~`.
@@ -499,12 +504,22 @@ function _supported_distribution_family(rhs)
     family in (
         :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull, :beta, :studentt,
         :cauchy, :halfnormal, :halfcauchy, :logistic, :gumbel,
+        :frechet, :rayleigh, :inversegaussian,
     ) && return family
     if family === :uniform
         isnothing(_uniform_static_bounds(rhs.args[2:end])) && throw(
             ArgumentError(
                 "uniform latents require literal (static) finite bounds; use static Number lower and upper bounds, " *
                 "or provide the value as an observation for dynamic bounds",
+            ),
+        )
+        return family
+    end
+    if family === :pareto
+        isnothing(_pareto_static_lower(rhs.args[2:end])) && throw(
+            ArgumentError(
+                "pareto latents require a literal (static) positive lower bound x_m; use a static Number as the " *
+                "first argument, or provide the value as an observation for a dynamic x_m",
             ),
         )
         return family
@@ -624,8 +639,14 @@ function _parameter_transform_expr(rhs, reparam::Symbol=:centered)
         isnothing(size) && throw(ArgumentError("lkjcholesky parameter slots require a literal integer dimension"))
         return :($(_qualify(:CholeskyCorrTransform))($size))
     elseif family === :lognormal || family === :exponential || family === :gamma ||
-           family === :inversegamma || family === :weibull
+           family === :inversegamma || family === :weibull ||
+           family === :frechet || family === :rayleigh || family === :inversegaussian
         return :($(_qualify(:LogTransform))())
+    elseif family === :pareto
+        xm = _pareto_static_lower(rhs.args[2:end])
+        isnothing(xm) &&
+            throw(ArgumentError("pareto parameter slots require a literal (static) positive lower bound x_m"))
+        return :($(_qualify(:LowerBoundedTransform))($xm))
     elseif family === :beta
         return :($(_qualify(:LogitTransform))())
     elseif family === :dirichlet

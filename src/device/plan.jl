@@ -137,6 +137,29 @@ struct DeviceGumbelChoiceStep{M,S} <: AbstractDeviceChoiceStep
     binding_slot::Int32
 end
 
+struct DeviceFrechetChoiceStep{SH,SC} <: AbstractDeviceChoiceStep
+    shape::SH
+    scale::SC
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+struct DeviceRayleighChoiceStep{S} <: AbstractDeviceChoiceStep
+    scale::S
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
+struct DeviceInverseGaussianChoiceStep{M,L} <: AbstractDeviceChoiceStep
+    mu::M
+    lambda::L
+    value_source::Int32
+    transform::Int32
+    binding_slot::Int32
+end
+
 struct DeviceBetaChoiceStep{A,B} <: AbstractDeviceChoiceStep
     alpha::A
     beta::B
@@ -704,6 +727,71 @@ function _lower_device_step!(
     in_loop,
 ) where {T}
     _lower_device_two_arg!(out, step, step.mu, step.scale, DeviceGumbelChoiceStep, backend, layout, T, issues, in_loop, "gumbel")
+end
+function _lower_device_step!(
+    out,
+    step::BackendFrechetChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    _lower_device_two_arg!(
+        out,
+        step,
+        step.shape,
+        step.scale,
+        DeviceFrechetChoiceStep,
+        backend,
+        layout,
+        T,
+        issues,
+        in_loop,
+        "frechet",
+    )
+end
+function _lower_device_step!(
+    out,
+    step::BackendRayleighChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    src = _device_choice_value_source(step, layout, in_loop, issues, "rayleigh")
+    scale = _lower_device_expr(step.scale, backend.generic_slots, T, issues, "rayleigh argument")
+    (isnothing(src) || isnothing(scale)) && return nothing
+    value_source, tcode = src
+    push!(out, DeviceRayleighChoiceStep(scale, value_source, tcode, _device_slot32(step.binding_slot)))
+    return nothing
+end
+function _lower_device_step!(
+    out,
+    step::BackendInverseGaussianChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    _lower_device_two_arg!(
+        out,
+        step,
+        step.mu,
+        step.lambda,
+        DeviceInverseGaussianChoiceStep,
+        backend,
+        layout,
+        T,
+        issues,
+        in_loop,
+        "inversegaussian",
+    )
 end
 function _lower_device_step!(
     out,

@@ -499,6 +499,58 @@
         return m
     end
 
+    # positive-support / heavy-tail families (issue #230). frechet/rayleigh/
+    # inversegaussian are positive (log transform), so all three are
+    # backend-native as both observations and latents. `pareto` is
+    # observation-only on the backend (its lower-bounded transform falls back for
+    # latents, exactly like uniform), so it gets an obs entry whose x_m depends on
+    # a latent to exercise the dx_m/dalpha channels; the observed y stays well
+    # above the widening lower bound across the seeded points and the
+    # finite-difference steps, so the density is smooth.
+    @tea static function gxc_frechet_obs()
+        a ~ normal(0.0f0, 0.3f0)
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ frechet(exp(a), exp(s))
+        return a
+    end
+
+    @tea static function gxc_frechet_latent()
+        x ~ frechet(2.0f0, 1.2f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_rayleigh_obs()
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ rayleigh(exp(s))
+        return s
+    end
+
+    @tea static function gxc_rayleigh_latent()
+        x ~ rayleigh(1.5f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_inversegaussian_obs()
+        m ~ normal(0.0f0, 0.3f0)
+        l ~ normal(0.0f0, 0.3f0)
+        {:y} ~ inversegaussian(exp(m), exp(l))
+        return m
+    end
+
+    @tea static function gxc_inversegaussian_latent()
+        x ~ inversegaussian(1.5f0, 2.0f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_pareto_obs()
+        w ~ normal(0.0f0, 0.3f0)
+        {:y} ~ pareto(0.2f0 + 0.1f0 * exp(w), 3.0f0)
+        return w
+    end
+
     gxc_dense_factor = [1.0 0.0; 0.3 0.8]
     gxc_glm_covariates = reshape(Float32[0.7, -1.1], 2, 1)  # d x n = 2 x 1
 
@@ -607,6 +659,19 @@
             (gxc_gumbel_obs, (), choicemap((:y, 0.7f0))),
             (gxc_gumbel_latent, (), choicemap((:y, 0.9f0))),
         ],
+        :frechet => [
+            (gxc_frechet_obs, (), choicemap((:y, 1.3f0))),
+            (gxc_frechet_latent, (), choicemap((:y, 0.9f0))),
+        ],
+        :rayleigh => [
+            (gxc_rayleigh_obs, (), choicemap((:y, 1.1f0))),
+            (gxc_rayleigh_latent, (), choicemap((:y, 1.1f0))),
+        ],
+        :inversegaussian => [
+            (gxc_inversegaussian_obs, (), choicemap((:y, 1.2f0))),
+            (gxc_inversegaussian_latent, (), choicemap((:y, 1.1f0))),
+        ],
+        :pareto => [(gxc_pareto_obs, (), choicemap((:y, 1.5f0)))],
     )
 
     for (gxc_index, gxc_family) in enumerate(UncertainTea.GPU_BACKEND_SUPPORTED_DISTRIBUTIONS)

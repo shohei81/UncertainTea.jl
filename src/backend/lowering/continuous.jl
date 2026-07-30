@@ -32,6 +32,10 @@ const GPU_BACKEND_SUPPORTED_DISTRIBUTIONS = Symbol[
     :uniform,
     :logistic,
     :gumbel,
+    :pareto,
+    :frechet,
+    :rayleigh,
+    :inversegaussian,
 ]
 
 struct BackendNormalChoicePlanStep{M<:AbstractBackendExpr,S<:AbstractBackendExpr,AD<:BackendAddressSpec} <:
@@ -382,6 +386,93 @@ function _collect_backend_slot_kinds!(
     _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
     _mark_backend_numeric_expr_slots!(step.mu, numeric_slots, index_slots, generic_slots)
     _mark_backend_numeric_expr_slots!(step.scale, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_numeric_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+# ---- positive-support / heavy-tail families (issue #230) ----
+
+struct BackendParetoChoicePlanStep{XM<:AbstractBackendExpr,A<:AbstractBackendExpr,AD<:BackendAddressSpec} <:
+       BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    xm::XM
+    alpha::A
+    parameter_slot::Union{Nothing,Int}
+end
+
+struct BackendFrechetChoicePlanStep{SH<:AbstractBackendExpr,SC<:AbstractBackendExpr,AD<:BackendAddressSpec} <:
+       BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    shape::SH
+    scale::SC
+    parameter_slot::Union{Nothing,Int}
+end
+
+struct BackendRayleighChoicePlanStep{S<:AbstractBackendExpr,AD<:BackendAddressSpec} <: BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    scale::S
+    parameter_slot::Union{Nothing,Int}
+end
+
+struct BackendInverseGaussianChoicePlanStep{M<:AbstractBackendExpr,L<:AbstractBackendExpr,AD<:BackendAddressSpec} <:
+       BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    mu::M
+    lambda::L
+    parameter_slot::Union{Nothing,Int}
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendParetoChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.xm, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.alpha, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_numeric_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendFrechetChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.shape, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.scale, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_numeric_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendRayleighChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.scale, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_numeric_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendInverseGaussianChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.mu, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.lambda, numeric_slots, index_slots, generic_slots)
     isnothing(step.binding_slot) || _mark_backend_numeric_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
     return nothing
 end

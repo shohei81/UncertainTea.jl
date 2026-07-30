@@ -153,6 +153,49 @@ struct GumbelDist{T<:Real} <: AbstractTeaDistribution
     end
 end
 
+# Positive-support / heavy-tail families (issue #230).
+struct ParetoDist{T<:Real} <: AbstractTeaDistribution
+    xm::T
+    alpha::T
+
+    function ParetoDist(xm::T, alpha::T) where {T<:Real}
+        xm > zero(T) || throw(ArgumentError("pareto requires x_m > 0"))
+        alpha > zero(T) || throw(ArgumentError("pareto requires alpha > 0"))
+        new{T}(xm, alpha)
+    end
+end
+
+struct FrechetDist{T<:Real} <: AbstractTeaDistribution
+    shape::T
+    scale::T
+
+    function FrechetDist(shape::T, scale::T) where {T<:Real}
+        shape > zero(T) || throw(ArgumentError("frechet requires shape > 0"))
+        scale > zero(T) || throw(ArgumentError("frechet requires scale > 0"))
+        new{T}(shape, scale)
+    end
+end
+
+struct RayleighDist{T<:Real} <: AbstractTeaDistribution
+    scale::T
+
+    function RayleighDist(scale::T) where {T<:Real}
+        scale > zero(T) || throw(ArgumentError("rayleigh requires scale > 0"))
+        new{T}(scale)
+    end
+end
+
+struct InverseGaussianDist{T<:Real} <: AbstractTeaDistribution
+    mu::T
+    lambda::T
+
+    function InverseGaussianDist(mu::T, lambda::T) where {T<:Real}
+        mu > zero(T) || throw(ArgumentError("inversegaussian requires mu > 0"))
+        lambda > zero(T) || throw(ArgumentError("inversegaussian requires lambda > 0"))
+        new{T}(mu, lambda)
+    end
+end
+
 # Builders normalize parameters through `float` so integer (or other non-float
 # real) literals reach the samplers as float storage (issue #73); `float` keeps
 # ForwardDiff Duals intact.
@@ -226,6 +269,25 @@ end
 function gumbel(mu, scale)
     promoted_mu, promoted_scale = promote(float(mu), float(scale))
     return GumbelDist(promoted_mu, promoted_scale)
+end
+
+function pareto(xm, alpha)
+    promoted_xm, promoted_alpha = promote(float(xm), float(alpha))
+    return ParetoDist(promoted_xm, promoted_alpha)
+end
+
+function frechet(shape, scale)
+    promoted_shape, promoted_scale = promote(float(shape), float(scale))
+    return FrechetDist(promoted_shape, promoted_scale)
+end
+
+function rayleigh(scale)
+    return RayleighDist(float(scale))
+end
+
+function inversegaussian(mu, lambda)
+    promoted_mu, promoted_lambda = promote(float(mu), float(lambda))
+    return InverseGaussianDist(promoted_mu, promoted_lambda)
 end
 
 function Random.rand(rng::AbstractRNG, dist::NormalDist{T}) where {T<:AbstractFloat}
@@ -344,6 +406,42 @@ function Random.rand(rng::AbstractRNG, dist::GumbelDist)
     scale = float(dist.scale)
     u = rand(rng, typeof(mu))
     return mu - scale * log(-log(u))
+end
+
+function Random.rand(rng::AbstractRNG, dist::ParetoDist)
+    xm = float(dist.xm)
+    alpha = float(dist.alpha)
+    u = rand(rng, typeof(xm))
+    # Inverse CDF: F(x) = 1 - (xm/x)^alpha, so x = xm * u^(-1/alpha).
+    return xm * u^(-inv(alpha))
+end
+
+function Random.rand(rng::AbstractRNG, dist::FrechetDist)
+    shape = float(dist.shape)
+    scale = float(dist.scale)
+    u = rand(rng, typeof(scale))
+    # Inverse CDF: F(x) = exp(-(x/s)^(-alpha)), so x = s * (-log u)^(-1/alpha).
+    return scale * (-log(u))^(-inv(shape))
+end
+
+function Random.rand(rng::AbstractRNG, dist::RayleighDist)
+    scale = float(dist.scale)
+    u = rand(rng, typeof(scale))
+    # Inverse CDF: F(x) = 1 - exp(-x^2/(2 s^2)), so x = s * sqrt(-2 log u).
+    return scale * sqrt(-2 * log(u))
+end
+
+function Random.rand(rng::AbstractRNG, dist::InverseGaussianDist)
+    mu = float(dist.mu)
+    lambda = float(dist.lambda)
+    # Michael-Schucany-Haas transform: one randn + one uniform.
+    nu = randn(rng, typeof(mu))
+    y = nu * nu
+    x =
+        mu + (mu * mu * y) / (2 * lambda) -
+        (mu / (2 * lambda)) * sqrt(4 * mu * lambda * y + mu * mu * y * y)
+    z = rand(rng, typeof(mu))
+    return z <= mu / (mu + x) ? x : mu * mu / x
 end
 
 function _std_t_cdf(z, nu)
@@ -674,4 +772,31 @@ function logpdf(dist::GumbelDist, x)
     xx, mu, scale = promote(x, dist.mu, dist.scale)
     z = (xx - mu) / scale
     return -log(scale) - z - exp(-z)
+end
+
+function logpdf(dist::ParetoDist, x)
+    xx, xm, alpha = promote(x, dist.xm, dist.alpha)
+    xx >= xm || return oftype(xx, -Inf)
+    return log(alpha) + alpha * log(xm) - (alpha + one(alpha)) * log(xx)
+end
+
+function logpdf(dist::FrechetDist, x)
+    xx, shape, scale = promote(x, dist.shape, dist.scale)
+    xx > zero(xx) || return oftype(xx, -Inf)
+    logz = log(xx) - log(scale)
+    return log(shape) - log(scale) - (one(shape) + shape) * logz - exp(-shape * logz)
+end
+
+function logpdf(dist::RayleighDist, x)
+    xx, scale = promote(x, dist.scale)
+    xx > zero(xx) || return oftype(xx, -Inf)
+    return log(xx) - 2 * log(scale) - xx * xx / (2 * scale * scale)
+end
+
+function logpdf(dist::InverseGaussianDist, x)
+    xx, mu, lambda = promote(x, dist.mu, dist.lambda)
+    xx > zero(xx) || return oftype(xx, -Inf)
+    d = xx - mu
+    return log(lambda) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
+           lambda * d * d / (2 * mu * mu * xx)
 end

@@ -273,6 +273,65 @@ end
     return (_device_gumbel_logpdf(m, s, v) + lad, cur)
 end
 
+@inline function _device_grad_score_step(
+    step::DeviceFrechetChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    shape = _device_grad_eval(step.shape, slots, pidx, b)
+    scale = _device_grad_eval(step.scale, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    sh, sc, v = promote(shape, scale, value)
+    return (_device_frechet_logpdf(sh, sc, v) + lad, cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceRayleighChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    scale = _device_grad_eval(step.scale, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    s, v = promote(scale, value)
+    return (_device_rayleigh_logpdf(s, v) + lad, cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceInverseGaussianChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    mu = _device_grad_eval(step.mu, slots, pidx, b)
+    lambda = _device_grad_eval(step.lambda, slots, pidx, b)
+    value, lad, cur = _device_grad_choice_value(step, params, observed, pidx, b, cursor, eltype(slots))
+    _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
+    m, l, v = promote(mu, lambda, value)
+    return (_device_inversegaussian_logpdf(m, l, v) + lad, cur)
+end
+
 @inline function _device_grad_score_step(step::DeviceBetaChoiceStep, slots, params, observed, observed_int, tc, ls, pidx, b, cursor)
     alpha = _device_grad_eval(step.alpha, slots, pidx, b)
     beta = _device_grad_eval(step.beta, slots, pidx, b)
