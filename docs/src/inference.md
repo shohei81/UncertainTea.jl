@@ -90,6 +90,22 @@ statistically equivalent to — not bitwise identical to — the CPU path.
   Gaussian approximations.
 - `sbc` — simulation-based calibration, which runs one of the batched samplers
   under the hood and doubles as an end-to-end correctness check.
+- `nested_sampling` — static nested sampling (Skilling 2006): a **CPU-only,
+  gradient-free** estimator of the log-evidence `log Z` **with an
+  information-based uncertainty** (`sqrt(H/N)` via `log_evidence_error`), plus
+  importance-weighted posterior draws as a by-product. It is the package's third,
+  independent evidence estimator alongside importance sampling and tempered SMC,
+  presented as the **multimodal / evidence-with-uncertainty** option rather than
+  a faster path for unimodal problems: live points migrate into every surviving
+  mode, so well-separated multimodal posteriors are handled naturally. The
+  correctness crux is the constrained-prior replacement; the default `:rwmh`
+  (a short random-walk Metropolis chain in unconstrained space, seeded at a
+  surviving live point, accepting only inside the likelihood constraint) needs no
+  gradients and so works on non-differentiable models, while `:rejection` gives
+  exact draws for very low-dimensional problems. Continuous latents only (no
+  `marginalize=:enumerate`); validated for correctness in low dimension —
+  `:rwmh` mixing, hence evidence quality, degrades as dimension grows and needs a
+  longer `num_walk`.
 - Model comparison and predictive helpers: `waic`, `psis_loo` / `loo`,
   `pointwise_loglikelihood`, and `predict`.
 
