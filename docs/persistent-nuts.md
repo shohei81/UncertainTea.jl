@@ -196,3 +196,101 @@ best case; the full `reps=3` 64–16384 sweep and the summary refresh are a main
 step. Remaining increment-3/4 work: obs-tiling the in-kernel gradient for
 heavy-per-gradient models (e.g. `logistic_large`), threadgroup-per-chain for the
 few-chains/large-N regime, and on-device SBC.
+
+### (4) Heavy-per-gradient in-kernel gradient — **SHIPPED (this PR)**
+
+The increment-2 kernel evaluates the leapfrog gradient with **P serial scalar-dual plan
+walks** (one per parameter; `_persist_eval_grad!` over `DeviceDual`, `dual.jl`). Each
+walk is O(N) over the observations and each **recomputes the entire logjoint value** —
+every transcendental in every logpdf — only to read off one partial derivative. On a
+heavy-per-gradient model (`logistic_large`: P=16 coefficients + intercept, N=8000) that
+is O(P·N) serial per leaf and, worse, evaluates `N·(P+1)` transcendentals per gradient
+where only `N` are mathematically distinct. This increment removes that redundancy.
+
+**What shipped: a P-partial "wide" forward-dual, single plan walk (lane-per-chain).**
+`src/device/grad_wide.jl` adds `DeviceGradN{N,T}` — a forward-mode dual carrying a value
+and all `N == P` directional derivatives at once (`partials::NTuple{N,T}`). One walk of
+the SAME lowered device plan then produces the whole gradient: the `.partials` ARE
+`gradients[:, b]` and `.value` is the logjoint. Each transcendental is evaluated **once**
+and its derivative fanned across the `N` partials by cheap multiply-adds, collapsing the
+`N·(P+1)` transcendentals to `N`. It is `isbits`, allocation-free and exception-free, so
+the identical code runs on **CPU()** (Float64) and **Metal** (Float32), exactly like
+`DeviceDual`. The step family in `gradient_kernel.jl` was made dual-width-agnostic by
+routing its two differentiation-seed sites through shared `_seed_latent` / `_seed_obs`
+primitives (scalar seeding is byte-for-byte the pre-refactor expression, so the masked
+and grid gradient paths are unchanged — verified by the full device regression suite).
+
+**Why this and NOT the threadgroup-per-chain tree the #154 sketch names as the
+endgame.** The sketch's headline is a threadgroup per chain that tiles the gradient
+across a group's lanes with `@localmem` + `@synchronize`. In KernelAbstractions 0.9,
+`@synchronize`/`@localmem` are usable ONLY in the `@kernel` body — empirically they
+cannot be captured inside a called `@inline` device function (`@synchronize used outside
+kernel or not captured`). The persistent tree's gradient is evaluated from deep inside
+its data-dependent doubling/leaf loops, so a threadgroup variant would have to **inline
+the whole ~250-line tree into one kernel with barriers threaded through those loops** —
+an untested Metal deadlock risk (divergent `@synchronize`) with no `@localmem`/
+`@synchronize` precedent anywhere in this package. The #154 issue explicitly sanctions
+the **P-partial forward-dual single walk as the acceptable fallback**; that is what
+shipped. It stays **lane-per-chain**: no barriers, no shared memory, and the on-device
+Philox RNG stream is byte-for-byte the increment-2 kernel's (draws are still a pure
+function of `(chain, iteration, stream, draw)`, independent of any parallelization), so
+the wide path is a drop-in change to *how the gradient is computed*, nothing else. The
+threadgroup-per-chain tree remains genuine future work.
+
+**Auto-selection heuristic.** The dual width is chosen at workspace construction from the
+unconstrained parameter count `P`:
+
+- `P >= 8` (`_PERSIST_WIDE_MIN_PARAMS`) → **wide** (`DeviceGradN{P}` single walk). Heavy
+  GLMs land here (`logistic` P=9, `logistic_large` P=17) and get the transcendental
+  collapse.
+- `P < 8` → **scalar** (the proven increment-2 per-parameter walk). Every small model
+  (gauss P≤2, the two-parameter location/log-scale model, eight-schools) stays on the
+  unchanged default path, where the wide dual's fixed N-wide-`NTuple` arithmetic per op
+  would not pay for itself and would only waste work.
+
+`batched_nuts(...; persistent_gradient = :auto | :scalar | :wide)` overrides the
+heuristic per call (`:auto` is the default). Small-P / many-chains therefore keeps using
+the increment-2 kernel exactly, so increments 2/3 do not regress.
+
+**Cost model (honest).** The wide walk is the SAME O(P·N) FLOP class as the scalar walk —
+the partial propagation is O(P) per operation — so it is never slower, and it is strictly
+faster only where a logpdf spends real work in a transcendental (the redundant `N·P`
+transcendentals become `N`). It is therefore targeted at, and auto-selected for, the
+heavy-GLM regime; it is not a universal win and is deliberately not used at small P.
+
+**Validation (the #121 gate, CPU() Float64).** On the heavy logistic GLM (D=8, N=600,
+16 chains) the wide path clears the gate: rank-normalized split R-hat < 1.02, 0
+divergences, posterior mean/sd agreeing with the `:masked` device path within a few MCSE,
+min-ESS within a few percent of masked. `DeviceGradN`'s derivative channel is validated
+to equal `DeviceDual`'s exactly across the full op set (`+,-,*,/,^,exp,log,log1p,sqrt,
+tanh,…`), and the wide persistent NUTS samples the SAME posterior as the scalar
+persistent NUTS (distributional agreement; the two are NOT expected to trace identical
+trajectories because NUTS's multinomial slice/merge makes discrete `log(u) < …` decisions
+that a ~1e-12 partial-sum reassociation can flip). gauss and the two-parameter model
+(auto → scalar) still pass unchanged. Tests:
+`test/uncertaintea/core/device_persistent_nuts_tiled.jl` (78 assertions) plus a Metal
+Float32 smoke leg in `test/gpu/runtests.jl`.
+
+**Measured heavy-model speedup (heavy logistic GLM, D=8 → P=9, N=8000, CPU() Float64,
+Apple M4; end-to-end wall-clock incl. warmup, 200 warmup + 200 sample).** Persistent wide
+vs persistent scalar: **3.55× at 16 chains** (17.8 s vs 63.0 s) and **3.69× at 32 chains**
+(36.0 s vs 132.6 s), both at R-hat 1.0, 0 divergences, and identical posterior mean — the
+wide walk is the scalar path's work minus the redundant `N·P` transcendentals. The wide
+kernel itself compiled in 0.7 s here (the scalar persistent kernel 6.5 s), and the full
+`logistic_large` D=16 (P=17) wide kernel compiles + runs in ~7.5 s — no compile-time
+blowup with `P`. The speedup grows with `P` (more redundant transcendentals collapsed),
+so `logistic_large`'s P=17 shape gets an even larger win than the P=9 numbers above.
+(N.B. building the `logistic_large` observation `choicemap` by SPLATTING an 8000-element
+generator, `choicemap((… for i in 1:8000)...)`, is a many-minute type-inference trap in
+the harness unrelated to this kernel; pass the generator WITHOUT `...` so `choicemap`
+takes its iterating path.)
+
+**Deviations / limitations (honest scope).**
+
+- The **threadgroup-per-chain** tree (true intra-chain lane parallelism for the
+  few-chains / large-N regime) is NOT shipped; the wide dual is the issue's sanctioned
+  P-partial fallback and is a lane-per-chain change. The threadgroup tree, blocked on the
+  `@synchronize`-in-kernel-body constraint above, remains future work.
+- The wide walk shares the FLOP class of the scalar walk; the win is the transcendental
+  collapse, so it helps heavy-per-gradient models and is auto-gated to `P >= 8`.
+- Diagonal (pooled) mass only, as the rest of the device path.

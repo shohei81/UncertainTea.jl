@@ -674,3 +674,51 @@ end
     @test maximum(rhat(res)) < 1.02                   # Float32 leaves a little slack
     @test divrate == 0.0
 end
+
+# Persistent per-chain NUTS with the WIDE (P-partial) in-kernel gradient on Metal Float32
+# (issue #154 increment 4). A heavy GLM (P=9) auto-selects the `DeviceGradN{P}` single-walk
+# gradient (`persistent_gradient=:auto` resolves to :wide for P >= 8); this smoke checks the
+# wide dual COMPILES and RUNS on Metal and clears a Float32 #121-style gate. Standalone so a
+# `gpu_count_model` abort elsewhere does not mask it.
+@testset "device Metal persistent NUTS wide-gradient smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping persistent wide-gradient smoke test."
+        @test true
+        return
+    end
+    backend = Metal.MetalBackend()
+
+    @tea static function gpu_persist_logistic(X, n)
+        alpha ~ normal(0.0, 2.5)
+        beta ~ mvnormal(
+            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            (2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5),
+        )
+        for i = 1:n
+            {:y => i} ~ bernoullilogit(alpha + sum(beta .* X[:, i]))
+        end
+        return alpha
+    end
+
+    rng = Random.MersenneTwister(154)
+    D, N = 8, 400
+    X = randn(rng, D, N)
+    bt = randn(rng, D) .* 0.7
+    probs = 1.0 ./ (1.0 .+ exp.(-(0.3 .+ vec(sum(bt .* X; dims=1)))))
+    y = Float64.(rand(rng, N) .< probs)
+    cons = choicemap(((:y => i, y[i]) for i = 1:N)...)
+
+    res = batched_nuts(
+        gpu_persist_logistic, (X, N), cons;
+        num_chains=64, num_samples=400, num_warmup=400,
+        tree_strategy=:persistent, persistent_gradient=:wide, backend=backend,
+        rng=Random.MersenneTwister(7),
+    )
+    draws = posterior_array(res)
+    divrate =
+        sum(sum(chain.divergent) for chain in res.chains) /
+        sum(length(chain.divergent) for chain in res.chains)
+    @test all(isfinite, draws)
+    @test maximum(rhat(res)) < 1.03      # Float32 + heavy GLM: a little more slack
+    @test divrate < 0.02
+end

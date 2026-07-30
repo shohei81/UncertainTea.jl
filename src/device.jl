@@ -1,4 +1,5 @@
 include("device/dual.jl")
+include("device/grad_wide.jl")
 include("device/math.jl")
 include("device/rng.jl")
 include("device/plan.jl")

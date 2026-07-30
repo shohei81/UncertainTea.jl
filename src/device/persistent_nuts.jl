@@ -155,14 +155,20 @@ end
 end
 
 # In-kernel logjoint + full gradient at the position currently in `params[:, b]`.
-# Loops the differentiation target `pidx` over all parameters and walks the lowered
-# device plan in forward-mode duals -- the EXACT `_device_grad_score_steps` the grid
-# `_device_gradient_kernel!` uses (gradient_kernel.jl), just called inline here so the
-# whole leapfrog trajectory stays on-device. Writes `gradients[:, b]` and returns
+# Two dispatch-selected variants (issue #154 increment 4), both walking the SAME lowered
+# device plan the grid `_device_gradient_kernel!` uses (gradient_kernel.jl) so the whole
+# leapfrog trajectory stays on-device. Both write `gradients[:, b]` and return
 # `(logjoint, all_finite)`; `all_finite` folds the leapfrog validity check
 # (`isfinite(value) && all(isfinite, grad)`, integrator.jl `leapfrog_step!`).
+#
+# SCALAR (`DeviceDual` slots): the shipped increment-2 path. Loops the differentiation
+# target `pidx` over all P parameters and does a full O(N) scalar-dual plan walk per
+# parameter -- O(P*N) serial, recomputing the full logjoint value P times. Kept as the
+# default for small P (few-parameter models where the wide dual's N-wide arithmetic is
+# not worth it) and unchanged from increment 2.
 @inline function _persist_eval_grad!(
-    gradients, plan, params, observed, observed_int, slots, trip_counts, loop_starts, b, num_params::Int, ::Type{T},
+    gradients, plan, params, observed, observed_int, slots::AbstractArray{<:DeviceDual},
+    trip_counts, loop_starts, b, num_params::Int, ::Type{T},
 ) where {T}
     logjoint = zero(T)
     ok = true
@@ -177,6 +183,34 @@ end
             logjoint = _device_dual_value(total)
         end
     end
+    ok = ok & isfinite(logjoint)
+    return (logjoint, ok)
+end
+
+# WIDE (`DeviceGradN{P}` slots): the increment-4 path. ONE forward-mode plan walk with a
+# P-partial dual (`grad_wide.jl`) produces the whole gradient vector at once -- the
+# `.partials` ARE `gradients[:, b]` and `.value` is the logjoint -- so each transcendental
+# in each logpdf is evaluated ONCE instead of once per parameter. This is the heavy-per-
+# gradient win (`logistic_large`: P=16, N=8000): the N*(P+1) transcendentals of the scalar
+# path collapse to N. The single differentiation target is fixed at `1` (the wide seed is
+# a one-hot at the parameter's own row, independent of the walk target -- see
+# `_seed_latent`), and the slots buffer has a single `pidx` column. Auto-selected for
+# large P; see the workspace constructor.
+@inline function _persist_eval_grad!(
+    gradients, plan, params, observed, observed_int, slots::AbstractArray{<:DeviceGradN},
+    trip_counts, loop_starts, b, num_params::Int, ::Type{T},
+) where {T}
+    total, _ = _device_grad_score_steps(
+        plan.steps, slots, params, observed, observed_int, trip_counts, loop_starts, 1, b, Int32(1),
+    )
+    partials = _device_gn_partials(total)
+    ok = true
+    @inbounds for pidx = 1:num_params
+        g = partials[pidx]
+        gradients[pidx, b] = g
+        ok = ok & isfinite(g)
+    end
+    logjoint = _device_dual_value(total)
     ok = ok & isfinite(logjoint)
     return (logjoint, ok)
 end
@@ -492,6 +526,10 @@ mutable struct DevicePersistentNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     num_params::Int
     num_chains::Int
     max_tree_depth::Int
+    gradient_mode::Symbol    # :scalar (per-parameter DeviceDual walk) or :wide (single
+    # DeviceGradN{P} walk); resolved from the constructor's `gradient_mode`/`P`.
+    grad_slots::Any          # the dual-slot scratch handed to the kernel: the inner
+    # `DeviceDual{T}` buffer for :scalar, or a staged `DeviceGradN{P,T}` buffer for :wide.
     inverse_mass::Any        # P
     step::Any                # C   per-chain step size
     cur_logjoint::Any        # C   current-position logjoint (input)
@@ -527,6 +565,43 @@ mutable struct DevicePersistentNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     seeded::Bool
 end
 
+# Auto-selection threshold (issue #154 increment 4). Below this many unconstrained
+# parameters the scalar per-parameter walk wins (its P plan walks are cheap and the wide
+# dual's P-wide NTuple arithmetic adds fixed overhead per op); at or above it the wide
+# single-walk's collapse of the redundant per-parameter logjoint/transcendental
+# recomputation pays off. 8 keeps every small model (gauss P<=2, the two-parameter model
+# P=2, eight-schools) on the proven scalar path while routing the heavy GLMs
+# (`logistic` P=9, `logistic_large` P=17) to the wide path. Tunable per call via
+# `gradient_mode=:scalar|:wide`.
+const _PERSIST_WIDE_MIN_PARAMS = 8
+
+# Stage the model's Real scalar arguments into the wide (`DeviceGradN{P,T}`) slot buffer
+# as zero-partial constants, mirroring `_device_stage_gradient_arguments!` for the scalar
+# buffer but with a single `pidx` column (the wide walk uses one column). Non-Real args
+# (e.g. the covariate matrix) are supplied per-observation, not through a slot.
+function _device_stage_gradient_arguments_wide!(
+    wide_slots, model::TeaModel, args, batch_size::Int, ::Type{T}, ::Val{P},
+) where {T,P}
+    argument_slots = executionplan(model).environment_layout.argument_slots
+    isempty(argument_slots) && return nothing
+    TD = DeviceGradN{P,T}
+    staged = Array{TD}(undef, 1, 1, batch_size)
+    for (argument_index, slot) in enumerate(argument_slots)
+        if args isa Tuple
+            value = args[argument_index]
+            value isa Real || continue
+            fill!(staged, _seed_obs(TD, value))
+        else
+            all(args[batch_index][argument_index] isa Real for batch_index = 1:batch_size) || continue
+            for batch_index = 1:batch_size
+                staged[1, 1, batch_index] = _seed_obs(TD, args[batch_index][argument_index])
+            end
+        end
+        copyto!(view(wide_slots, slot:slot, :, :), staged)
+    end
+    return nothing
+end
+
 function DevicePersistentNUTSWorkspace(
     model::TeaModel,
     num_chains::Integer,
@@ -535,7 +610,13 @@ function DevicePersistentNUTSWorkspace(
     precision::Type=Float64,
     args=(),
     constraints=choicemap(),
+    gradient_mode::Symbol=:auto,
 )
+    gradient_mode in (:auto, :scalar, :wide) || throw(
+        ArgumentError(
+            "DevicePersistentNUTSWorkspace gradient_mode must be :auto, :scalar, or :wide, got $(repr(gradient_mode))",
+        ),
+    )
     inner = DeviceBatchedWorkspace(
         model, num_chains; backend=backend, precision=precision, args=args, constraints=constraints,
     )
@@ -544,6 +625,19 @@ function DevicePersistentNUTSWorkspace(
     P = inner.parameter_count
     C = inner.batch_size
     D = Int(max_tree_depth)
+    # Resolve :auto -> :scalar / :wide from the parameter count (see the threshold note).
+    resolved_mode = gradient_mode === :auto ? (P >= _PERSIST_WIDE_MIN_PARAMS ? :wide : :scalar) : gradient_mode
+    # The kernel is generic over the slot buffer's dual type: the scalar buffer is the
+    # inner `DeviceDual{T}` scratch; the wide buffer is a `DeviceGradN{P,T}` scratch with
+    # a single `pidx` column, staged with the model's constant arguments.
+    grad_slots = if resolved_mode === :wide
+        wide = KernelAbstractions.allocate(backend, DeviceGradN{P,T}, inner.slot_count, 1, C)
+        copyto!(wide, fill(zero(DeviceGradN{P,T}), inner.slot_count, 1, C))
+        _device_stage_gradient_arguments_wide!(wide, model, args, C, T, Val(P))
+        wide
+    else
+        inner.grad_slots_device
+    end
     mat() = fill!(KernelAbstractions.allocate(backend, T, P, C), zero(T))
     plane(k) = fill!(KernelAbstractions.allocate(backend, T, P, k, C), zero(T))
     vecT() = fill!(KernelAbstractions.allocate(backend, T, C), zero(T))
@@ -551,6 +645,7 @@ function DevicePersistentNUTSWorkspace(
     ckptbuf = fill!(KernelAbstractions.allocate(backend, T, P, max(D + 1, 1), 2, C), zero(T))
     return DevicePersistentNUTSWorkspace{T,typeof(backend)}(
         inner, backend, P, C, D,
+        resolved_mode, grad_slots,
         fill!(KernelAbstractions.allocate(backend, T, P), zero(T)),
         vecT(), vecT(),
         mat(), mat(),
@@ -638,7 +733,7 @@ function _device_persistent_nuts_proposals!(
         inner.params_device, inner.gradients_device, dws.pmom, dws.q0, dws.cur_logjoint,
         dws.left, dws.right, dws.sub, dws.lj3, dws.prop_pos, dws.prop_grad, dws.prop_lj,
         dws.ckpt,
-        inner.plan, inner.observed_device, inner.observed_int_device, inner.grad_slots_device,
+        inner.plan, inner.observed_device, inner.observed_int_device, dws.grad_slots,
         inner.trip_counts_device, inner.loop_starts_device,
         dws.inverse_mass, dws.step,
         dws.out_real, dws.out_int, dws.out_div, dws.out_moved,

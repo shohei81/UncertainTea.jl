@@ -55,6 +55,7 @@ core_test_files = [
     ("device_hmc_advi.jl", "device"),
     ("device_masked_nuts.jl", "device"),
     ("device_persistent_nuts.jl", "device"),
+    ("device_persistent_nuts_tiled.jl", "device"),
     ("device_masked_nuts_compaction.jl", "device"),
     ("device_glm_lowering.jl", "device"),
     ("device_perchain_stranding.jl", "device"),
