@@ -33,16 +33,52 @@ end
     return rate
 end
 
+# issue #226: release-grade calibration of the constrained-transform Jacobian
+# layer (bounded / simplex / correlation), the class where recent confirmed
+# bugs lived (#105 Logit, #99/#104 LKJ tanh, #101 Dirichlet).
+
+@tea static function sbc_bench_bounded(n)
+    p ~ beta(2.0, 2.0)
+    for i = 1:n
+        {:y => i} ~ bernoulli(p)
+    end
+    return p
+end
+
+@tea static function sbc_bench_simplex(n)
+    theta ~ dirichlet([2.0, 3.0, 4.0])
+    for i = 1:n
+        {:c => i} ~ categorical(theta)
+    end
+    return theta
+end
+
+const SBC_BENCH_ZEROS2 = [0.0, 0.0]
+const SBC_BENCH_ONES2 = [1.0, 1.0]
+@tea static function sbc_bench_correlation(zeros2_arg, ones2_arg, n)
+    Omega ~ lkjcholesky(2, 2.0)
+    Ltril = scale_cholesky(ones2_arg, Omega)
+    for i = 1:n
+        {:y => i} ~ mvnormaldense(zeros2_arg, Ltril)
+    end
+    return Omega
+end
+
 const SBC_BENCH_MODELS = [
-    ("conjugate normal-normal", sbc_bench_conjugate),
-    ("hierarchical normal", sbc_bench_hierarchical),
-    ("gamma-exponential", sbc_bench_positive),
+    ("conjugate normal-normal", sbc_bench_conjugate, ()),
+    ("hierarchical normal", sbc_bench_hierarchical, ()),
+    ("gamma-exponential", sbc_bench_positive, ()),
+    ("bounded beta (Logit)", sbc_bench_bounded, (8,)),
+    ("simplex dirichlet (stick-breaking)", sbc_bench_simplex, (12,)),
+    ("correlation lkjcholesky (Cholesky tanh)", sbc_bench_correlation,
+        (SBC_BENCH_ZEROS2, SBC_BENCH_ONES2, 16)),
 ]
 
 rng = MersenneTwister(20260709)
-for (name, model) in SBC_BENCH_MODELS
+for (name, model, args) in SBC_BENCH_MODELS
     result = sbc(
-        model;
+        model,
+        args;
         num_simulations=300,
         num_posterior_draws=63,
         num_warmup=200,
