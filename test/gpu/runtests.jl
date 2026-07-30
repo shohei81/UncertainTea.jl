@@ -722,3 +722,51 @@ end
     @test maximum(rhat(res)) < 1.03      # Float32 + heavy GLM: a little more slack
     @test divrate < 0.02
 end
+
+# Broadcast-normal observation `{:y} ~ normal.(mu_expr, sigma)` on Metal Float32
+# (issue #134): docs/dsl.md's flagship GPU-lowering form, which the device path
+# previously rejected. This is the issue's own repro -- a linear regression scored
+# through the dense broadcast fold -- run on the GPU and checked for finite draws,
+# posterior recovery, low R-hat, and no divergences. Standalone so a `gpu_count_model`
+# abort elsewhere does not mask it.
+@testset "device Metal broadcast-normal masked NUTS smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping broadcast-normal smoke test."
+        @test true
+        return
+    end
+    backend = Metal.MetalBackend()
+
+    @tea static function gpu_bcast_linreg(xs)
+        slope ~ normal(0.0, 10.0)
+        intercept ~ normal(0.0, 10.0)
+        sigma ~ lognormal(0.0, 1.0)
+        {:y} ~ normal.(intercept .+ slope .* xs, sigma)
+        return slope
+    end
+
+    rng = Random.MersenneTwister(134)
+    N = 200
+    xs = collect(range(-3.0, 3.0; length=N))
+    true_slope, true_intercept, true_sigma = 1.5, -0.5, 0.4
+    ys = true_intercept .+ true_slope .* xs .+ true_sigma .* randn(rng, N)
+    cm = choicemap((:y, ys))
+
+    res = batched_nuts(
+        gpu_bcast_linreg, (xs,), cm;
+        num_chains=64, num_samples=300, num_warmup=300,
+        tree_strategy=:masked, backend=backend, precision=Float32,
+        rng=Random.MersenneTwister(7),
+    )
+    pooled = hcat((c.constrained_samples for c in res.chains)...)
+    means = vec(sum(pooled; dims=2) ./ size(pooled, 2))
+    divrate =
+        sum(sum(chain.divergent) for chain in res.chains) /
+        sum(length(chain.divergent) for chain in res.chains)
+    @test all(isfinite, pooled)
+    @test isapprox(means[1], true_slope; atol=0.15)      # slope
+    @test isapprox(means[2], true_intercept; atol=0.2)   # intercept
+    @test isapprox(means[3], true_sigma; atol=0.2)       # sigma
+    @test maximum(rhat(res)) < 1.05
+    @test divrate < 0.05
+end
