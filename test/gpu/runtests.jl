@@ -547,3 +547,93 @@ end
     @test Float64.(collect(values)) ≈ reference_values atol = 1e-4
     @test Float64.(collect(gradients)) ≈ reference_gradients atol = 1e-4
 end
+
+# --- issue #154 (increment 1): on-device Philox4x32-10 RNG Metal smoke ---------
+# Mirrors test/uncertaintea/core/device_rng.jl's cross-backend determinism leg on
+# a real Metal.MetalBackend. The honest boundary, MEASURED on Apple M4:
+#   * The integer Philox block and the `device_rand_uniform` draw ARE
+#     bit-identical (===) between Metal and the host, because they are pure
+#     integer mixing plus an exact integer->float divide.
+#   * `device_rand_normal` is NOT bit-identical across backends: Box-Muller uses
+#     `log`/`cos`, whose Metal libm differs from the host libm in the last bits
+#     (measured max abs diff ~5e-7 in Float32, ~1854/4096 draws differ). This is
+#     exactly issue #154's risk (a) -- the Gaussian transform is only
+#     STATISTICALLY equivalent across backends, to be gated by the #121 harness,
+#     not bitwise. We therefore assert the normal matches the host to a few-ULP
+#     tolerance (not ===) and is finite.
+using KernelAbstractions
+
+@kernel function _gpu_drng_block_kernel!(out)
+    i = @index(Global)
+    blk = UncertainTea.philox4x32(
+        (UInt32(0x243f6a88), UInt32(i)),
+        (UInt32(0x13198a2e), UInt32(i) * UInt32(2654435761), UInt32(7), UInt32(0)),
+    )
+    @inbounds out[1, i] = blk[1]
+    @inbounds out[2, i] = blk[2]
+    @inbounds out[3, i] = blk[3]
+    @inbounds out[4, i] = blk[4]
+end
+
+@kernel function _gpu_drng_uniform_kernel!(out)
+    i = @index(Global)
+    @inbounds out[i] =
+        UncertainTea.device_rand_uniform(Float32, UInt32(0), UInt32(0), UInt32(0), UInt32(i))
+end
+
+@kernel function _gpu_drng_normal_kernel!(out)
+    i = @index(Global)
+    @inbounds out[i] =
+        UncertainTea.device_rand_normal(Float32, UInt32(0), UInt32(0), UInt32(1), UInt32(i))
+end
+
+@testset "device Metal GPU Philox RNG smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping GPU smoke test."
+        @test true
+        return
+    end
+    backend = Metal.MetalBackend()
+    N = 4096
+
+    # raw block: Metal vs host, bit-for-bit
+    blk_dev = KernelAbstractions.allocate(backend, UInt32, 4, N)
+    _gpu_drng_block_kernel!(backend)(blk_dev; ndrange=N)
+    KernelAbstractions.synchronize(backend)
+    blk_host = Array(blk_dev)
+    for i = 1:N
+        ref = UncertainTea.philox4x32(
+            (UInt32(0x243f6a88), UInt32(i)),
+            (UInt32(0x13198a2e), UInt32(i) * UInt32(2654435761), UInt32(7), UInt32(0)),
+        )
+        @test (blk_host[1, i], blk_host[2, i], blk_host[3, i], blk_host[4, i]) === ref
+    end
+
+    # Float32 uniform: Metal vs host bit-identical, and in [0, 1)
+    u_dev = KernelAbstractions.allocate(backend, Float32, N)
+    _gpu_drng_uniform_kernel!(backend)(u_dev; ndrange=N)
+    KernelAbstractions.synchronize(backend)
+    u_host = Array(u_dev)
+    @test all(
+        i -> u_host[i] ===
+             UncertainTea.device_rand_uniform(Float32, UInt32(0), UInt32(0), UInt32(0), UInt32(i)),
+        1:N,
+    )
+    @test all(u -> 0.0f0 <= u < 1.0f0, u_host)
+
+    # Float32 normal: only STATISTICALLY equal across backends (Box-Muller's
+    # log/cos libm differs on Metal), so compare to the host to a few-ULP
+    # tolerance rather than ===, and check finiteness + distributional sanity.
+    n_dev = KernelAbstractions.allocate(backend, Float32, N)
+    _gpu_drng_normal_kernel!(backend)(n_dev; ndrange=N)
+    KernelAbstractions.synchronize(backend)
+    n_host = Array(n_dev)
+    n_ref = [
+        UncertainTea.device_rand_normal(Float32, UInt32(0), UInt32(0), UInt32(1), UInt32(i))
+        for i = 1:N
+    ]
+    @test all(isfinite, n_host)
+    @test maximum(abs.(n_host .- n_ref)) < 1.0f-5   # few-ULP transcendental drift
+    @test abs(sum(n_host) / N) < 0.1                # mean ~ 0
+    @test abs(sum(x -> x^2, n_host) / N - 1) < 0.1  # variance ~ 1
+end
