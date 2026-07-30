@@ -29,6 +29,26 @@ mutable struct WarmupDriver
     dense_metric::Union{Nothing,DenseMetric}
 end
 
+# Resolve and validate an optional caller-supplied starting inverse-mass diagonal.
+# `nothing` reproduces the legacy default `ones(num_params)` exactly; a supplied
+# vector must have length `num_params` and every entry finite and strictly
+# positive (a diagonal inverse mass is a set of positive variances).
+function _validated_initial_inverse_mass(
+    initial_inverse_mass_matrix::Union{Nothing,AbstractVector},
+    num_params::Int,
+)
+    initial_inverse_mass_matrix === nothing && return ones(num_params)
+    length(initial_inverse_mass_matrix) == num_params || throw(
+        ArgumentError(
+            "initial_inverse_mass_matrix has length $(length(initial_inverse_mass_matrix)), expected $num_params",
+        ),
+    )
+    all(x -> isfinite(x) && x > 0, initial_inverse_mass_matrix) || throw(
+        ArgumentError("initial_inverse_mass_matrix must have all entries finite and strictly positive"),
+    )
+    return collect(Float64, initial_inverse_mass_matrix)
+end
+
 function WarmupDriver(
     num_params::Int,
     num_warmup::Int,
@@ -39,8 +59,14 @@ function WarmupDriver(
     mass_matrix_regularization::Real,
     mass_matrix_min_samples::Int,
     metric::Symbol=:diag,
+    initial_inverse_mass_matrix::Union{Nothing,AbstractVector}=nothing,
 )
     metric in (:diag, :dense) || throw(ArgumentError("metric must be :diag or :dense, got :$metric"))
+    # The starting diagonal inverse-mass metric. The default `ones(num_params)`
+    # reproduces the legacy warmup path bitwise; a caller (batched_nuts with a
+    # PathfinderResult init, issue #162) may instead seed it from the Pathfinder
+    # covariance diagonal so warmup starts from a metric already near the target.
+    initial_inverse_mass = _validated_initial_inverse_mass(initial_inverse_mass_matrix, num_params)
     step_size = Float64(initial_step_size)
     accept = Float64(target_accept)
     warmup_schedule = _warmup_schedule(num_warmup)
@@ -60,7 +86,7 @@ function WarmupDriver(
         warmup_schedule,
         dual_state,
         variance_state,
-        ones(num_params),
+        initial_inverse_mass,
         step_size,
         1,
         HMCMassAdaptationWindowSummary[],
@@ -351,11 +377,13 @@ function PooledMassPerChainStepDriver(
     adapt_mass_matrix::Bool,
     mass_matrix_regularization::Real,
     mass_matrix_min_samples::Int,
+    initial_inverse_mass_matrix::Union{Nothing,AbstractVector}=nothing,
 )
     accept = Float64(target_accept)
     # The inner driver owns ONLY the shared mass state; adapt_step_size=false keeps
     # its own scalar step untouched so it never runs a step re-search. Its initial
-    # step is irrelevant (never read); use the first chain's for tidiness.
+    # step is irrelevant (never read); use the first chain's for tidiness. The
+    # optional `initial_inverse_mass_matrix` (issue #162) seeds the shared metric.
     mass = WarmupDriver(
         num_params,
         num_warmup,
@@ -365,6 +393,7 @@ function PooledMassPerChainStepDriver(
         adapt_mass_matrix=adapt_mass_matrix,
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
+        initial_inverse_mass_matrix=initial_inverse_mass_matrix,
     )
     dual_states = [_dual_averaging_state(step, accept) for step in initial_step_sizes]
     return PooledMassPerChainStepDriver(

@@ -376,6 +376,33 @@ function pathfinder(
     )
 end
 
+# Seed the warmup INITIAL diagonal inverse-mass matrix from a Pathfinder fit
+# (Zhang, Carpenter, Gelman, Vehtari, JMLR 2022): in HMC/NUTS the inverse-mass
+# matrix is the position-covariance estimate, and Pathfinder already estimated a
+# posterior covariance, so its diagonal starts warmup from a metric near the
+# target. Only the diagonal is used -- the device metric is diagonal and the host
+# default is diagonal; a dense seed is out of scope. Each entry is made safe the
+# way `_inverse_mass_matrix` (src/inference/nuts/adaptation.jl) regularizes an
+# adapted variance: clamp to at least `regularization`, and replace a non-finite
+# diagonal entry with 1.0 (the unit-metric default).
+function _pathfinder_inverse_mass_seed(pf::PathfinderResult, model::TeaModel, num_params::Int, regularization::Real)
+    pf.model === model || throw(
+        ArgumentError("the PathfinderResult passed as initial_params was fit on a different model"),
+    )
+    length(pf.location) == num_params || throw(
+        ArgumentError(
+            "the PathfinderResult passed as initial_params has dimension $(length(pf.location)), expected $num_params",
+        ),
+    )
+    reg = Float64(regularization)
+    seed = Vector{Float64}(undef, num_params)
+    @inbounds for i = 1:num_params
+        diag_i = pf.covariance[i, i]
+        seed[i] = isfinite(diag_i) ? max(diag_i, reg) : 1.0
+    end
+    return seed
+end
+
 # Sampler initialization from a Pathfinder fit: chains start from Pathfinder
 # draws (sampled with replacement, so multi-path pooling carries over).
 function _initial_hmc_position(

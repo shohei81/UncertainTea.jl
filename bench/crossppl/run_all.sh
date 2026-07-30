@@ -9,6 +9,10 @@
 #                         issue #137 workaround; rows are labelled
 #                         "-pinned-init" and must never be quoted as
 #                         default-configuration results
+#   ./run_all.sh pathfinder  Pathfinder warm-start leg (issue #162): chains start
+#                         from Pathfinder draws and the warmup initial inverse-mass
+#                         metric is seeded from the Pathfinder covariance diagonal;
+#                         rows labelled "-pathfinder-init"
 #   ./run_all.sh analyze  shared ArviZ diagnostics -> results/summary.{json,md}
 #
 # All legs append to results/raw/; analyze reads everything found there.
@@ -149,11 +153,29 @@ run_pinned() {
     done
 }
 
+run_pathfinder() {
+    # Pathfinder warm-start leg (issue #162): each chain starts from a Pathfinder
+    # draw AND the warmup initial inverse-mass metric is seeded from the Pathfinder
+    # covariance diagonal. Rows are labelled "-pathfinder-init" and carry
+    # sampler.init="pathfinder" so they are compared against, not mistaken for, the
+    # default prior-draw rows from the `cpu` leg. gauss is the many-chain model;
+    # eight_schools_noncentered is the funnel/heavy-tailed leg. Runs at the
+    # correctness-gate chains/samples on the host per-chain (batched-cpu) path.
+    "${JL[@]}" -e 'using Pkg; Pkg.instantiate()'
+    for model in gauss eight_schools_noncentered; do
+        echo "=== $model: Pathfinder warm-start pass (issue #162) ==="
+        "${JL[@]}" julia/run.jl --model "$model" --variant batched-cpu \
+            --init pathfinder \
+            --chains $CHAINS --samples $SAMPLES --warmup $WARMUP --seed $SEED --reps $REPS
+    done
+}
+
 case "${1:-}" in
     cpu) run_cpu ;;
     metal) run_metal ;;
     chees) run_chees ;;
     pinned) run_pinned ;;
+    pathfinder) run_pathfinder ;;
     analyze) "${PY[@]}" python/analyze.py ;;
-    *) echo "usage: $0 {cpu|metal|chees|pinned|analyze}" >&2; exit 1 ;;
+    *) echo "usage: $0 {cpu|metal|chees|pinned|pathfinder|analyze}" >&2; exit 1 ;;
 esac
