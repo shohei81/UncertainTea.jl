@@ -22,7 +22,10 @@
 # and, for sampling, the host masked NUTS.
 
 using KernelAbstractions: CPU
-using Statistics: mean
+
+# The test harness does not import Statistics (see the local mean/std helpers in the
+# other sampler tests); compute the per-parameter pooled mean without it.
+devbcast_colmeans(pooled) = vec(sum(pooled; dims=2) ./ size(pooled, 2))
 
 # The issue's flagship model: an intercept/slope regression with a lognormal
 # scale, observed through the broadcast-normal form over a covariate vector.
@@ -164,7 +167,7 @@ end
     )
     # constrained_samples: (slope, intercept, sigma) x samples, per chain.
     pooled = hcat((c.constrained_samples for c in res.chains)...)
-    means = vec(mean(pooled; dims=2))
+    means = devbcast_colmeans(pooled)
     @test all(isfinite, pooled)
     @test isapprox(means[1], true_slope; atol=0.15)
     @test isapprox(means[2], true_intercept; atol=0.2)
