@@ -87,7 +87,9 @@ instead of [`nuts`](@ref) and requires explicit `observation_addresses` —
 under the default every discrete choice would be conditioned as data,
 leaving no Gibbs sites free. `sampler=:chees` runs [`batched_chees`](@ref)
 and requires the `num_chains` keyword (ChEES tunes its trajectory length from
-the cross-chain ensemble); chain 1's draws are ranked. Remaining keyword
+the cross-chain ensemble); chain 1's draws are ranked. `sampler=:meads` runs
+[`batched_meads`](@ref) and likewise requires `num_chains` (>= `2*num_folds`);
+chain 1's draws are ranked. Remaining keyword
 arguments are forwarded to the chosen sampler. Runtime scales with
 `num_simulations * (num_warmup + num_posterior_draws * thin)`; keep the fast
 suite variant small and use `bench/sbc_validation.jl` for release-grade runs.
@@ -106,8 +108,8 @@ function sbc(
     sampler::Symbol=:nuts,
     nuts_kwargs...,
 )
-    sampler in (:nuts, :gibbs, :chees) ||
-        throw(ArgumentError("sbc sampler must be :nuts, :gibbs, or :chees, got :$sampler"))
+    sampler in (:nuts, :gibbs, :chees, :meads) ||
+        throw(ArgumentError("sbc sampler must be :nuts, :gibbs, :chees, or :meads, got :$sampler"))
     # the default observation set is EVERY non-slot choice, which would
     # condition all discrete latents as data and leave no Gibbs sites; SBC
     # cannot guess which discrete choices are data, so the caller must say
@@ -178,6 +180,21 @@ function sbc(
             # (the ensemble only aids adaptation). `num_chains` is a required kwarg
             # of `batched_chees` and must be passed through `sbc`.
             batched = batched_chees(
+                model,
+                args,
+                data;
+                num_samples=num_posterior_draws * thin,
+                num_warmup=num_warmup,
+                rng=rng,
+                nuts_kwargs...,
+            )
+            first(batched.chains)
+        elseif sampler === :meads
+            # MEADS tunes step size/damping/mass from the cross-fold ensemble; like
+            # ChEES, all chains target the SAME conditioned posterior, so chain 1's
+            # draws are a valid posterior sample for the rank statistic. `num_chains`
+            # (>= 2*num_folds) is a required kwarg of `batched_meads`.
+            batched = batched_meads(
                 model,
                 args,
                 data;
