@@ -50,6 +50,10 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :uniform,
     :logistic,
     :gumbel,
+    :pareto,
+    :frechet,
+    :rayleigh,
+    :inversegaussian,
 )
 
 struct UserDistributionRegistration

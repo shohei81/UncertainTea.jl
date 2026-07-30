@@ -188,6 +188,39 @@ end
     return (_device_gumbel_logpdf(mu, scale, value) + lad, cur)
 end
 
+@inline function _device_score_step(step::DeviceFrechetChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    shape = _device_eval(step.shape, slots, col)
+    scale = _device_eval(step.scale, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_frechet_logpdf(shape, scale, value) + lad, cur)
+end
+
+@inline function _device_score_step(step::DeviceRayleighChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    scale = _device_eval(step.scale, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_rayleigh_logpdf(scale, value) + lad, cur)
+end
+
+@inline function _device_score_step(
+    step::DeviceInverseGaussianChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    mu = _device_eval(step.mu, slots, col)
+    lambda = _device_eval(step.lambda, slots, col)
+    value, lad, cur = _device_choice_value(step, params, observed, col, cursor)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    return (_device_inversegaussian_logpdf(mu, lambda, value) + lad, cur)
+end
+
 @inline function _device_score_step(step::DeviceBetaChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
     alpha = _device_eval(step.alpha, slots, col)
     beta = _device_eval(step.beta, slots, col)

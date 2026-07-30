@@ -61,6 +61,10 @@ _backend_observed_loop_gradient_supported(
         BackendUniformChoicePlanStep,
         BackendLogisticChoicePlanStep,
         BackendGumbelChoicePlanStep,
+        BackendParetoChoicePlanStep,
+        BackendFrechetChoicePlanStep,
+        BackendRayleighChoicePlanStep,
+        BackendInverseGaussianChoicePlanStep,
         BackendBernoulliChoicePlanStep,
         BackendBernoulliLogitChoicePlanStep,
         BackendPoissonChoicePlanStep,
@@ -919,6 +923,79 @@ function _score_backend_observed_loop_choice_gradient!(
     _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, choice.scale, 5)
     return _accumulate_gumbel_gradient!(
         totals, gradients, env.observed_values, value_gradients, mu_values, mu_gradients, scale_values, scale_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendParetoChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    xm_values = _batched_numeric_scratch!(env, 1)
+    xm_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    alpha_values = _batched_numeric_scratch!(env, 2)
+    alpha_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(xm_values, xm_gradients, cache, env, choice.xm, 4)
+    _eval_backend_numeric_expr_and_gradient!(alpha_values, alpha_gradients, cache, env, choice.alpha, 5)
+    return _accumulate_pareto_gradient!(
+        totals, gradients, env.observed_values, value_gradients, xm_values, xm_gradients, alpha_values, alpha_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendFrechetChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    shape_values = _batched_numeric_scratch!(env, 1)
+    shape_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(shape_values, shape_gradients, cache, env, choice.shape, 4)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, choice.scale, 5)
+    return _accumulate_frechet_gradient!(
+        totals, gradients, env.observed_values, value_gradients, shape_values, shape_gradients, scale_values, scale_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendRayleighChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    scale_values = _batched_numeric_scratch!(env, 1)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, choice.scale, 3)
+    return _accumulate_rayleigh_gradient!(
+        totals, gradients, env.observed_values, value_gradients, scale_values, scale_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendInverseGaussianChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    mu_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    lambda_values = _batched_numeric_scratch!(env, 2)
+    lambda_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(mu_values, mu_gradients, cache, env, choice.mu, 4)
+    _eval_backend_numeric_expr_and_gradient!(lambda_values, lambda_gradients, cache, env, choice.lambda, 5)
+    return _accumulate_inversegaussian_gradient!(
+        totals, gradients, env.observed_values, value_gradients, mu_values, mu_gradients, lambda_values, lambda_gradients,
     )
 end
 

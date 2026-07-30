@@ -1282,3 +1282,266 @@ function _score_backend_observed_loop_choice!(
     end
     return totals
 end
+
+# ---- positive-support / heavy-tail families (issue #230): pareto, frechet, rayleigh, inversegaussian ----
+# Scale/positivity/shape parameters score NaN (not throw) out of support, matching
+# the exception-free contract documented at the top of this file.
+
+function _backend_pareto_logpdf(xm, alpha, x)
+    xx, xm_, alpha_ = promote(x, xm, alpha)
+    (xm_ > zero(xm_) && alpha_ > zero(alpha_)) || return oftype(xx, NaN)
+    xx >= xm_ || return oftype(xx, -Inf)
+    return log(alpha_) + alpha_ * log(xm_) - (alpha_ + one(alpha_)) * log(xx)
+end
+
+function _backend_frechet_logpdf(shape, scale, x)
+    xx, shape_, scale_ = promote(x, shape, scale)
+    (shape_ > zero(shape_) && scale_ > zero(scale_)) || return oftype(xx, NaN)
+    xx > zero(xx) || return oftype(xx, -Inf)
+    logz = log(xx) - log(scale_)
+    return log(shape_) - log(scale_) - (one(shape_) + shape_) * logz - exp(-shape_ * logz)
+end
+
+function _backend_rayleigh_logpdf(scale, x)
+    xx, scale_ = promote(x, scale)
+    scale_ > zero(scale_) || return oftype(xx, NaN)
+    xx > zero(xx) || return oftype(xx, -Inf)
+    return log(xx) - 2 * log(scale_) - xx * xx / (2 * scale_ * scale_)
+end
+
+function _backend_inversegaussian_logpdf(mu, lambda, x)
+    xx, mu_, lambda_ = promote(x, mu, lambda)
+    (mu_ > zero(mu_) && lambda_ > zero(lambda_)) || return oftype(xx, NaN)
+    xx > zero(xx) || return oftype(xx, -Inf)
+    d = xx - mu_
+    return log(lambda_) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
+           lambda_ * d * d / (2 * mu_ * mu_ * xx)
+end
+
+# --- scalar (non-batched) scoring ---
+function _score_backend_step!(
+    step::BackendParetoChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    xm = _eval_backend_numeric_expr(env, step.xm)
+    alpha = _eval_backend_numeric_expr(env, step.alpha)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_pareto_logpdf(xm, alpha, value)
+end
+
+function _score_backend_step!(
+    step::BackendFrechetChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    shape = _eval_backend_numeric_expr(env, step.shape)
+    scale = _eval_backend_numeric_expr(env, step.scale)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_frechet_logpdf(shape, scale, value)
+end
+
+function _score_backend_step!(
+    step::BackendRayleighChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    scale = _eval_backend_numeric_expr(env, step.scale)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_rayleigh_logpdf(scale, value)
+end
+
+function _score_backend_step!(
+    step::BackendInverseGaussianChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    mu = _eval_backend_numeric_expr(env, step.mu)
+    lambda = _eval_backend_numeric_expr(env, step.lambda)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_inversegaussian_logpdf(mu, lambda, value)
+end
+
+# --- batched scoring ---
+function _score_backend_step!(
+    step::BackendParetoChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    xm_values = _batched_numeric_scratch!(env, 1)
+    alpha_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(xm_values, env, step.xm, 3)
+    _eval_backend_numeric_expr!(alpha_values, env, step.alpha, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_pareto_logpdf(xm_values[batch_index], alpha_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendFrechetChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    shape_values = _batched_numeric_scratch!(env, 1)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(shape_values, env, step.shape, 3)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_frechet_logpdf(shape_values[batch_index], scale_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendRayleighChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    scale_values = _batched_numeric_scratch!(env, 1)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 2)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_rayleigh_logpdf(scale_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendInverseGaussianChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    mu_values = _batched_numeric_scratch!(env, 1)
+    lambda_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(lambda_values, env, step.lambda, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_inversegaussian_logpdf(mu_values[batch_index], lambda_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+# --- observed-loop scoring ---
+function _score_backend_observed_loop_choice!(
+    step::BackendParetoChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    xm_values = _batched_numeric_scratch!(env, 1)
+    alpha_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(xm_values, env, step.xm, 3)
+    _eval_backend_numeric_expr!(alpha_values, env, step.alpha, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_pareto_logpdf(xm_values[batch_index], alpha_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendFrechetChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    shape_values = _batched_numeric_scratch!(env, 1)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(shape_values, env, step.shape, 3)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_frechet_logpdf(shape_values[batch_index], scale_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendRayleighChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    scale_values = _batched_numeric_scratch!(env, 1)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 2)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_rayleigh_logpdf(scale_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendInverseGaussianChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    lambda_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(lambda_values, env, step.lambda, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_inversegaussian_logpdf(mu_values[batch_index], lambda_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end

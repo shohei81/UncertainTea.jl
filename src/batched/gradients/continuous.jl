@@ -1023,3 +1023,255 @@ function _score_backend_step_and_gradient!(
         _assign_backend_choice_value!(env, cache.slot_gradients, step.binding_slot, value_values, value_gradients)
     return totals, gradients
 end
+
+# ---- positive-support / heavy-tail families (issue #230): pareto, frechet, rayleigh, inversegaussian ----
+
+function _accumulate_pareto_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    value_values::AbstractVector{T},
+    value_gradients::AbstractMatrix{T},
+    xm_values::AbstractVector{T},
+    xm_gradients::AbstractMatrix{T},
+    alpha_values::AbstractVector{T},
+    alpha_gradients::AbstractMatrix{T},
+) where {T<:AbstractFloat}
+    for batch_index in eachindex(totals)
+        value = value_values[batch_index]
+        xm = xm_values[batch_index]
+        alpha = alpha_values[batch_index]
+        totals[batch_index] += _backend_pareto_logpdf(xm, alpha, value)
+        if !(xm > 0 && alpha > 0 && value >= xm)
+            continue
+        end
+        dvalue = -(alpha + 1) / value
+        dxm = alpha / xm
+        dalpha = 1 / alpha + log(xm) - log(value)
+        for parameter_index in axes(gradients, 1)
+            gradients[parameter_index, batch_index] +=
+                dvalue * value_gradients[parameter_index, batch_index] +
+                dxm * xm_gradients[parameter_index, batch_index] +
+                dalpha * alpha_gradients[parameter_index, batch_index]
+        end
+    end
+    return totals, gradients
+end
+
+function _accumulate_frechet_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    value_values::AbstractVector{T},
+    value_gradients::AbstractMatrix{T},
+    shape_values::AbstractVector{T},
+    shape_gradients::AbstractMatrix{T},
+    scale_values::AbstractVector{T},
+    scale_gradients::AbstractMatrix{T},
+) where {T<:AbstractFloat}
+    for batch_index in eachindex(totals)
+        value = value_values[batch_index]
+        shape = shape_values[batch_index]
+        scale = scale_values[batch_index]
+        totals[batch_index] += _backend_frechet_logpdf(shape, scale, value)
+        if !(shape > 0 && scale > 0 && value > 0)
+            continue
+        end
+        logz = log(value) - log(scale)
+        w = exp(-shape * logz)
+        dvalue = (-(1 + shape) + shape * w) / value
+        dshape = 1 / shape - logz * (1 - w)
+        dscale = (shape / scale) * (1 - w)
+        for parameter_index in axes(gradients, 1)
+            gradients[parameter_index, batch_index] +=
+                dvalue * value_gradients[parameter_index, batch_index] +
+                dshape * shape_gradients[parameter_index, batch_index] +
+                dscale * scale_gradients[parameter_index, batch_index]
+        end
+    end
+    return totals, gradients
+end
+
+function _accumulate_rayleigh_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    value_values::AbstractVector{T},
+    value_gradients::AbstractMatrix{T},
+    scale_values::AbstractVector{T},
+    scale_gradients::AbstractMatrix{T},
+) where {T<:AbstractFloat}
+    for batch_index in eachindex(totals)
+        value = value_values[batch_index]
+        scale = scale_values[batch_index]
+        totals[batch_index] += _backend_rayleigh_logpdf(scale, value)
+        if !(scale > 0 && value > 0)
+            continue
+        end
+        dvalue = 1 / value - value / (scale * scale)
+        dscale = -2 / scale + value * value / (scale * scale * scale)
+        for parameter_index in axes(gradients, 1)
+            gradients[parameter_index, batch_index] +=
+                dvalue * value_gradients[parameter_index, batch_index] +
+                dscale * scale_gradients[parameter_index, batch_index]
+        end
+    end
+    return totals, gradients
+end
+
+function _accumulate_inversegaussian_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    value_values::AbstractVector{T},
+    value_gradients::AbstractMatrix{T},
+    mu_values::AbstractVector{T},
+    mu_gradients::AbstractMatrix{T},
+    lambda_values::AbstractVector{T},
+    lambda_gradients::AbstractMatrix{T},
+) where {T<:AbstractFloat}
+    for batch_index in eachindex(totals)
+        value = value_values[batch_index]
+        mu = mu_values[batch_index]
+        lambda = lambda_values[batch_index]
+        totals[batch_index] += _backend_inversegaussian_logpdf(mu, lambda, value)
+        if !(mu > 0 && lambda > 0 && value > 0)
+            continue
+        end
+        d = value - mu
+        dvalue = -3 / (2 * value) - lambda / (2 * mu * mu) + lambda / (2 * value * value)
+        dmu = lambda * d / (mu * mu * mu)
+        dlambda = 1 / (2 * lambda) - d * d / (2 * mu * mu * value)
+        for parameter_index in axes(gradients, 1)
+            gradients[parameter_index, batch_index] +=
+                dvalue * value_gradients[parameter_index, batch_index] +
+                dmu * mu_gradients[parameter_index, batch_index] +
+                dlambda * lambda_gradients[parameter_index, batch_index]
+        end
+    end
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendParetoChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    value_values = env.observed_values
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    xm_values = _batched_numeric_scratch!(env, 1)
+    xm_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    alpha_values = _batched_numeric_scratch!(env, 2)
+    alpha_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    _fill_choice_gradient!(value_gradients, step.parameter_slot, cache.seed_rows)
+    _eval_backend_numeric_expr_and_gradient!(xm_values, xm_gradients, cache, env, step.xm, 4)
+    _eval_backend_numeric_expr_and_gradient!(alpha_values, alpha_gradients, cache, env, step.alpha, 5)
+    _accumulate_pareto_gradient!(
+        totals,
+        gradients,
+        value_values,
+        value_gradients,
+        xm_values,
+        xm_gradients,
+        alpha_values,
+        alpha_gradients,
+    )
+    isnothing(step.binding_slot) ||
+        _assign_backend_choice_value!(env, cache.slot_gradients, step.binding_slot, value_values, value_gradients)
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendFrechetChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    value_values = env.observed_values
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    shape_values = _batched_numeric_scratch!(env, 1)
+    shape_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    _fill_choice_gradient!(value_gradients, step.parameter_slot, cache.seed_rows)
+    _eval_backend_numeric_expr_and_gradient!(shape_values, shape_gradients, cache, env, step.shape, 4)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, step.scale, 5)
+    _accumulate_frechet_gradient!(
+        totals,
+        gradients,
+        value_values,
+        value_gradients,
+        shape_values,
+        shape_gradients,
+        scale_values,
+        scale_gradients,
+    )
+    isnothing(step.binding_slot) ||
+        _assign_backend_choice_value!(env, cache.slot_gradients, step.binding_slot, value_values, value_gradients)
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendRayleighChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    value_values = env.observed_values
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    scale_values = _batched_numeric_scratch!(env, 1)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    _fill_choice_gradient!(value_gradients, step.parameter_slot, cache.seed_rows)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, step.scale, 3)
+    _accumulate_rayleigh_gradient!(totals, gradients, value_values, value_gradients, scale_values, scale_gradients)
+    isnothing(step.binding_slot) ||
+        _assign_backend_choice_value!(env, cache.slot_gradients, step.binding_slot, value_values, value_gradients)
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendInverseGaussianChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    value_values = env.observed_values
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    mu_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    lambda_values = _batched_numeric_scratch!(env, 2)
+    lambda_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    _fill_choice_gradient!(value_gradients, step.parameter_slot, cache.seed_rows)
+    _eval_backend_numeric_expr_and_gradient!(mu_values, mu_gradients, cache, env, step.mu, 4)
+    _eval_backend_numeric_expr_and_gradient!(lambda_values, lambda_gradients, cache, env, step.lambda, 5)
+    _accumulate_inversegaussian_gradient!(
+        totals,
+        gradients,
+        value_values,
+        value_gradients,
+        mu_values,
+        mu_gradients,
+        lambda_values,
+        lambda_gradients,
+    )
+    isnothing(step.binding_slot) ||
+        _assign_backend_choice_value!(env, cache.slot_gradients, step.binding_slot, value_values, value_gradients)
+    return totals, gradients
+end

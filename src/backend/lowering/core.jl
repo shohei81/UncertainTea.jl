@@ -544,6 +544,38 @@ function _backend_lower_step(
             return nothing
         end
         return BackendGumbelChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :pareto
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "pareto expects exactly 2 backend arguments")
+            return nothing
+        end
+        # A latent pareto draws through a lower-bounded parameter transform that
+        # the batched backend unconstrained-transform layer does not implement
+        # (the same limitation uniform/truncated families hit), so fall back for
+        # latents. Observations stay backend-native.
+        isnothing(step.parameter_slot) || begin
+            _backend_issue!(issues, "latent pareto is not supported in backend lowering (lower-bounded transform)")
+            return nothing
+        end
+        return BackendParetoChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :frechet
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "frechet expects exactly 2 backend arguments")
+            return nothing
+        end
+        return BackendFrechetChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :rayleigh
+        length(arguments) == 1 || begin
+            _backend_issue!(issues, "rayleigh expects exactly 1 backend argument")
+            return nothing
+        end
+        return BackendRayleighChoicePlanStep(step.binding_slot, address, arguments[1], parameter_row)
+    elseif step.rhs.family === :inversegaussian
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "inversegaussian expects exactly 2 backend arguments")
+            return nothing
+        end
+        return BackendInverseGaussianChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
     end
 
     _backend_issue!(issues, "unsupported distribution family `$(step.rhs.family)` in backend lowering")

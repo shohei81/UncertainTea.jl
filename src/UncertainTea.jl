@@ -48,6 +48,7 @@ export normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, be
     bernoullilogit, geometric, negativebinomial, poisson, studentt, categorical, betabinomial, multinomial,
     discreteuniform
 export cauchy, halfnormal, halfcauchy, uniform, logistic, gumbel
+export pareto, frechet, rayleigh, inversegaussian
 export truncatednormal, truncatedstudentt
 export mixture
 export mvnormaldense
