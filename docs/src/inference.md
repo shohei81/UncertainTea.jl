@@ -44,7 +44,19 @@ main path for the GPU-native work.
   divergence, no per-leaf host sync), so it maps to a handful of kernels with one
   sync per iteration — the GPU-native route. NUTS stays the reference/default.
 - `batched_advi`, `batched_importance_sampling`, `batched_sir`, `batched_smc` —
-  batched variational inference and particle methods.
+  batched variational inference and particle methods. `batched_advi` selects a
+  guide family with `guide`: `:meanfield`, `:fullrank`, and `:lowrank` are
+  Gaussian in unconstrained space, while `:flow` stacks affine coupling layers
+  (RealNVP-style) on a mean-field base to capture nonlinear correlation and
+  skew that the Gaussian guides structurally miss. The objective is chosen with
+  `elbo`: the default `:standard` is the reparameterized ELBO, and `:iwae` is
+  the importance-weighted bound `L_K = E[log(1/K Σ_k w_k)]` — a strictly tighter
+  bound whose importance-sample group size is set by `iwae_samples` (`:iwae` is
+  available for `:meanfield`, `:fullrank`, and `:flow`). Both extensions keep
+  the model gradient untouched — the particles are still scored positions — so
+  the device path is unchanged and only the host-side guide and objective
+  bookkeeping differ. `standard_elbo_history` records the plain ELBO alongside
+  `elbo_history` so the two bounds can be compared. The flow guide is CPU-only.
 - [`batched_svgd`](@ref) — Stein Variational Gradient Descent (Liu & Wang,
   NeurIPS 2016): a **deterministic particle** method between VI and MCMC. `N`
   particles follow a kernelized gradient flow toward the posterior; each
