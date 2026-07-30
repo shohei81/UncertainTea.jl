@@ -402,6 +402,103 @@
         return m
     end
 
+    # scalar prior families (issue #229). cauchy/logistic/gumbel are real-line
+    # (identity transform), halfnormal/halfcauchy positive (log transform), so all
+    # five are backend-native as both observations and latents. `uniform` is
+    # observation-only on the backend (its bounded transform falls back for
+    # latents, exactly like the truncated families), so it gets an obs entry whose
+    # bounds depend on a latent to exercise the dlower/dupper channels.
+    @tea static function gxc_cauchy_obs()
+        a ~ normal(0.0f0, 1.0f0)
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ cauchy(a, exp(s))
+        return a
+    end
+
+    @tea static function gxc_cauchy_latent()
+        x ~ cauchy(0.3f0, 1.2f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_halfnormal_obs()
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ halfnormal(exp(s))
+        return s
+    end
+
+    @tea static function gxc_halfnormal_latent()
+        x ~ halfnormal(1.5f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_halfcauchy_obs()
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ halfcauchy(exp(s))
+        return s
+    end
+
+    @tea static function gxc_halfcauchy_latent()
+        x ~ halfcauchy(1.2f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_logistic_obs()
+        a ~ normal(0.0f0, 1.0f0)
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ logistic(a, exp(s))
+        return a
+    end
+
+    @tea static function gxc_logistic_latent()
+        x ~ logistic(0.3f0, 1.2f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    @tea static function gxc_gumbel_obs()
+        a ~ normal(0.0f0, 1.0f0)
+        s ~ normal(0.0f0, 0.3f0)
+        {:y} ~ gumbel(a, exp(s))
+        return a
+    end
+
+    @tea static function gxc_gumbel_latent()
+        x ~ gumbel(0.3f0, 1.2f0)
+        {:y} ~ normal(x, 1.0f0)
+        return x
+    end
+
+    # observation-only uniform: the observed y stays deep inside the widening
+    # bounds across the seeded unconstrained points and the finite-difference
+    # steps, so the density (and the analytic dlower/dupper gradient) is smooth.
+    @tea static function gxc_uniform_obs()
+        w ~ normal(0.0f0, 0.3f0)
+        {:y} ~ uniform(-2.0f0 - exp(w), 2.0f0 + exp(w))
+        return w
+    end
+
+    # discrete family gaps (issue #231). betabinomial is an observed count with
+    # latent-flowing alpha/beta whose partials are closed-form digamma
+    # differences; discreteuniform is observation-only with no continuous
+    # parameters (its -log(b-a+1) term is constant, so the analytic gradient of
+    # the enclosing latent must equal the bare prior gradient — a clean check
+    # that the step contributes exactly zero and still sits on the analytic tier).
+    @tea static function gxc_betabinomial_obs()
+        log_alpha ~ normal(0.5f0, 0.3f0)
+        log_beta ~ normal(0.5f0, 0.3f0)
+        {:y} ~ betabinomial(12, exp(log_alpha), exp(log_beta))
+        return log_alpha
+    end
+
+    @tea static function gxc_discreteuniform_obs()
+        m ~ normal(0.0f0, 1.0f0)
+        {:y} ~ discreteuniform(1, 10)
+        return m
+    end
+
     gxc_dense_factor = [1.0 0.0; 0.3 0.8]
     gxc_glm_covariates = reshape(Float32[0.7, -1.1], 2, 1)  # d x n = 2 x 1
 
@@ -453,6 +550,8 @@
             (gxc_bernoullilogit_glm, (gxc_glm_covariates,), choicemap((:y, false))),
         ],
         :binomial => [(gxc_binomial_obs, (), choicemap((:y, 5)))],
+        :betabinomial => [(gxc_betabinomial_obs, (), choicemap((:y, 5)))],
+        :discreteuniform => [(gxc_discreteuniform_obs, (), choicemap((:y, 4)))],
         :geometric => [(gxc_geometric_obs, (), choicemap((:y, 3)))],
         :negativebinomial => [(gxc_negativebinomial_obs, (), choicemap((:y, 4)))],
         :poisson => [(gxc_poisson_obs, (), choicemap((:y, 2)))],
@@ -486,6 +585,27 @@
             (gxc_lkjcholesky_latent, (), choicemap()),
             (gxc_lkjcholesky_then_scalar, (), choicemap((:y, 0.4f0))),
             (gxc_lkjcholesky_latent_eta, (), choicemap()),
+        ],
+        :cauchy => [
+            (gxc_cauchy_obs, (), choicemap((:y, 0.6f0))),
+            (gxc_cauchy_latent, (), choicemap((:y, 0.4f0))),
+        ],
+        :halfnormal => [
+            (gxc_halfnormal_obs, (), choicemap((:y, 0.8f0))),
+            (gxc_halfnormal_latent, (), choicemap((:y, 1.1f0))),
+        ],
+        :halfcauchy => [
+            (gxc_halfcauchy_obs, (), choicemap((:y, 0.9f0))),
+            (gxc_halfcauchy_latent, (), choicemap((:y, 1.1f0))),
+        ],
+        :uniform => [(gxc_uniform_obs, (), choicemap((:y, 0.3f0)))],
+        :logistic => [
+            (gxc_logistic_obs, (), choicemap((:y, 0.7f0))),
+            (gxc_logistic_latent, (), choicemap((:y, 0.9f0))),
+        ],
+        :gumbel => [
+            (gxc_gumbel_obs, (), choicemap((:y, 0.7f0))),
+            (gxc_gumbel_latent, (), choicemap((:y, 0.9f0))),
         ],
     )
 

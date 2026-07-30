@@ -27,6 +27,7 @@ core_test_files = [
     ("dist_beta_categorical.jl", "dist"),
     ("dist_inversegamma_weibull_binomial.jl", "dist"),
     ("dist_laplace_geometric_negbinom.jl", "dist"),
+    ("dist_scalar_priors.jl", "dist"),
     ("dist_dirichlet.jl", "dist"),
     ("dist_mvnormal_diag.jl", "dist"),
     ("dist_truncated.jl", "dist"),
@@ -106,6 +107,7 @@ core_test_files = [
     ("multichain_threaded_reproducibility.jl", "sampling"),
     ("batched_chees_scaffold.jl", "sampling"),
     ("batched_chees_adaptation.jl", "sampling"),
+    ("batched_meads.jl", "sampling"),
 ]
 
 let registered = Set(first.(core_test_files)), on_disk = Set(f for f in readdir(joinpath(@__DIR__, "core")) if endswith(f, ".jl"))

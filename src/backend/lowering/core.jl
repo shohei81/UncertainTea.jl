@@ -500,6 +500,50 @@ function _backend_lower_step(
             arguments[3],
             parameter_row,
         )
+    elseif step.rhs.family === :cauchy
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "cauchy expects exactly 2 backend arguments")
+            return nothing
+        end
+        return BackendCauchyChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :halfnormal
+        length(arguments) == 1 || begin
+            _backend_issue!(issues, "halfnormal expects exactly 1 backend argument")
+            return nothing
+        end
+        return BackendHalfNormalChoicePlanStep(step.binding_slot, address, arguments[1], parameter_row)
+    elseif step.rhs.family === :halfcauchy
+        length(arguments) == 1 || begin
+            _backend_issue!(issues, "halfcauchy expects exactly 1 backend argument")
+            return nothing
+        end
+        return BackendHalfCauchyChoicePlanStep(step.binding_slot, address, arguments[1], parameter_row)
+    elseif step.rhs.family === :uniform
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "uniform expects exactly 2 backend arguments")
+            return nothing
+        end
+        # A latent uniform draws through a bounded parameter transform that the
+        # batched backend unconstrained-transform layer does not implement (the
+        # same limitation the truncated families hit), so fall back for latents.
+        # Observations stay backend-native.
+        isnothing(step.parameter_slot) || begin
+            _backend_issue!(issues, "latent uniform is not supported in backend lowering (bounded transform)")
+            return nothing
+        end
+        return BackendUniformChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :logistic
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "logistic expects exactly 2 backend arguments")
+            return nothing
+        end
+        return BackendLogisticChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :gumbel
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "gumbel expects exactly 2 backend arguments")
+            return nothing
+        end
+        return BackendGumbelChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
     end
 
     _backend_issue!(issues, "unsupported distribution family `$(step.rhs.family)` in backend lowering")

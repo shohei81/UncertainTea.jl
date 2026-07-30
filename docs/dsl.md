@@ -372,6 +372,12 @@ The initial GPU-targeted distribution set should stay small:
 - `negativebinomial`
 - `poisson`
 - `studentt`
+- `cauchy`
+- `halfnormal`
+- `halfcauchy`
+- `uniform`
+- `logistic`
+- `gumbel`
 - `categorical`
 - `truncatednormal`
 - `truncatedstudentt`
@@ -489,6 +495,19 @@ Requirements:
   family (`normal`, `laplace`, `studentt`) so an `IdentityTransform` is exact;
   declaring a latent mixture with any other component family raises an
   `ArgumentError` at macro-expansion time.
+- The scalar prior families `cauchy(mu, sigma)`, `halfnormal(sigma)`,
+  `halfcauchy(scale)`, `uniform(a, b)`, `logistic(mu, s)`, and `gumbel(mu, beta)`
+  are first-class elementary densities with full CPU-reference, backend-native
+  (analytic batched gradient), and device (KernelAbstractions) support — except
+  `uniform`, which is CPU + backend only (its bounded transform is not a device
+  transform, so a `uniform` choice is honestly reported unsupported by
+  `device_report`). `cauchy`/`logistic`/`gumbel` are real-line
+  (`IdentityTransform`); `halfnormal`/`halfcauchy` are positive
+  (`LogTransform`, like `lognormal`). `uniform` latents unconstrain through a
+  scaled-logit `BoundedTransform` and therefore require **literal (static) finite
+  bounds** (the same restriction the truncated families use); a dynamic bound is
+  allowed only for an observation and otherwise raises an `ArgumentError` at
+  macro-expansion time.
 
 ## Non-Centered Reparameterization
 

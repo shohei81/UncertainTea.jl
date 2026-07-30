@@ -31,7 +31,7 @@ export transform_to_constrained, transform_to_unconstrained, transform_to_constr
 export HMCChain, HMCChains, HMCMassAdaptationWindowSummary, HMCMassAdaptationSummary, HMCDiagnosticsSummary, HMCParameterSummary,
     HMCSummary, SamplerWarnings
 export ADVIResult, ImportanceSamplingResult, SIRResult, SMCStageSummary, SMCResult
-export hmc, hmc_chains, nuts, nuts_chains, batched_hmc, batched_nuts, batched_chees, batched_advi
+export hmc, hmc_chains, nuts, nuts_chains, batched_hmc, batched_nuts, batched_chees, batched_meads, batched_advi
 export gibbs, GibbsChain, discrete_ess
 export batched_importance_sampling, batched_sir, batched_smc
 export acceptancerate,
@@ -47,6 +47,7 @@ export predict, PredictiveDraws, addresses, log_evidence
 export normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, beta, dirichlet, mvnormal, bernoulli,
     bernoullilogit, geometric, negativebinomial, poisson, studentt, categorical, betabinomial, multinomial,
     discreteuniform
+export cauchy, halfnormal, halfcauchy, uniform, logistic, gumbel
 export truncatednormal, truncatedstudentt
 export mixture
 export mvnormaldense

@@ -884,3 +884,401 @@ function _score_backend_observed_loop_choice!(
     end
     return totals
 end
+
+# ---- scalar prior families (issue #229): cauchy, halfnormal, halfcauchy, uniform, logistic, gumbel ----
+# Scale/positivity parameters score NaN (not throw) out of support, matching the
+# exception-free contract documented at the top of this file.
+
+function _backend_cauchy_logpdf(mu, sigma, x)
+    xx, mu_, sigma_ = promote(x, mu, sigma)
+    sigma_ > zero(sigma_) || return oftype(xx, NaN)
+    z = (xx - mu_) / sigma_
+    return -log(oftype(xx, pi)) - log(sigma_) - log1p(z * z)
+end
+
+function _backend_halfnormal_logpdf(sigma, x)
+    xx, sigma_ = promote(x, sigma)
+    sigma_ > zero(sigma_) || return oftype(xx, NaN)
+    xx >= zero(xx) || return oftype(xx, -Inf)
+    z = xx / sigma_
+    return log(oftype(xx, 2)) - log(sigma_) - log(2 * oftype(xx, pi)) / 2 - z * z / 2
+end
+
+function _backend_halfcauchy_logpdf(scale, x)
+    xx, scale_ = promote(x, scale)
+    scale_ > zero(scale_) || return oftype(xx, NaN)
+    xx >= zero(xx) || return oftype(xx, -Inf)
+    z = xx / scale_
+    return log(oftype(xx, 2)) - log(oftype(xx, pi)) - log(scale_) - log1p(z * z)
+end
+
+function _backend_uniform_logpdf(lower, upper, x)
+    xx, lower_, upper_ = promote(x, lower, upper)
+    upper_ > lower_ || return oftype(xx, NaN)
+    lower_ <= xx <= upper_ || return oftype(xx, -Inf)
+    return -log(upper_ - lower_)
+end
+
+function _backend_logistic_logpdf(mu, scale, x)
+    xx, mu_, scale_ = promote(x, mu, scale)
+    scale_ > zero(scale_) || return oftype(xx, NaN)
+    z = (xx - mu_) / scale_
+    az = abs(z)
+    return -log(scale_) - az - 2 * log1p(exp(-az))
+end
+
+function _backend_gumbel_logpdf(mu, scale, x)
+    xx, mu_, scale_ = promote(x, mu, scale)
+    scale_ > zero(scale_) || return oftype(xx, NaN)
+    z = (xx - mu_) / scale_
+    return -log(scale_) - z - exp(-z)
+end
+
+# --- scalar (non-batched) scoring ---
+function _score_backend_step!(
+    step::BackendCauchyChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    mu = _eval_backend_numeric_expr(env, step.mu)
+    sigma = _eval_backend_numeric_expr(env, step.sigma)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_cauchy_logpdf(mu, sigma, value)
+end
+
+function _score_backend_step!(
+    step::BackendHalfNormalChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    sigma = _eval_backend_numeric_expr(env, step.sigma)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_halfnormal_logpdf(sigma, value)
+end
+
+function _score_backend_step!(
+    step::BackendHalfCauchyChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    scale = _eval_backend_numeric_expr(env, step.scale)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_halfcauchy_logpdf(scale, value)
+end
+
+function _score_backend_step!(
+    step::BackendUniformChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    lower = _eval_backend_numeric_expr(env, step.lower)
+    upper = _eval_backend_numeric_expr(env, step.upper)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_uniform_logpdf(lower, upper, value)
+end
+
+function _score_backend_step!(
+    step::BackendLogisticChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    mu = _eval_backend_numeric_expr(env, step.mu)
+    scale = _eval_backend_numeric_expr(env, step.scale)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_logistic_logpdf(mu, scale, value)
+end
+
+function _score_backend_step!(
+    step::BackendGumbelChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    mu = _eval_backend_numeric_expr(env, step.mu)
+    scale = _eval_backend_numeric_expr(env, step.scale)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, value)
+    return _backend_gumbel_logpdf(mu, scale, value)
+end
+
+# --- batched scoring ---
+@inline function _backend_write_choice_binding!(env::BatchedPlanEnvironment, binding_slot, value, batch_index)
+    isnothing(binding_slot) && return nothing
+    if env.numeric_slots[binding_slot]
+        env.numeric_values[binding_slot, batch_index] = convert(eltype(env.numeric_values), value)
+    elseif env.index_slots[binding_slot]
+        value isa Integer ||
+            throw(BatchedBackendFallback("index backend slot $(binding_slot) received non-integer choice value"))
+        env.index_values[binding_slot, batch_index] = Int(value)
+    else
+        env.generic_values[binding_slot][batch_index] = value
+    end
+    return nothing
+end
+
+function _score_backend_step!(
+    step::BackendCauchyChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    mu_values = _batched_numeric_scratch!(env, 1)
+    sigma_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(sigma_values, env, step.sigma, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_cauchy_logpdf(mu_values[batch_index], sigma_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendHalfNormalChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    sigma_values = _batched_numeric_scratch!(env, 1)
+    _eval_backend_numeric_expr!(sigma_values, env, step.sigma, 2)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_halfnormal_logpdf(sigma_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendHalfCauchyChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    scale_values = _batched_numeric_scratch!(env, 1)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 2)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_halfcauchy_logpdf(scale_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendUniformChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    lower_values = _batched_numeric_scratch!(env, 1)
+    upper_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(lower_values, env, step.lower, 3)
+    _eval_backend_numeric_expr!(upper_values, env, step.upper, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_uniform_logpdf(lower_values[batch_index], upper_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendLogisticChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    mu_values = _batched_numeric_scratch!(env, 1)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_logistic_logpdf(mu_values[batch_index], scale_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendGumbelChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    mu_values = _batched_numeric_scratch!(env, 1)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_gumbel_logpdf(mu_values[batch_index], scale_values[batch_index], choice_values[batch_index])
+        _backend_write_choice_binding!(env, step.binding_slot, choice_values[batch_index], batch_index)
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+# --- observed-loop scoring ---
+function _score_backend_observed_loop_choice!(
+    step::BackendCauchyChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    sigma_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(sigma_values, env, step.sigma, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_cauchy_logpdf(mu_values[batch_index], sigma_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendHalfNormalChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    sigma_values = _batched_numeric_scratch!(env, 1)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(sigma_values, env, step.sigma, 2)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_halfnormal_logpdf(sigma_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendHalfCauchyChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    scale_values = _batched_numeric_scratch!(env, 1)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 2)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_halfcauchy_logpdf(scale_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendUniformChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    lower_values = _batched_numeric_scratch!(env, 1)
+    upper_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(lower_values, env, step.lower, 3)
+    _eval_backend_numeric_expr!(upper_values, env, step.upper, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_uniform_logpdf(lower_values[batch_index], upper_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendLogisticChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_logistic_logpdf(mu_values[batch_index], scale_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendGumbelChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_numeric_expr!(mu_values, env, step.mu, 3)
+    _eval_backend_numeric_expr!(scale_values, env, step.scale, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_gumbel_logpdf(mu_values[batch_index], scale_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
