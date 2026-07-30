@@ -102,14 +102,80 @@ additive infrastructure. Tests: `test/uncertaintea/core/device_rng.jl` (KAT
 bit-exactness, CPU()-kernel-vs-host determinism, uniform/normal distributional
 sanity, stream independence) and a Metal smoke leg in `test/gpu/runtests.jl`.
 
-### (2) Per-chain persistent tree kernel
+### (2) Per-chain persistent tree kernel — **SHIPPED (this PR)**
 
-Build the iterative NUTS tree in a per-chain threadgroup kernel using increment
-1's RNG for momentum + slice/accept draws, the threadgroup checkpoint stack, and
-the #153 tiled gradient. **De-risk first**: start fixed-depth / Gaussian target
-so the tree logic is testable in isolation, and gate correctness with the #121
-statistical-equivalence harness (per risk (a): NOT bitwise). Launch per doubling
-round first (risk (c)) before fusing to one launch.
+`batched_nuts(...; tree_strategy=:persistent, backend=...)` builds the ENTIRE
+NUTS tree for one iteration in a **single kernel launch** (the one-launch target,
+not the per-round fallback), each grid lane owning one chain. Implemented in
+`src/device/persistent_nuts.jl`, wired as a `batched_nuts` device strategy.
+
+**What shipped, and the design chosen.**
+
+- **One thread per chain, one launch per iteration.** Rather than a threadgroup
+  per chain with `@localmem` + `@synchronize` (which the sketch also floats), the
+  shipped kernel gives each chain a single grid lane and keeps its per-chain
+  vector state (position/momentum/gradient of length `P` and the checkpoint stack)
+  in a per-chain COLUMN of a device buffer indexed by the chain id — exactly like
+  the gradient kernel's `slots[:, pidx, b]`. This deliberately avoids
+  threadgroup-shared memory and barriers (and KA's group-indexing hazards), so the
+  identical kernel compiles on **CPU()** and **Metal**. It is the right shape for
+  the epic's headline regime — thousands of chains — where one lane per chain
+  already saturates the GPU. The obs-tiled / P-parallel **threadgroup-per-chain**
+  variant (which helps the few-chains / large-`N` regime) is deferred to increment
+  3; see "Deviations" below.
+- **Checkpoint stack** lives in a packed `P × (max_depth+1) × 2 × C` device buffer
+  (position + momentum planes), indexed by the chain column — the register/
+  threadgroup stack the sketch calls for, realized as a per-chain buffer slice.
+- **In-kernel gradient.** The leapfrog gradient is computed inside the kernel by
+  looping the differentiation target over `P` and walking the lowered device plan
+  in forward-mode duals — the SAME `_device_grad_score_steps` the grid gradient
+  kernel uses (`src/device/gradient_kernel.jl`). It is NOT yet observation-tiled
+  (#153): each lane scans the full observation loop. Correct for any device-
+  lowerable model; obs-tiling is an increment-3 optimization.
+- **On-device RNG.** Momentum (stream 0), doubling direction (stream 1), within-
+  subtree multinomial slice (stream 2), and biased-progressive merge (stream 3)
+  draws all come from increment 1's Philox via the coordinate `(chain_id,
+  iteration, stream_id, draw_index)`. A per-run seed drawn from the host `rng` is
+  folded into the iteration coordinate so different seeds give different (but
+  reproducible) draws.
+- **Ported CPU reference:** `_build_nuts_subtree`, `_continue_nuts_proposal!`,
+  `_initialize_nuts_first_step!`, `leapfrog_step!`, `_is_turning` /
+  `_dyadic_turning` / `_logaddexp` / `_advance_tree_leaf` / `_merge_subtree_stats`.
+
+**Metal argument-buffer packing (risk beyond the sketch).** Metal caps a kernel at
+31 indirect argument-buffer resources; the naive per-chain buffer set is 37. The
+shipped kernel PACKS related buffers into multi-plane arrays (each frontier packs
+pos/mom/grad into `P×3×C`, the subtree proposal packs pos/grad into `P×2×C`, the
+checkpoints pack pos/mom, the working sub-tree logjoints and the scalar diagnostics
+pack into small `k×C` matrices), landing at ~22 buffers.
+
+**Validation (the #121 gate).** Passes on the conjugate gauss and the two-parameter
+location/log-scale model on **CPU() Float64** AND **Metal Float32**:
+rank-normalized split R-hat < 1.01 (< 1.02 Float32), analytic mean/sd within a few
+MCSE, divergence-free, min-ESS within a few percent of the masked device path,
+matching tree-depth distribution (depth ≥ 3–5 reached). Tests:
+`test/uncertaintea/core/device_persistent_nuts.jl` (CPU()) and a Metal smoke in
+`test/gpu/runtests.jl`. Statistically — not bitwise — equivalent (risk (a)), as
+designed.
+
+**Measured Metal speedup (gauss, Apple M4, 300 warmup + 300 sample).** Persistent
+vs the masked device path: **~8× at 64 chains, ~7× at 512, ~6× at 4096**; the
+4096-chain run completes in ~4.2 s total (~7 ms/iteration), inside the epic's
+~2–5 s / ~1–3 ms-per-draw target and versus ~26 s for the masked device path and
+the ~228 s historical baseline.
+
+**Deviations / limitations (honest scope).**
+
+- No watchdog fallback was needed: the one-launch design validated on Metal up to
+  4096 chains without a per-round split (risk (c) did not bite at these sizes). Very
+  large `C × max_tree_depth` may still approach the watchdog; the per-round fallback
+  in the plan remains the mitigation if it does.
+- Diagonal (pooled) mass only, matching the masked device path.
+- Gradient is not observation-tiled and the kernel is one-thread-per-chain, so the
+  few-chains / large-`N` regime does not yet get intra-chain parallelism — that is
+  increment 3, along with obs-tiling and the SBC-on-device wiring.
+- Increment 3's remaining item is generalization + the full 64–16384-chain bench
+  sweep; the strategy is already promoted to a `batched_nuts` `tree_strategy` here.
 
 ### (3) Generalize + wire as a `batched_nuts` device strategy
 

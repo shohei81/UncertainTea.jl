@@ -637,3 +637,40 @@ end
     @test abs(sum(n_host) / N) < 0.1                # mean ~ 0
     @test abs(sum(x -> x^2, n_host) / N - 1) < 0.1  # variance ~ 1
 end
+
+# Persistent per-chain NUTS tree kernel on Metal Float32 (issue #154 increment 2).
+# The whole tree is built in one device kernel launch per iteration with on-device
+# Philox randomness; validated statistically (NOT bitwise) by the #121 gate. Standalone
+# so a `gpu_count_model` abort elsewhere does not mask it.
+@testset "device Metal persistent NUTS smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping persistent NUTS smoke test."
+        @test true
+        return
+    end
+    backend = Metal.MetalBackend()
+
+    @tea static function gpu_persist_gauss()
+        mu ~ normal(0.0, 1.0)
+        {:y} ~ normal(mu, 1.0)
+        return mu
+    end
+
+    res = batched_nuts(
+        gpu_persist_gauss, (), choicemap((:y, 0.3));
+        num_chains=256, num_samples=500, num_warmup=400,
+        tree_strategy=:persistent, backend=backend, rng=Random.MersenneTwister(511),
+    )
+    draws = posterior_array(res)
+    pooled_mean = sum(draws) / length(draws)
+    m = pooled_mean
+    pooled_std = sqrt(sum((v - m)^2 for v in draws) / (length(draws) - 1))
+    divrate =
+        sum(sum(chain.divergent) for chain in res.chains) /
+        sum(length(chain.divergent) for chain in res.chains)
+    @test all(isfinite, draws)
+    @test isapprox(pooled_mean, 0.15; atol=0.05)      # analytic posterior mean
+    @test isapprox(pooled_std, sqrt(0.5); atol=0.05)  # analytic posterior sd
+    @test maximum(rhat(res)) < 1.02                   # Float32 leaves a little slack
+    @test divrate == 0.0
+end
