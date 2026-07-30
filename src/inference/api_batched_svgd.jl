@@ -267,7 +267,7 @@ Known caveats (non-goals): mode collapse / variance underestimation at small `N`
 and in high dimensions, and bandwidth sensitivity. SVGD is a fast approximate-
 posterior tool, not a NUTS replacement.
 
-See also [`particle_mean`](@ref), [`particle_covariance`](@ref), [`batched_advi`](@ref).
+See also [`particle_mean`](@ref), [`particle_covariance`](@ref), and `batched_advi`.
 """
 function batched_svgd(
     model::TeaModel,
