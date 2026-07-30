@@ -252,6 +252,35 @@ function _device_launch_gradient!(inner::DeviceBatchedWorkspace)
     return nothing
 end
 
+# Lane-compaction gradient launch (issue #160): evaluate the PLAIN serial gradient
+# over just the first `k` (gathered active) columns of `params_src`, writing into
+# `grad_dst[:, 1:k]` / `totals_dst[1:k]`. Same kernel, same per-thread plan walk and
+# per-observation reduction order as the full-width `_device_launch_gradient!`; only
+# the launched column count shrinks from C to k. Each column's gradient depends only
+# on its own params column, the SHARED observations, and its own private slot
+# scratch column, so column `slot` produces BITWISE-identical values to the full-width
+# thread for original column `index[slot]` (the gauss/logistic/GLM shared-observation
+# shapes). Only the untiled path is compacted -- the tiled observation-parallel path
+# (issue #153) stays full width (a documented follow-up), so this is never called
+# when `inner.tiled_gradient !== nothing`.
+function _device_launch_gradient_compact!(
+    inner::DeviceBatchedWorkspace, params_src, grad_dst, totals_dst, k::Int,
+)
+    _device_gradient_kernel!(inner.backend)(
+        totals_dst,
+        grad_dst,
+        inner.plan,
+        params_src,
+        inner.observed_device,
+        inner.observed_int_device,
+        inner.grad_slots_device,
+        inner.trip_counts_device,
+        inner.loop_starts_device;
+        ndrange=(inner.parameter_count, k),
+    )
+    return nothing
+end
+
 function _device_launch_tiled_gradient!(inner::DeviceBatchedWorkspace, tg::DeviceTiledGradient)
     be = inner.backend
     P = inner.parameter_count

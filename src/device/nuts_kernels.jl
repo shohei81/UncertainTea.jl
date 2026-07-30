@@ -72,6 +72,44 @@
     end
 end
 
+# ---- lane-compaction gather / scatter (issue #160) -----------------------------
+# The masked leaf gradient runs over ALL C columns even once most chains have
+# finished/diverged (measured waste 60.8% at C=64, 68.3% at C=256). The gradient of
+# column c depends ONLY on `params[:, c]` (columns fully independent), so once the
+# active fraction drops below 50% the sync leaf gathers the active columns into a
+# compact buffer, evaluates the gradient over just those `k` columns, and scatters
+# the results back to the active lanes. See `_device_nuts_leaf_gradient!`.
+
+# Gather: copy the `slot`-th active column (source column `index[slot]`) of `src`
+# into the front of `dest`. One thread per (parameter, slot); `index[1:k]` is the
+# host-built active->original map. Reads the whole P-row column so the gathered
+# lanes score exactly as they would at their original lane.
+@kernel function _device_nuts_gather_columns!(dest, @Const(src), @Const(index))
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    slot = idx[2]
+    c = @inbounds index[slot]
+    @inbounds dest[pidx, slot] = src[pidx, c]
+end
+
+# Scatter: write the compact gradient columns + per-column logjoint totals back to
+# the active lanes `index[slot]`. Inactive lanes are intentionally left untouched --
+# they are downstream don't-cares (the post-gradient leaf gates every read of
+# grad/logjoint behind `active`/`valid`), so a stale inactive entry is equivalent to
+# the full-width path overwriting it with a never-read value.
+@kernel function _device_nuts_scatter_gradient!(
+    grad, totals, @Const(compact_grad), @Const(compact_totals), @Const(index),
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    slot = idx[2]
+    c = @inbounds index[slot]
+    @inbounds grad[pidx, c] = compact_grad[pidx, slot]
+    if pidx == 1
+        @inbounds totals[c] = compact_totals[slot]
+    end
+end
+
 # ---- fused leaf micro-kernels (issue #152 Tier 1) ------------------------------
 # These fuse the sequences of per-element micro-kernels in `_device_nuts_leaf!`
 # and the round stages into single launches WITHOUT changing the order of any
@@ -650,6 +688,20 @@ mutable struct DeviceNUTSWorkspace{T,B<:KernelAbstractions.Backend}
     host_leaf_uniform::Vector{T} # host staging (rand! fills the used prefix)
     # Host staging for the round-end integer downloads.
     host_i32::Vector{Int32}
+    # ---- issue #160: sync-leaf lane-compaction scratch -------------------------
+    # The Tier-1 (sync-per-leaf) masked leaf gathers its active columns into
+    # `compact_params[:, 1:k]`, runs the gradient over those k columns into
+    # `compact_gradient[:, 1:k]` / `compact_totals[1:k]`, and scatters back to the
+    # active lanes `compact_index[slot]`. All are pre-sized to the full batch width
+    # so the gather/scatter never allocates per leaf; the all-active leaf keeps the
+    # unchanged full-width path (zero added work in the common early-round case).
+    # `compact_index_host` builds the active->original map host-side (the sync path
+    # already reads `ws.subtree_active` on the host every leaf).
+    compact_params::Any        # P x C  (T)
+    compact_gradient::Any      # P x C  (T)
+    compact_totals::Any        # C      (T)
+    compact_index::Any         # C      (Int32) device gather/scatter index
+    compact_index_host::Vector{Int32}  # C host staging
 end
 
 function DeviceNUTSWorkspace(
@@ -728,6 +780,12 @@ function DeviceNUTSWorkspace(
         leaf_uniform,                        # d_leaf_uniform
         Vector{T}(undef, max_leaves * C),    # host_leaf_uniform
         Vector{Int32}(undef, C),             # host_i32
+        # ---- issue #160 sync-leaf compaction scratch ---------------------------
+        mat(),                               # compact_params (P x C)
+        mat(),                               # compact_gradient (P x C)
+        vecT(),                              # compact_totals (C)
+        vecI32(),                            # compact_index (C, zero-init)
+        zeros(Int32, C),                     # compact_index_host
     )
 end
 
@@ -818,13 +876,138 @@ _download_matrix!(host::AbstractMatrix{Float64}, dev, stage::Matrix) = begin
     return host
 end
 
+# ---- sync-leaf lane compaction (issue #160) ------------------------------------
+#
+# WHY. The masked doubling trajectory runs a FULL-WIDTH batched gradient at every
+# leapfrog leaf even once most chains have finished/diverged. Mirroring the host
+# lane compaction (commit e52c21c, PR #198), the Tier-1 (sync-per-leaf) device leaf
+# gathers the active columns, evaluates the gradient over just those `k` columns, and
+# scatters the results back to the active lanes.
+#
+# WHY IT IS BITWISE SAFE. The gradient of column c reads ONLY `params[:, c]`, the
+# SHARED observations, and its own private slot-scratch column -- columns are fully
+# independent -- so gather -> gradient -> scatter is a pure permutation over
+# independent columns: the active lanes receive BITWISE-identical logjoint/gradient
+# values. The inactive lanes are downstream don't-cares (the post-gradient leaf gates
+# every read behind `active`/`valid`), so leaving their gradient/total entries stale
+# equals the full-width path overwriting them with never-read values. No RNG lives in
+# the gradient, so the masked-doubling draw order is untouched and the CPU()-Float64
+# device-vs-host BITWISE oracle (`dnuts_device_vs_host_masked_exact`) still holds.
+#
+# SCOPE. Only the Tier-1 SYNC leaf (`_device_nuts_leaf!`) is compacted: it reads the
+# active mask (`ws.subtree_active`) on the host every leaf, so the active count `k`
+# and the gather index are already available host-side with no extra sync. The Tier-2
+# async leaf (`_device_nuts_leaf_async!`) keeps a device-resident active mask with NO
+# per-leaf host round-trip, so compacting it needs a device-side stream compaction
+# (prefix sum) to obtain `k`; that is a documented follow-up and stays full width.
+# The tiled observation-parallel gradient (issue #153) is likewise left full width
+# (see `_device_launch_gradient_compact!`); the eligibility gate below excludes both
+# per-column observations/arguments and the tiled path, falling back to full width.
+
+# Compact once the active fraction falls below this. Above it the gather/scatter +
+# narrower-launch overhead would eat the saved lane work, so the full-width path stays
+# in charge (and the all-active leaf -- the common early-round case -- is completely
+# unchanged, keeping its zero-added-work guarantee).
+const _DEVICE_NUTS_COMPACTION_ACTIVE_FRACTION = 0.5
+
+# Diagnostic counters (issue #160): total gradient columns actually launched across
+# sync-leaf calls, how many sync leaves ran, and how many took the compact path.
+# Tests reset and read these to assert the compact leaf evaluated EXACTLY
+# count(active) columns and that the gate engaged. Not consulted by production logic.
+const _DEVICE_NUTS_GRADIENT_COLUMNS = Ref(0)
+const _DEVICE_NUTS_GRADIENT_LEAVES = Ref(0)
+const _DEVICE_NUTS_COMPACTED_LEAVES = Ref(0)
+
+function _device_nuts_reset_compaction_stats!()
+    _DEVICE_NUTS_GRADIENT_COLUMNS[] = 0
+    _DEVICE_NUTS_GRADIENT_LEAVES[] = 0
+    _DEVICE_NUTS_COMPACTED_LEAVES[] = 0
+    return nothing
+end
+
+# Diagnostic opt-out (issue #160): flip to `false` to force every sync leaf back onto
+# the full-width gradient regardless of the active fraction. Defaults to `true`. Only
+# an A/B benchmark or a regression bisect should touch it; production always compacts.
+const _DEVICE_NUTS_COMPACTION_ENABLED = Ref(true)
+
+# Compaction is bitwise-safe only when EVERY per-column gradient input other than the
+# params column is shared across columns: SHARED observations (a single broadcast
+# column, `size(observed, 2) == 1`, so `_device_obs_col` returns 1 for any lane) and
+# SHARED model arguments (`args isa Tuple`, staged identically into every slot column
+# by `_device_stage_gradient_arguments!`). Per-column observations/constraints/args
+# would make column `slot` score a different chain's conditioning than original column
+# `index[slot]`, so those keep the full width. The tiled path (issue #153) is excluded
+# too -- it stays full width for now.
+function _device_nuts_compaction_eligible(inner::DeviceBatchedWorkspace)
+    _DEVICE_NUTS_COMPACTION_ENABLED[] || return false
+    inner.tiled_gradient === nothing || return false
+    size(inner.observed_device, 2) == 1 || return false
+    size(inner.observed_int_device, 2) == 1 || return false
+    inner.args isa Tuple || return false
+    return true
+end
+
+# Build the host->device gather index for the active columns and return `k` (0 => run
+# the unchanged full-width gradient). Gated to `1 <= k` and active fraction below
+# `_DEVICE_NUTS_COMPACTION_ACTIVE_FRACTION` (`2k < C` implies `k < C`). The whole
+# length-C index is uploaded in one copy; the tail `k+1:C` is stale but never read (the
+# gather/scatter launch only touches slots `1:k`).
+function _device_nuts_build_compaction!(dws::DeviceNUTSWorkspace, active_host::AbstractVector{Bool})
+    _device_nuts_compaction_eligible(dws.inner) || return 0
+    C = dws.num_chains
+    idx = dws.compact_index_host
+    k = 0
+    @inbounds for c = 1:C
+        if active_host[c]
+            k += 1
+            idx[k] = Int32(c)
+        end
+    end
+    (k >= 1 && 2 * k < C) || return 0
+    copyto!(dws.compact_index, idx)
+    return k
+end
+
+# Run the sync-leaf gradient, compacted when beneficial. On the compact path: gather
+# the k active columns of `params_device`, evaluate the gradient over k columns, and
+# scatter gradient/logjoint back to the active lanes. On the full-width path this is
+# exactly the unchanged `_device_launch_gradient!`. Kernels on one backend run in
+# submission order, so gather -> gradient -> scatter needs no interior synchronize
+# (the leaf synchronizes once after the post-gradient kernel, unchanged). Returns `k`
+# (0 on the full-width path).
+function _device_nuts_leaf_gradient!(dws::DeviceNUTSWorkspace, ws)
+    inner = dws.inner
+    k = _device_nuts_build_compaction!(dws, ws.subtree_active)
+    _DEVICE_NUTS_GRADIENT_LEAVES[] += 1
+    if k == 0
+        _device_launch_gradient!(inner)
+        _DEVICE_NUTS_GRADIENT_COLUMNS[] += inner.batch_size
+        return 0
+    end
+    be = dws.backend
+    P = dws.num_params
+    _device_nuts_gather_columns!(be)(
+        dws.compact_params, inner.params_device, dws.compact_index; ndrange=(P, k),
+    )
+    _device_launch_gradient_compact!(inner, dws.compact_params, dws.compact_gradient, dws.compact_totals, k)
+    _device_nuts_scatter_gradient!(be)(
+        inner.gradients_device, inner.totals_device,
+        dws.compact_gradient, dws.compact_totals, dws.compact_index; ndrange=(P, k),
+    )
+    _DEVICE_NUTS_COMPACTED_LEAVES[] += 1
+    _DEVICE_NUTS_GRADIENT_COLUMNS[] += k
+    return k
+end
+
 # ---- device leaf leapfrog ------------------------------------------------------
 
 # One masked leapfrog leaf from `tree_current` in each chain's `sign` direction,
 # leaving the leaf in (params_device, working_momentum, gradients_device, totals_device)
 # and refreshing `valid`/`proposed_energy`. Mirrors `batched_leapfrog_step_to!` for a
 # single step (initial half-kick, drift, gradient, closing half-kick; no flip).
-# Downloads only `proposed_energy` (C) + `valid` (C).
+# Downloads only `proposed_energy` (C) + `valid` (C). Uploads the active mask (C) and,
+# on the lane-compaction path (issue #160, active fraction < 50%), the length-C gather
+# index (C Int32); both stay within the O(C)-per-leaf transfer budget.
 function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, step_size::Real) where {T}
     be = dws.backend
     P = dws.num_params
@@ -847,7 +1030,9 @@ function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, step_size::Real) wh
         dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
         dws.inverse_mass, dws.active, dws.sign, h, half; ndrange=(P, C),
     )
-    _device_launch_gradient!(inner)
+    # Gradient over the active columns only when most chains have finished (issue
+    # #160); the full-width path is unchanged when all/most lanes are still live.
+    _device_nuts_leaf_gradient!(dws, ws)
     # Fused post-gradient leaf: final-step validity + closing half-kick + proposed
     # Hamiltonian, in one launch (was validity_update_final + kick + hamiltonian).
     _device_nuts_leaf_post!(be)(
@@ -883,7 +1068,8 @@ function _device_nuts_leaf!(dws::DeviceNUTSWorkspace{T}, ws, ::Nothing) where {T
         dws.tree_current_position, dws.tree_current_momentum, dws.tree_current_gradient,
         dws.inverse_mass, dws.active, dws.sign, dws.step, half; ndrange=(P, C),
     )
-    _device_launch_gradient!(inner)
+    # Lane compaction (issue #160); see the shared-step overload above.
+    _device_nuts_leaf_gradient!(dws, ws)
     _device_nuts_leaf_post_perchain!(be)(
         dws.valid, dws.proposed_energy, p,
         grad, logj, dws.active, dws.sign, dws.step, dws.inverse_mass, half, P; ndrange=C,
