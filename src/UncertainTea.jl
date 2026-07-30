@@ -32,6 +32,7 @@ export HMCChain, HMCChains, HMCMassAdaptationWindowSummary, HMCMassAdaptationSum
     HMCSummary, SamplerWarnings
 export ADVIResult, ImportanceSamplingResult, SIRResult, SMCStageSummary, SMCResult
 export hmc, hmc_chains, nuts, nuts_chains, batched_hmc, batched_nuts, batched_chees, batched_meads, batched_advi
+export batched_svgd, SVGDResult, particle_mean, particle_covariance
 export gibbs, GibbsChain, discrete_ess
 export batched_importance_sampling, batched_sir, batched_smc
 export acceptancerate,

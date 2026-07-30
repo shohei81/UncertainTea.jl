@@ -45,6 +45,18 @@ main path for the GPU-native work.
   sync per iteration — the GPU-native route. NUTS stays the reference/default.
 - `batched_advi`, `batched_importance_sampling`, `batched_sir`, `batched_smc` —
   batched variational inference and particle methods.
+- [`batched_svgd`](@ref) — Stein Variational Gradient Descent (Liu & Wang,
+  NeurIPS 2016): a **deterministic particle** method between VI and MCMC. `N`
+  particles follow a kernelized gradient flow toward the posterior; each
+  iteration is one batched unconstrained log-joint gradient over the particle
+  matrix (host or `backend`-device) plus an `N × N` RBF-kernel interaction with
+  the median-distance bandwidth, stepped by Adam. It returns an `SVGDResult` of
+  equal-weight **optimized particles** — not MCMC draws, so there is no
+  Rhat/ESS; validate by posterior-moment recovery and particle spread via
+  [`particle_mean`](@ref) / [`particle_covariance`](@ref). Caveats (non-goals):
+  mode collapse / variance underestimation at small `N` and in high dimensions,
+  and bandwidth sensitivity — SVGD is a fast approximate-posterior tool, not a
+  NUTS replacement.
 
 Per-chain step-size adaptation is the default across the batched samplers, which
 avoids stranding chains whose initial curvature a single shared step size never
