@@ -48,8 +48,11 @@ function _device_body_written(body_steps)
     return written
 end
 
-# Returns `(prelude, body, loop_id)` when the plan has exactly one top-level loop
-# whose body is a tileable additive reduction; `nothing` otherwise. Tileable means:
+# Returns `(pre, post, body, loop_id)` when the plan has exactly one top-level loop
+# whose body is a tileable additive reduction; `nothing` otherwise. `pre`/`post` are
+# the non-loop steps before / after the loop in program order -- kept separate so the
+# post-loop walk can be launched with an observation cursor advanced past the loop's
+# total consumption (issue #227). Tileable means:
 #   * a single loop in the whole plan (`loop_count == 1`, one top-level loop step),
 #   * the body reads no per-iteration index (its iterator slot), and
 #   * every slot the body writes is dead (read nowhere), so each iteration's
@@ -82,8 +85,9 @@ function _device_detect_tileable_loop(plan::DeviceExecutionPlan)
     end
     isempty(intersect(body_written, all_reads)) || return nothing
 
-    prelude = tuple((plan.steps[i] for i in eachindex(plan.steps) if i != loop_idx)...)
-    return (prelude=prelude, body=loop.body, loop_id=loop.loop_id)
+    pre = tuple((plan.steps[i] for i in eachindex(plan.steps) if i < loop_idx)...)
+    post = tuple((plan.steps[i] for i in eachindex(plan.steps) if i > loop_idx)...)
+    return (pre=pre, post=post, body=loop.body, loop_id=loop.loop_id)
 end
 
 # Only the binomial step reads the exact-integer observation mirror; when the plan
@@ -116,11 +120,21 @@ end
 
 # ---- descriptor ----------------------------------------------------------------
 
-struct DeviceTiledGradient{T,PP<:DeviceExecutionPlan{T},BP<:DeviceExecutionPlan{T}}
-    # everything except the tileable loop; a `_device_gradient_kernel!` launch
-    # over this writes the prior value/gradient AND materializes the pre-loop
-    # bindings the body reads
-    prelude_plan::PP
+struct DeviceTiledGradient{
+    T,
+    PRE<:DeviceExecutionPlan{T},
+    POST<:DeviceExecutionPlan{T},
+    BP<:DeviceExecutionPlan{T},
+}
+    # non-loop steps BEFORE the loop; a prelude launch over this writes the prior
+    # value/gradient AND materializes the pre-loop bindings the body reads (walked
+    # with the observation cursor starting at 1)
+    pre_plan::PRE
+    # non-loop steps AFTER the loop; walked with the observation cursor advanced
+    # past the loop's total consumption (`post_cursor`) so a post-loop observed
+    # choice reads its own observation row, not the loop's first (issue #227). Empty
+    # for the common tiled shape (the loop is the last observation consumer).
+    post_plan::POST
     # the loop body as a stand-alone step tuple, scored per tile
     body_plan::BP
     loop_id::Int32
@@ -129,15 +143,21 @@ struct DeviceTiledGradient{T,PP<:DeviceExecutionPlan{T},BP<:DeviceExecutionPlan{
     n_obs::Int32           # loop trip count (static for the workspace)
     iters_per_tile::Int32
     ntiles::Int32
+    # 1-based observation cursor the post-loop walk starts at:
+    # `base_cursor + n_obs*stride + 1` (past every row the loop consumed).
+    post_cursor::Int32
 end
 
 function _build_device_tiled_gradient(plan::DeviceExecutionPlan{T}, tileable, bundle) where {T}
     n_obs = bundle.trip_counts[Int(tileable.loop_id)]
     iters_per_tile, ntiles = _device_tile_sizing(n_obs)
-    prelude_plan = DeviceExecutionPlan{T}(tileable.prelude, plan.slot_count, Int32(0))
+    pre_plan = DeviceExecutionPlan{T}(tileable.pre, plan.slot_count, Int32(0))
+    post_plan = DeviceExecutionPlan{T}(tileable.post, plan.slot_count, Int32(0))
     body_plan = DeviceExecutionPlan{T}(tileable.body, plan.slot_count, plan.loop_count)
+    post_cursor = bundle.tile_base_cursor + n_obs * bundle.tile_stride + Int32(1)
     return DeviceTiledGradient(
-        prelude_plan,
+        pre_plan,
+        post_plan,
         body_plan,
         tileable.loop_id,
         bundle.tile_base_cursor,
@@ -145,6 +165,7 @@ function _build_device_tiled_gradient(plan::DeviceExecutionPlan{T}, tileable, bu
         n_obs,
         iters_per_tile,
         ntiles,
+        post_cursor,
     )
 end
 
@@ -224,6 +245,43 @@ end
     end
 end
 
+# One thread per `(parameter, chain)`: score the prior/prelude value + `pidx`
+# derivative channel and write it into the final buffers (the tile reduce kernel
+# folds the observation tiles in afterward). Splitting the non-loop steps into a
+# pre-loop and a post-loop tuple lets the post-loop walk resume at `post_cursor`
+# (past the loop's `n_obs*stride` observation rows) so a post-loop observed choice
+# reads its own observation row instead of the loop's first (issue #227). The pre
+# walk runs first, so the bindings the post walk reads are already resident in
+# `slots`; `post_plan` is empty for the common tiled shape and folds to nothing.
+@kernel function _device_tiled_prelude_kernel!(
+    totals,
+    gradients,
+    pre_plan,
+    post_plan,
+    @Const(params),
+    @Const(observed),
+    @Const(observed_int),
+    slots,
+    @Const(trip_counts),
+    @Const(loop_starts),
+    post_cursor::Int32,
+)
+    idx = @index(Global, NTuple)
+    pidx = idx[1]
+    b = idx[2]
+    pre_total, _ = _device_grad_score_steps(
+        pre_plan.steps, slots, params, observed, observed_int, trip_counts, loop_starts, pidx, b, Int32(1),
+    )
+    post_total, _ = _device_grad_score_steps(
+        post_plan.steps, slots, params, observed, observed_int, trip_counts, loop_starts, pidx, b, post_cursor,
+    )
+    total = pre_total + post_total
+    @inbounds gradients[pidx, b] = _device_dual_deriv(total)
+    if pidx == 1
+        @inbounds totals[b] = _device_dual_value(total)
+    end
+end
+
 # ---- launch --------------------------------------------------------------------
 
 # Launch the fused device gradient against `inner.params_device` in place (no
@@ -286,17 +344,20 @@ function _device_launch_tiled_gradient!(inner::DeviceBatchedWorkspace, tg::Devic
     P = inner.parameter_count
     C = inner.batch_size
     # prelude: prior value/gradient into the final buffers + pre-loop bindings into
-    # the gradient slot scratch the tiled body reads
-    _device_gradient_kernel!(be)(
+    # the gradient slot scratch the tiled body reads. The post-loop suffix (if any)
+    # is walked with the cursor advanced past the loop's observation rows (issue #227).
+    _device_tiled_prelude_kernel!(be)(
         inner.totals_device,
         inner.gradients_device,
-        tg.prelude_plan,
+        tg.pre_plan,
+        tg.post_plan,
         inner.params_device,
         inner.observed_device,
         inner.observed_int_device,
         inner.grad_slots_device,
         inner.trip_counts_device,
-        inner.loop_starts_device;
+        inner.loop_starts_device,
+        tg.post_cursor;
         ndrange=(P, C),
     )
     # observation-parallel body partials
