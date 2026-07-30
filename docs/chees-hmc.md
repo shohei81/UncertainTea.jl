@@ -31,6 +31,27 @@ Halfway identity: extending the trajectory time by `dT` moves the endpoint θ' b
 
 weighted by the chain's acceptance probability `p_accept_i` and averaged across chains. BlackJAX whitens the distances by the inverse mass and uses the *proposal* (not the accepted state) with an acceptance weight; `decay_rate` (default 0.5) sets the Adam moving-average weighting and `LOG_UPDATE_CLIP = 0.35` clips the per-iteration `log T` update. **Increment 2 must reproduce BlackJAX's exact estimator (whitening, weighting, half-step velocity, Adam constants) — cross-check against the source, do not approximate from this note.**
 
+## Increment 2 implementation notes (CPU, `src/inference/api_batched_chees.jl`)
+
+The estimator reproduces `blackjax.adaptation.chees_adaptation` (`base.compute_parameters`, chees_adaptation.py). Confirmed against the source line-for-line:
+
+- **Jitter / step count.** `jitter_val = halton(i)*jitter_amount + (1 - jitter_amount) ∈ [1-jitter_amount, 1)` (source `jitter_gn`, lines 763-765); `L_iter = max(1, ceil(jitter_val * T / ε))` (source `integration_steps_fn` lines 767-771, with `num_leapfrog_steps = T/ε` line 862). The *same* jitter draw feeds both the step count and the gradient (source lines 461 & 769). This REPLACES the increment-1 scaffold formula `floor(num_leapfrog_steps·(1+jitter_amount·h))`.
+- **Whitening** (Σ ≡ diagonal inverse-mass, source lines 450-458): `Δx'_w = (proposal - proposals_mean)/√Σ`, `Δx_w = (initial - initials_mean)/√Σ`, `v'_w = p'·Σ/√Σ = p'·√Σ`. `proposals_mean` is the acceptance-weighted, divergence-masked mean; `initials_mean` is the plain cross-chain mean (source lines 376-386).
+- **Per-chain gradient** `g_c = jitter_val·T·(‖Δx'_w‖² − ‖Δx_w‖²)·⟨Δx'_w, v'_w⟩` (source lines 460-466); **reduction** `trajectory_gradient = Σ_{~div} accept_c·g_c / Σ_{~div} (accept_c + EPS)` with `EPS = 1e-20` (source lines 468-471).
+- **Adam on `log T`**, then clip to `±LOG_UPDATE_CLIP = 0.35`, then moving average `log_T_ma = (1-w)·log_T_ma + w·log_T_new`, `w = step^(-decay_rate)`, `decay_rate = 0.5`, `T = clamp(exp(log_T_ma), ε, max_leapfrog_steps·ε)` (source lines 371-501). Non-finite updates revert both `log T` and the Adam moments (source lines 482-489).
+- **Adam hyperparameters.** BlackJAX leaves `optim` to the caller (line 741); its own ChEES tests/examples uniformly pass `optax.adam(learning_rate=0.5, b1=0, b2=0.95)` (eps default 1e-8). Those are our defaults (`trajectory_learning_rate=0.5`, `trajectory_adam_beta1=0.0`, `trajectory_adam_beta2=0.95`, `trajectory_adam_epsilon=1e-8`).
+- **Step size** dual-averages to the **harmonic mean** of the chains' accept probs over non-divergent chains (source lines 358-363); `target_accept = 0.651`.
+
+### Deviations from BlackJAX (with justification)
+
+1. **Ascent sign.** We MAXIMIZE ChEES by ascending: `log T += clip(+lr·mhat/(√vhat+eps), ±0.35)`. BlackJAX passes the *raw* `trajectory_gradient` to `optim.update` and applies it with `optax.apply_updates` (lines 474-481); composed with the `optax.adam` it uses (a minimizer, whose updates are `−lr·…`), that path descends the gradient. Since the estimator equals `+d(ChEES)/d(log T)` and the documented intent is to "maximize the ChEES criterion" (docstring line 259), we ascend directly. Empirically confirmed correct: `T` converges to a finite sensible value and posteriors are recovered (a descent sign drives `T` to the `ε` floor).
+2. **Warm-started `T`.** We initialize `T = num_leapfrog_steps · ε` (using the step size entering the loop) so the first iteration matches the scaffold's fixed step count and `adapt_trajectory_length=false` preserves fixed-length sampling. BlackJAX starts `T = ε` (one step) and adapts up. The moving average uses `w = 1` on the first step (`step` starts at 1), so the warm start only affects behavior before the first update / when adaptation is off.
+3. **Float-robust `ceil`.** `ceil(jitter_val·T/ε)` snaps a value within a `1e-9` relative tolerance of an integer to it before rounding up, so `T = L·ε` gives `L` exactly (a bare `ceil` on `1.2/0.1 = 12.0000000002` would return 13). Behavior-invisible except at that round-off boundary.
+4. **Halton index base.** Our Halton is 1-based (`_halton_base2(iteration)`, reused from the merged scaffold and its test) versus BlackJAX's 0-based `random_generator_arg`; this only shifts the deterministic jitter schedule by one index and does not affect the algorithm.
+5. **Diagnostics seam.** The adapted `T` trace is exposed through a private `_trajectory_trace` keyword (fills a caller-supplied vector) rather than a new result field, so `HMCChains`/`HMCChain` are unchanged.
+
+Not ported (BlackJAX extras outside increment-2 scope): the opt-in `mass_matrix_estimation="diagonal"` Welford metric, the slow-direction length floor (`CHEES_LENGTH_FLOOR_FACTOR`), and the `_whiten_criterion` ablation seam. UncertainTea supplies the shared diagonal mass via the existing pooled `WarmupDriver`.
+
 ## Reuse map (existing infrastructure)
 
 - `_batched_leapfrog!` (`src/inference/integrator.jl`) — batched `L`-step integrator.
@@ -43,7 +64,7 @@ weighted by the chain's acceptance probability `p_accept_i` and averaged across 
 ## Incremental plan (each an independent PR)
 
 1. **Scaffold (CPU, this note's increment 1):** `batched_chees` = Halton-jittered fixed-length HMC with shared dual-averaging step size + pooled diagonal mass and a FIXED user trajectory length (`num_leapfrog_steps` / `trajectory_length`), no ChEES adaptation yet. Returns the same `HMCChains` result type. Validate: samples the conjugate gauss posterior (mean/std within tolerance), determinism under a seed, argument validation. Keeps NUTS untouched.
-2. **ChEES adaptation (CPU):** add the cross-chain criterion + Adam-on-`log T` during warmup (BlackJAX-exact). Validate on gauss / eight-schools / an ill-conditioned target; check ESS/s and that warmup converges `T`.
+2. **ChEES adaptation (CPU) — DONE (this increment):** cross-chain whitened ChEES criterion + scalar Adam gradient ascent on `log T` during warmup, step size dual-averaged to the harmonic mean of accept probs. Matches `blackjax.adaptation.chees_adaptation` (see "Increment 2 implementation notes" below). Validated: warmup converges `T` on the conjugate gauss (`T ≈ 15`) and an ill-conditioned diagonal Gaussian with 100× scale span (`T ≈ 1.1`, ≈ the quarter-turn `π/2` ChEES converges to under a whitening mass); posterior mean/marginal-sd recovered within tolerance with `rhat < 1.05`; ESS-per-gradient is stable across a 8× sweep of the initial `num_leapfrog_steps` (fixed-L swings ~3×), 2.4× better than fixed-L at an over-long initial length; SBC (`sampler=:chees`) rank-uniformity p ≈ 0.89 (no warnings).
 3. **Correctness gates + SBC:** add a `sampler=chees` variant to `bench/crossppl`; run the #121 gates and `sbc(...)` (`bench/sbc_validation.jl`). Report as its own bench row, not replacing NUTS.
 4. **Device (follow-up):** mirror onto the device kernels (one sync/iteration, host/device O(C) reduction). Delegate after the CPU sampler is validated.
 

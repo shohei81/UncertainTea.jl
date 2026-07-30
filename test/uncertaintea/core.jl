@@ -94,6 +94,7 @@ core_test_files = [
     ("mh_within_gibbs.jl", "sampling"),
     ("multichain_threaded_reproducibility.jl", "sampling"),
     ("batched_chees_scaffold.jl", "sampling"),
+    ("batched_chees_adaptation.jl", "sampling"),
 ]
 
 let registered = Set(first.(core_test_files)), on_disk = Set(f for f in readdir(joinpath(@__DIR__, "core")) if endswith(f, ".jl"))
