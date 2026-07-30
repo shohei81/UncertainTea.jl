@@ -402,6 +402,41 @@
         return m
     end
 
+    # multivariate Student-t (issue #232): diagonal + dense, each exercising the
+    # coupled quadratic reweighting r = (nu+d)/(nu+q). The latent-nu entry adds
+    # the digamma degrees-of-freedom channel (chained through exp(x)). Float64
+    # nu/mu/sigma literals throughout: the density's loggamma constant is computed
+    # in the literal's precision, so an f32 literal shifts the compiled reference
+    # off the batched Float64 path by ~3e-8 (the same precision gap the dirichlet/
+    # lkjcholesky entries avoid). Float32 tracking is still checked by gxc_check.
+    @tea static function gxc_mvstudentt_latent()
+        s ~ mvstudentt(6.0, [0.0, 1.0], [1.5, 0.8])
+        return s
+    end
+
+    @tea static function gxc_mvstudentt_obs()
+        m ~ normal(0.0, 1.0)
+        {:y} ~ mvstudentt(5.0, [m, m], [1.0, 0.8])
+        return m
+    end
+
+    @tea static function gxc_mvstudentt_nu_obs()
+        x ~ normal(0.3, 0.2)
+        {:y} ~ mvstudentt(exp(x) + 3.0, [0.0, 0.0], [1.0, 1.0])
+        return x
+    end
+
+    @tea static function gxc_mvstudenttdense_obs(Larg)
+        m ~ normal(0.0, 1.0)
+        {:y} ~ mvstudenttdense(5.0, [m, m], Larg)
+        return m
+    end
+
+    @tea static function gxc_mvstudenttdense_latent(Larg)
+        s ~ mvstudenttdense(6.0, [0.0, 0.0], Larg)
+        return s
+    end
+
     # scalar prior families (issue #229). cauchy/logistic/gumbel are real-line
     # (identity transform), halfnormal/halfcauchy positive (log transform), so all
     # five are backend-native as both observations and latents. `uniform` is
@@ -632,6 +667,15 @@
         ],
         :mvnormaldense => [
             (gxc_mvnormaldense_obs, (gxc_dense_factor,), choicemap((:y, Float32[0.4, -0.2]))),
+        ],
+        :mvstudentt => [
+            (gxc_mvstudentt_latent, (), choicemap()),
+            (gxc_mvstudentt_obs, (), choicemap((:y, [0.4, -0.2]))),
+            (gxc_mvstudentt_nu_obs, (), choicemap((:y, [0.4, -0.2]))),
+        ],
+        :mvstudenttdense => [
+            (gxc_mvstudenttdense_obs, (gxc_dense_factor,), choicemap((:y, [0.4, -0.2]))),
+            (gxc_mvstudenttdense_latent, (gxc_dense_factor,), choicemap()),
         ],
         :lkjcholesky => [
             (gxc_lkjcholesky_latent, (), choicemap()),

@@ -25,6 +25,8 @@ const GPU_BACKEND_SUPPORTED_DISTRIBUTIONS = Symbol[
     :truncatedstudentt,
     :mixture,
     :mvnormaldense,
+    :mvstudentt,
+    :mvstudenttdense,
     :lkjcholesky,
     :cauchy,
     :halfnormal,

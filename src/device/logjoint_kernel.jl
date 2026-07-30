@@ -470,6 +470,36 @@ end
     return (_device_mvnormal_logpdf_fold(mu, sigma, value), cur)
 end
 
+@inline function _device_score_step(step::DeviceMvStudentTChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
+    nu = _device_eval(step.nu, slots, col)
+    mu = _device_eval_args(step.mu, slots, col)
+    sigma = _device_eval_args(step.sigma, slots, col)
+    value, cur = _device_vector_choice_value(step, params, observed, col, cursor, Val(length(step.mu)))
+    return (_device_mvstudentt_diag_logpdf(nu, mu, sigma, value), cur)
+end
+
+@inline function _device_score_step(
+    step::DeviceMvStudentTDenseChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    nu = _device_eval(step.nu, slots, col)
+    mu = _device_eval_args(step.mu, slots, col)
+    scale_packed = ntuple(
+        i -> _obsval(observed, cursor + Int32(i - 1), col),
+        Val((length(step.mu) * (length(step.mu) + 1)) ÷ 2),
+    )
+    cur = cursor + Int32((length(step.mu) * (length(step.mu) + 1)) ÷ 2)
+    value, cur2 = _device_vector_choice_value(step, params, observed, col, cur, Val(length(step.mu)))
+    return (_device_mvstudentt_dense_logpdf(nu, scale_packed, mu, value), cur2)
+end
+
 @inline function _device_score_step(
     step::DeviceTruncatedNormalChoiceStep,
     slots,

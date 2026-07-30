@@ -103,6 +103,91 @@ struct LKJCholeskyDist{T<:Real} <: AbstractTeaDistribution
     end
 end
 
+# Diagonal-scale multivariate Student-t: the heavy-tailed analogue of `mvnormal`
+# (scale matrix Sigma = diag(sigma^2)). Unlike a product of univariate t's, the d
+# dimensions share ONE chi-square mixing variable, so the density couples through
+# a single quadratic form. Element types stay generic (like `MvNormalDist`) so a
+# latent-dependent mean/scale/df remains ForwardDiff-differentiable.
+struct MvStudentTDist{N<:Real,T<:Real} <: AbstractTeaDistribution
+    nu::N
+    mu::Vector{T}
+    sigma::Vector{T}
+
+    function MvStudentTDist(nu::N, mu::Vector{T}, sigma::Vector{T}) where {N<:Real,T<:Real}
+        nu > zero(nu) || throw(ArgumentError("mvstudentt requires degrees of freedom nu > 0"))
+        isempty(mu) && throw(ArgumentError("mvstudentt requires at least one dimension"))
+        length(mu) == length(sigma) ||
+            throw(ArgumentError("mvstudentt requires mean and scale vectors with the same length"))
+        for value in sigma
+            value > zero(T) || throw(ArgumentError("mvstudentt requires sigma > 0 in every dimension"))
+        end
+        return new{N,T}(nu, mu, sigma)
+    end
+end
+
+# Dense-scale multivariate Student-t parameterized by the lower-triangular
+# Cholesky factor `scale_tril` of the scale matrix (Sigma = L * L'). The dense
+# analogue of `mvnormaldense`; only the lower triangle of `scale_tril` is read.
+struct MvStudentTDenseDist{N<:Real,M<:AbstractVector,S<:AbstractMatrix} <: AbstractTeaDistribution
+    nu::N
+    mu::M
+    scale_tril::S
+
+    function MvStudentTDenseDist(nu::N, mu::AbstractVector, scale_tril::AbstractMatrix) where {N<:Real}
+        nu > zero(nu) || throw(ArgumentError("mvstudenttdense requires degrees of freedom nu > 0"))
+        isempty(mu) && throw(ArgumentError("mvstudenttdense requires at least one dimension"))
+        size(scale_tril, 1) == size(scale_tril, 2) || throw(ArgumentError(
+            "mvstudenttdense requires a square scale_tril matrix, got size $(size(scale_tril))",
+        ))
+        size(scale_tril, 1) == length(mu) || throw(
+            ArgumentError(
+                "mvstudenttdense requires scale_tril of size $(length(mu))x$(length(mu)) to match the mean length, got $(size(scale_tril))",
+            ),
+        )
+        for index = 1:size(scale_tril, 1)
+            scale_tril[index, index] > 0 ||
+                throw(ArgumentError("mvstudenttdense requires strictly positive scale_tril diagonal entries"))
+        end
+        return new{N,typeof(mu),typeof(scale_tril)}(nu, mu, scale_tril)
+    end
+end
+
+# Wishart / inverse-Wishart covariance-matrix priors. The value is the PACKED
+# column-major lower triangle of the Cholesky factor L of the sampled PD matrix
+# M = L * L' (the same packed layout `CholeskyCorrTransform`/`CholeskyCovTransform`
+# produce), so `logpdf` is the density over L. `scale` is the d x d scale matrix S
+# (Wishart) / S (inverse-Wishart); only its lower triangle is read. `nu` is the
+# degrees of freedom. These are CPU-reference families (no backend/device lowering).
+struct WishartDist{N<:Real,S<:AbstractMatrix} <: AbstractTeaDistribution
+    d::Int
+    nu::N
+    scale::S
+
+    function WishartDist(nu::N, scale::AbstractMatrix) where {N<:Real}
+        size(scale, 1) == size(scale, 2) ||
+            throw(ArgumentError("wishart requires a square scale matrix, got size $(size(scale))"))
+        d = size(scale, 1)
+        d >= 1 || throw(ArgumentError("wishart requires a dimension d >= 1"))
+        nu > d - 1 || throw(ArgumentError("wishart requires degrees of freedom nu > d - 1 = $(d - 1)"))
+        return new{N,typeof(scale)}(d, nu, scale)
+    end
+end
+
+struct InverseWishartDist{N<:Real,S<:AbstractMatrix} <: AbstractTeaDistribution
+    d::Int
+    nu::N
+    scale::S
+
+    function InverseWishartDist(nu::N, scale::AbstractMatrix) where {N<:Real}
+        size(scale, 1) == size(scale, 2) ||
+            throw(ArgumentError("inversewishart requires a square scale matrix, got size $(size(scale))"))
+        d = size(scale, 1)
+        d >= 1 || throw(ArgumentError("inversewishart requires a dimension d >= 1"))
+        nu > d - 1 || throw(ArgumentError("inversewishart requires degrees of freedom nu > d - 1 = $(d - 1)"))
+        return new{N,typeof(scale)}(d, nu, scale)
+    end
+end
+
 # Broadcast (vectorized) normal observation. `mu` and `sigma` may each be a real
 # scalar or an `AbstractVector`; a single vector-valued choice scores every element
 # elementwise. This is the runtime counterpart of the `{:y} ~ normal.(mu, sigma)`
@@ -212,6 +297,41 @@ function mvnormaldense(mu, scale_tril)
     # element type so downstream arithmetic stays differentiable.
     mu_values = map(identity, collect(mu))
     return MvNormalDenseDist(mu_values, scale_tril)
+end
+
+function mvstudentt(nu, mu, sigma)
+    mu_values = _mvnormal_vector(mu)
+    sigma_values = _mvnormal_vector(sigma)
+    length(mu_values) == length(sigma_values) ||
+        throw(ArgumentError("mvstudentt requires mean and scale vectors with the same length"))
+    isempty(mu_values) && throw(ArgumentError("mvstudentt requires at least one dimension"))
+    promoted_type = _mvnormal_promoted_type(mu_values, sigma_values)
+    return MvStudentTDist(
+        nu,
+        promoted_type[value for value in mu_values],
+        promoted_type[value for value in sigma_values],
+    )
+end
+
+function mvstudenttdense(nu, mu, scale_tril)
+    (mu isa AbstractVector || mu isa Tuple) ||
+        throw(ArgumentError("mvstudenttdense requires a vector-like mean argument"))
+    scale_tril isa AbstractMatrix ||
+        throw(ArgumentError("mvstudenttdense requires a matrix scale_tril argument"))
+    mu_values = map(identity, collect(mu))
+    return MvStudentTDenseDist(nu, mu_values, scale_tril)
+end
+
+function wishart(nu, scale)
+    scale isa AbstractMatrix ||
+        throw(ArgumentError("wishart requires a matrix scale argument"))
+    return WishartDist(nu, scale)
+end
+
+function inversewishart(nu, scale)
+    scale isa AbstractMatrix ||
+        throw(ArgumentError("inversewishart requires a matrix scale argument"))
+    return InverseWishartDist(nu, scale)
 end
 
 # `d` accepts any integer-valued number: the compiled evaluator reconstructs the
@@ -335,6 +455,141 @@ function Random.rand(rng::AbstractRNG, dist::MvNormalDenseDist)
         draws[row] = accumulator
     end
     return draws
+end
+
+# Multivariate-t draw: sample a Gaussian z ~ N(0, Sigma) and scale by an
+# inverse-sqrt gamma mixing variable w ~ Gamma(nu/2, nu/2) (mean 1), i.e.
+# x = mu + z / sqrt(w) -- the standard normal / sqrt(chi-square/nu) construction,
+# mirroring the scalar `StudentTDist` rand.
+function Random.rand(rng::AbstractRNG, dist::MvStudentTDist{N,T}) where {N<:Real,T<:AbstractFloat}
+    nu = float(dist.nu)
+    w = _rand_gamma_marsaglia(rng, nu / 2, nu / 2)
+    scale = inv(sqrt(w))
+    draws = Vector{T}(undef, length(dist.mu))
+    for index in eachindex(draws)
+        draws[index] = dist.mu[index] + dist.sigma[index] * randn(rng, T) * T(scale)
+    end
+    return draws
+end
+
+function Random.rand(rng::AbstractRNG, dist::MvStudentTDenseDist)
+    dimension = length(dist.mu)
+    T = float(promote_type(typeof(float(dist.mu[1])), typeof(float(dist.scale_tril[1, 1]))))
+    nu = float(dist.nu)
+    w = _rand_gamma_marsaglia(rng, nu / 2, nu / 2)
+    scale = T(inv(sqrt(w)))
+    noise = randn(rng, T, dimension)
+    draws = Vector{T}(undef, dimension)
+    for row = 1:dimension
+        accumulator = zero(T)
+        for col = 1:row
+            accumulator += T(dist.scale_tril[row, col]) * noise[col]
+        end
+        draws[row] = T(dist.mu[row]) + accumulator * scale
+    end
+    return draws
+end
+
+# Plain-loop lower Cholesky factor of the (lower triangle of the) d x d matrix S,
+# S = C * C'. ForwardDiff-safe (no LinearAlgebra factorization object).
+function _dense_cholesky_lower(S::AbstractMatrix)
+    d = size(S, 1)
+    Tc = typeof(sqrt(float(S[1, 1])))
+    C = zeros(Tc, d, d)
+    for col = 1:d
+        diag = float(S[col, col])
+        for k = 1:(col-1)
+            diag -= C[col, k] * C[col, k]
+        end
+        C[col, col] = sqrt(diag)
+        for row = (col+1):d
+            acc = float(S[row, col])
+            for k = 1:(col-1)
+                acc -= C[row, k] * C[col, k]
+            end
+            C[row, col] = acc / C[col, col]
+        end
+    end
+    return C
+end
+
+# Forward substitution solving the lower-triangular system A * Y = B for a full
+# matrix right-hand side B (both A, B are d x d). Plain loops keep it Dual-safe.
+function _forward_solve_matrix(A::AbstractMatrix, B::AbstractMatrix)
+    d = size(A, 1)
+    Ty = typeof(float(B[1, 1]) / float(A[1, 1]))
+    Y = zeros(Ty, d, d)
+    for col = 1:d
+        for row = 1:d
+            acc = float(B[row, col])
+            for k = 1:(row-1)
+                acc -= A[row, k] * Y[k, col]
+            end
+            Y[row, col] = acc / A[row, row]
+        end
+    end
+    return Y
+end
+
+# Bartlett-decomposition Wishart draw: with S = C C', a sample W ~ Wishart(nu, S)
+# has Cholesky factor L = C * A, where A is lower-triangular with A[i,i] =
+# sqrt(chi-square_{nu-i+1}) and A[i,j] ~ N(0,1) for i > j. Returns the packed
+# lower triangle of L.
+function _rand_wishart_factor(rng::AbstractRNG, d::Int, nu::Float64, C::AbstractMatrix)
+    A = zeros(Float64, d, d)
+    for i = 1:d
+        # chi-square_k = Gamma(k/2, rate = 1/2)
+        A[i, i] = sqrt(_rand_gamma_marsaglia(rng, (nu - i + 1) / 2, 0.5))
+        for j = 1:(i-1)
+            A[i, j] = randn(rng, Float64)
+        end
+    end
+    L = zeros(Float64, d, d)
+    for row = 1:d
+        for col = 1:row
+            acc = 0.0
+            for k = col:row
+                acc += C[row, k] * A[k, col]
+            end
+            L[row, col] = acc
+        end
+    end
+    packed = Vector{Float64}(undef, (d * (d + 1)) ÷ 2)
+    for col = 1:d, row = col:d
+        packed[_packed_lower_index(d, row, col)] = L[row, col]
+    end
+    return packed
+end
+
+function Random.rand(rng::AbstractRNG, dist::WishartDist)
+    d = dist.d
+    C = _dense_cholesky_lower(Float64.(dist.scale))
+    return _rand_wishart_factor(rng, d, Float64(dist.nu), C)
+end
+
+# X ~ InverseWishart(nu, S) iff X^{-1} ~ Wishart(nu, S^{-1}). Sample W in that
+# Wishart, invert to X = W^{-1}, and return the packed lower Cholesky factor of X.
+function Random.rand(rng::AbstractRNG, dist::InverseWishartDist)
+    d = dist.d
+    S = Float64.(dist.scale)
+    Sinv = inv(S)
+    # symmetrize to kill round-off asymmetry before the Cholesky
+    Sinv = (Sinv + Sinv') / 2
+    Cinv = _dense_cholesky_lower(Sinv)
+    packed_w = _rand_wishart_factor(rng, d, Float64(dist.nu), Cinv)
+    Lw = zeros(Float64, d, d)
+    for col = 1:d, row = col:d
+        Lw[row, col] = packed_w[_packed_lower_index(d, row, col)]
+    end
+    W = Lw * Lw'
+    X = inv(W)
+    X = (X + X') / 2
+    Lx = _dense_cholesky_lower(X)
+    packed = Vector{Float64}(undef, (d * (d + 1)) ÷ 2)
+    for col = 1:d, row = col:d
+        packed[_packed_lower_index(d, row, col)] = Lx[row, col]
+    end
+    return packed
 end
 
 # LKJ cvine construction (Lewandowski, Kurowicka & Joe 2009): the canonical
@@ -474,6 +729,153 @@ function logpdf(dist::MvNormalDenseDist, x)
         quadratic += z * z
     end
     return -log_det - quadratic / 2 - dimension * log(2 * pi) / 2
+end
+
+# Shared multivariate-t log density given the Cholesky log-determinant
+# `log_det = sum_i log L[i,i]` (so log|Sigma| = 2 log_det) and the Mahalanobis
+# quadratic form `q = (x - mu)' Sigma^{-1} (x - mu)`:
+#   loggamma((nu+d)/2) - loggamma(nu/2) - (d/2) log(nu*pi) - log_det
+#     - ((nu+d)/2) * log1p(q / nu).
+function _mvstudentt_log_density(nu, d::Int, log_det, quadratic)
+    half = (nu + d) / 2
+    return loggamma(half) - loggamma(nu / 2) - (d / 2) * log(nu * float(pi)) - log_det -
+           half * log1p(quadratic / nu)
+end
+
+function logpdf(dist::MvStudentTDist, x)
+    values = x isa Tuple ? collect(x) : x
+    values isa AbstractVector || throw(ArgumentError("mvstudentt logpdf expects a vector or tuple value"))
+    d = length(dist.mu)
+    length(values) == d || return -Inf
+    z1 = (values[1] - dist.mu[1]) / dist.sigma[1]
+    quadratic = z1 * z1
+    log_det = log(dist.sigma[1])
+    for index = 2:d
+        z = (values[index] - dist.mu[index]) / dist.sigma[index]
+        quadratic += z * z
+        log_det += log(dist.sigma[index])
+    end
+    return _mvstudentt_log_density(dist.nu, d, log_det, quadratic)
+end
+
+# Dense multivariate-t density via the same forward substitution as
+# `MvNormalDenseDist`, wrapping the quadratic form in the Student-t tail.
+function logpdf(dist::MvStudentTDenseDist, x)
+    values = x isa Tuple ? collect(x) : x
+    values isa AbstractVector || throw(ArgumentError("mvstudenttdense logpdf expects a vector or tuple value"))
+    d = length(dist.mu)
+    length(values) == d || return -Inf
+    L = dist.scale_tril
+    z1 = (values[1] - dist.mu[1]) / L[1, 1]
+    solved = Vector{typeof(z1)}(undef, d)
+    solved[1] = z1
+    log_det = log(L[1, 1])
+    quadratic = z1 * z1
+    for row = 2:d
+        residual = values[row] - dist.mu[row]
+        for col = 1:(row-1)
+            residual -= L[row, col] * solved[col]
+        end
+        z = residual / L[row, row]
+        solved[row] = z
+        log_det += log(L[row, row])
+        quadratic += z * z
+    end
+    return _mvstudentt_log_density(dist.nu, d, log_det, quadratic)
+end
+
+# Log of the multivariate gamma function Gamma_d(a) =
+#   pi^(d(d-1)/4) * prod_{j=1}^d Gamma(a + (1 - j)/2).
+function _log_multivariate_gamma(d::Int, a)
+    total = (d * (d - 1) / 4) * log(float(pi)) + zero(float(a))
+    for j = 1:d
+        total += loggamma(a + (1 - j) / 2)
+    end
+    return total
+end
+
+# Unpack a column-major packed lower triangle into a dense d x d lower-tri matrix.
+function _unpack_lower(values::AbstractVector, d::Int)
+    T = typeof(float(values[firstindex(values)]))
+    L = zeros(T, d, d)
+    for col = 1:d, row = col:d
+        L[row, col] = values[_packed_lower_index(d, row, col)]
+    end
+    return L
+end
+
+# Wishart / inverse-Wishart log density over the packed Cholesky factor L of the
+# sampled PD matrix M = L L'. The distribution's own PD-matrix density is scored
+# at M, then the constant-Jacobian term of the map L -> M = L L',
+#   log|dM/dL| = d*log(2) + sum_i (d + 1 - i) * log(L[i,i]),
+# converts it to a proper density over the free coordinates of L. Support: a
+# strictly positive Cholesky diagonal (else -Inf).
+function logpdf(dist::WishartDist, x)
+    values = x isa Tuple ? collect(x) : x
+    values isa AbstractVector || throw(ArgumentError("wishart logpdf expects a vector or tuple value"))
+    d = dist.d
+    length(values) == (d * (d + 1)) ÷ 2 || return -Inf
+    L = _unpack_lower(values, d)
+    acc0 = zero(float(values[firstindex(values)])) + zero(float(dist.nu))
+    log_det_M = zero(acc0)
+    jac = d * log(oftype(acc0, 2))
+    for i = 1:d
+        L[i, i] > zero(L[i, i]) || return oftype(acc0, -Inf)
+        log_det_M += log(L[i, i])
+        jac += (d + 1 - i) * log(L[i, i])
+    end
+    log_det_M *= 2
+    C = _dense_cholesky_lower(dist.scale)
+    log_det_S = zero(acc0)
+    for i = 1:d
+        log_det_S += log(C[i, i])
+    end
+    log_det_S *= 2
+    # tr(S^{-1} M) = || C^{-1} L ||_F^2 with S = C C', M = L L'.
+    Y = _forward_solve_matrix(C, L)
+    trace = zero(acc0)
+    for col = 1:d, row = 1:d
+        trace += Y[row, col] * Y[row, col]
+    end
+    nu = dist.nu
+    density =
+        ((nu - d - 1) / 2) * log_det_M - trace / 2 - (nu * d / 2) * log(oftype(acc0, 2)) -
+        (nu / 2) * log_det_S - _log_multivariate_gamma(d, nu / 2)
+    return density + jac
+end
+
+function logpdf(dist::InverseWishartDist, x)
+    values = x isa Tuple ? collect(x) : x
+    values isa AbstractVector || throw(ArgumentError("inversewishart logpdf expects a vector or tuple value"))
+    d = dist.d
+    length(values) == (d * (d + 1)) ÷ 2 || return -Inf
+    L = _unpack_lower(values, d)
+    acc0 = zero(float(values[firstindex(values)])) + zero(float(dist.nu))
+    log_det_X = zero(acc0)
+    jac = d * log(oftype(acc0, 2))
+    for i = 1:d
+        L[i, i] > zero(L[i, i]) || return oftype(acc0, -Inf)
+        log_det_X += log(L[i, i])
+        jac += (d + 1 - i) * log(L[i, i])
+    end
+    log_det_X *= 2
+    C = _dense_cholesky_lower(dist.scale)
+    log_det_S = zero(acc0)
+    for i = 1:d
+        log_det_S += log(C[i, i])
+    end
+    log_det_S *= 2
+    # tr(S X^{-1}) = || L^{-1} C ||_F^2 with X = L L', S = C C'.
+    W = _forward_solve_matrix(L, C)
+    trace = zero(acc0)
+    for col = 1:d, row = 1:d
+        trace += W[row, col] * W[row, col]
+    end
+    nu = dist.nu
+    density =
+        (nu / 2) * log_det_S - ((nu + d + 1) / 2) * log_det_X - trace / 2 -
+        (nu * d / 2) * log(oftype(acc0, 2)) - _log_multivariate_gamma(d, nu / 2)
+    return density + jac
 end
 
 # LKJ log density over the free (below-diagonal) coordinates of the packed

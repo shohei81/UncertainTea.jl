@@ -14,7 +14,9 @@ export LoopScopeSpec
 export ParameterLayout, ParameterSlotSpec
 export ExecutionPlan, ChoicePlanStep
 export DeterministicPlanStep, LoopPlanStep
-export IdentityTransform, VectorIdentityTransform, LogTransform, LogitTransform, SimplexTransform, CholeskyCorrTransform
+export IdentityTransform,
+    VectorIdentityTransform, LogTransform, LogitTransform, SimplexTransform, CholeskyCorrTransform,
+    CholeskyCovTransform
 export VectorLogTransform, VectorLogitTransform
 export BoundedTransform, LowerBoundedTransform, UpperBoundedTransform
 export ChoiceMap, TeaModel, TeaTrace
@@ -53,6 +55,8 @@ export pareto, frechet, rayleigh, inversegaussian
 export truncatednormal, truncatedstudentt
 export mixture
 export mvnormaldense
+export mvstudentt, mvstudenttdense
+export wishart, inversewishart
 export lkjcholesky, scale_cholesky
 export iid
 export AbstractTeaDistribution, register_distribution, registered_distributions

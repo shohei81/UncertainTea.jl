@@ -126,6 +126,24 @@ struct CholeskyCorrTransform <: AbstractParameterTransform
     end
 end
 
+# Unconstrained -> Cholesky factor of a positive-definite (covariance) matrix
+# ("log-Cholesky" parameterization). The constrained value is the PACKED
+# column-major lower triangle of the factor L, length size*(size+1)/2 (diagonal
+# included); the unconstrained vector holds the SAME packed layout, but with the
+# diagonal coordinates stored as log(L[i,i]) (exp on constrain) and the
+# below-diagonal coordinates stored directly (identity). The log-abs-det of the
+# unconstrained -> L map is sum_i log(L[i,i]) = sum over the diagonal packed
+# coordinates. Wishart/inverse-Wishart latents score their PD-matrix density over
+# this factor.
+struct CholeskyCovTransform <: AbstractParameterTransform
+    size::Int
+
+    function CholeskyCovTransform(size::Int)
+        size >= 1 || throw(ArgumentError("cholesky covariance transform requires size >= 1"))
+        return new(size)
+    end
+end
+
 # Position of entry (row, col), row >= col, inside the column-major packed
 # lower triangle of a `size` x `size` matrix (diagonal included).
 function _packed_lower_index(size::Int, row::Integer, col::Integer)
@@ -639,6 +657,15 @@ function _parameter_transform(rhs::DistributionSpec)
     elseif rhs.family === :mvnormaldense
         size = _mvnormaldense_static_size(rhs.arguments)
         isnothing(size) || return VectorIdentityTransform(size)
+    elseif rhs.family === :mvstudentt
+        size = _mvstudentt_static_size(rhs.arguments)
+        isnothing(size) || return VectorIdentityTransform(size)
+    elseif rhs.family === :mvstudenttdense
+        size = _mvstudenttdense_static_size(rhs.arguments)
+        isnothing(size) || return VectorIdentityTransform(size)
+    elseif rhs.family === :wishart || rhs.family === :inversewishart
+        size = _wishart_static_size(rhs.arguments)
+        isnothing(size) || return CholeskyCovTransform(size)
     elseif rhs.family === :lognormal || rhs.family === :exponential || rhs.family === :gamma ||
            rhs.family === :inversegamma || rhs.family === :weibull ||
            rhs.family === :frechet || rhs.family === :rayleigh || rhs.family === :inversegaussian
@@ -717,6 +744,8 @@ _parameter_dimensions(transform::VectorLogitTransform) = (transform.size, transf
 _parameter_dimensions(transform::SimplexTransform) = (transform.size - 1, transform.size)
 _parameter_dimensions(transform::CholeskyCorrTransform) =
     ((transform.size * (transform.size - 1)) ÷ 2, (transform.size * (transform.size + 1)) ÷ 2)
+_parameter_dimensions(transform::CholeskyCovTransform) =
+    ((transform.size * (transform.size + 1)) ÷ 2, (transform.size * (transform.size + 1)) ÷ 2)
 _parameter_dimensions(::BoundedTransform) = (1, 1)
 _parameter_dimensions(::LowerBoundedTransform) = (1, 1)
 _parameter_dimensions(::UpperBoundedTransform) = (1, 1)
@@ -776,6 +805,65 @@ end
 function _mvnormaldense_static_size(arguments::Vector)
     length(arguments) == 2 || return nothing
     return _static_length(arguments[1])
+end
+
+# Static size of `mvstudentt(nu, mu, sigma)` from the mean/scale vector arguments
+# (argument 1 is the degrees of freedom `nu`).
+function _mvstudentt_static_size(arguments::Vector)
+    length(arguments) == 3 || return nothing
+    mu_size = _static_length(arguments[2])
+    sigma_size = _static_length(arguments[3])
+    if !isnothing(mu_size) && !isnothing(sigma_size)
+        mu_size == sigma_size ||
+            throw(ArgumentError("mvstudentt requires mean and scale vectors with the same static length"))
+        return mu_size
+    end
+    return something(mu_size, sigma_size, Some(nothing))
+end
+
+# Static size of `mvstudenttdense(nu, mu, scale_tril)` from the mean argument.
+function _mvstudenttdense_static_size(arguments::Vector)
+    length(arguments) == 3 || return nothing
+    return _static_length(arguments[2])
+end
+
+# Static dimension d of a d x d matrix LITERAL, or `nothing`. `[a b; c d]` parses
+# as a `:vcat` of `:row`s; a single-row `[a b]` is an `:hcat`. Used to resolve
+# `wishart(nu, S)` / `inversewishart(nu, S)` latents, whose value dimension is the
+# side length of the scale matrix S (there is no vector argument to read it from).
+function _matrix_literal_dim(expr)
+    if expr isa Expr && expr.head == :vcat
+        rows = expr.args
+        d = length(rows)
+        for row in rows
+            if row isa Expr && row.head == :row
+                length(row.args) == d || return nothing
+            else
+                # a `:vcat` of scalars is a column vector, not a square matrix
+                return nothing
+            end
+        end
+        return d
+    elseif expr isa Expr && expr.head == :hcat
+        # a single row: square only when 1x1
+        return length(expr.args) == 1 ? 1 : nothing
+    elseif expr isa QuoteNode && expr.value isa AbstractMatrix
+        m = expr.value
+        size(m, 1) == size(m, 2) || return nothing
+        return size(m, 1)
+    elseif expr isa AbstractMatrix
+        size(expr, 1) == size(expr, 2) || return nothing
+        return size(expr, 1)
+    end
+    return nothing
+end
+
+# Static dimension of `wishart(nu, S)` / `inversewishart(nu, S)` from a scale
+# matrix literal S (argument 2). Returns `nothing` for a non-literal S (e.g. a
+# model argument), which makes the family observation-only.
+function _wishart_static_size(arguments::Vector)
+    length(arguments) == 2 || return nothing
+    return _matrix_literal_dim(arguments[2])
 end
 
 function _parameterize_step(

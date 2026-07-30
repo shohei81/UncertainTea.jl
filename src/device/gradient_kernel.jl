@@ -768,6 +768,51 @@ end
 end
 
 @inline function _device_grad_score_step(
+    step::DeviceMvStudentTChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    nu = _device_grad_eval(step.nu, slots, pidx, b)
+    mu = _device_grad_eval_args(step.mu, slots, pidx, b)
+    sigma = _device_grad_eval_args(step.sigma, slots, pidx, b)
+    value, cur =
+        _device_grad_vector_choice_value(step, params, observed, pidx, b, cursor, eltype(slots), Val(length(step.mu)))
+    return (_device_mvstudentt_diag_logpdf(nu, mu, sigma, value), cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceMvStudentTDenseChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    TD = eltype(slots)
+    nu = _device_grad_eval(step.nu, slots, pidx, b)
+    mu = _device_grad_eval_args(step.mu, slots, pidx, b)
+    scale_packed = ntuple(
+        i -> _seed_obs(TD, _obsval(observed, cursor + Int32(i - 1), b)),
+        Val((length(step.mu) * (length(step.mu) + 1)) ÷ 2),
+    )
+    cur = cursor + Int32((length(step.mu) * (length(step.mu) + 1)) ÷ 2)
+    value, cur2 =
+        _device_grad_vector_choice_value(step, params, observed, pidx, b, cur, eltype(slots), Val(length(step.mu)))
+    return (_device_mvstudentt_dense_logpdf(nu, scale_packed, mu, value), cur2)
+end
+
+@inline function _device_grad_score_step(
     step::DeviceTruncatedNormalChoiceStep,
     slots,
     params,
