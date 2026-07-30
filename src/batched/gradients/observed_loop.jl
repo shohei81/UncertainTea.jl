@@ -55,6 +55,12 @@ _backend_observed_loop_gradient_supported(
         BackendBetaChoicePlanStep,
         BackendStudentTChoicePlanStep,
         BackendLaplaceChoicePlanStep,
+        BackendCauchyChoicePlanStep,
+        BackendHalfNormalChoicePlanStep,
+        BackendHalfCauchyChoicePlanStep,
+        BackendUniformChoicePlanStep,
+        BackendLogisticChoicePlanStep,
+        BackendGumbelChoicePlanStep,
         BackendBernoulliChoicePlanStep,
         BackendBernoulliLogitChoicePlanStep,
         BackendPoissonChoicePlanStep,
@@ -805,6 +811,114 @@ function _score_backend_observed_loop_choice_gradient!(
         mu_gradients,
         scale_values,
         scale_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendCauchyChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    mu_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    sigma_values = _batched_numeric_scratch!(env, 2)
+    sigma_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(mu_values, mu_gradients, cache, env, choice.mu, 4)
+    _eval_backend_numeric_expr_and_gradient!(sigma_values, sigma_gradients, cache, env, choice.sigma, 5)
+    return _accumulate_cauchy_gradient!(
+        totals, gradients, env.observed_values, value_gradients, mu_values, mu_gradients, sigma_values, sigma_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendHalfNormalChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    sigma_values = _batched_numeric_scratch!(env, 1)
+    sigma_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    _eval_backend_numeric_expr_and_gradient!(sigma_values, sigma_gradients, cache, env, choice.sigma, 3)
+    return _accumulate_halfnormal_gradient!(
+        totals, gradients, env.observed_values, value_gradients, sigma_values, sigma_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendHalfCauchyChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    scale_values = _batched_numeric_scratch!(env, 1)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, choice.scale, 3)
+    return _accumulate_halfcauchy_gradient!(
+        totals, gradients, env.observed_values, value_gradients, scale_values, scale_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendUniformChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    lower_values = _batched_numeric_scratch!(env, 1)
+    lower_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    upper_values = _batched_numeric_scratch!(env, 2)
+    upper_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(lower_values, lower_gradients, cache, env, choice.lower, 4)
+    _eval_backend_numeric_expr_and_gradient!(upper_values, upper_gradients, cache, env, choice.upper, 5)
+    return _accumulate_uniform_gradient!(
+        totals, gradients, env.observed_values, value_gradients, lower_values, lower_gradients, upper_values, upper_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendLogisticChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    mu_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(mu_values, mu_gradients, cache, env, choice.mu, 4)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, choice.scale, 5)
+    return _accumulate_logistic_gradient!(
+        totals, gradients, env.observed_values, value_gradients, mu_values, mu_gradients, scale_values, scale_gradients,
+    )
+end
+
+function _score_backend_observed_loop_choice_gradient!(
+    choice::BackendGumbelChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+) where {T<:AbstractFloat}
+    value_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    mu_values = _batched_numeric_scratch!(env, 1)
+    mu_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    scale_values = _batched_numeric_scratch!(env, 2)
+    scale_gradients = _batched_backend_gradient_scratch!(cache, 3)
+    _eval_backend_numeric_expr_and_gradient!(mu_values, mu_gradients, cache, env, choice.mu, 4)
+    _eval_backend_numeric_expr_and_gradient!(scale_values, scale_gradients, cache, env, choice.scale, 5)
+    return _accumulate_gumbel_gradient!(
+        totals, gradients, env.observed_values, value_gradients, mu_values, mu_gradients, scale_values, scale_gradients,
     )
 end
 

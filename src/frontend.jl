@@ -50,6 +50,12 @@ function _qualify_builtin_distribution(name)
         :truncatedstudentt,
         :mixture,
         :iid,
+        :cauchy,
+        :halfnormal,
+        :halfcauchy,
+        :uniform,
+        :logistic,
+        :gumbel,
     )
         return _qualify(name)
     end
@@ -71,6 +77,7 @@ const _KNOWN_DISTRIBUTION_FAMILIES = (
     :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull,
     :beta, :dirichlet, :mvnormal, :mvnormaldense, :lkjcholesky, :bernoulli, :bernoullilogit, :binomial, :geometric,
     :negativebinomial, :poisson, :studentt, :categorical, :truncatednormal, :truncatedstudentt, :mixture,
+    :cauchy, :halfnormal, :halfcauchy, :uniform, :logistic, :gumbel,
 )
 
 # Detects a dot-call distribution observation `family.(args...)` on the RHS of `~`.
@@ -485,8 +492,19 @@ end
 function _supported_distribution_family(rhs)
     rhs isa Expr && rhs.head == :call && !isempty(rhs.args) && rhs.args[1] isa Symbol || return nothing
     family = rhs.args[1]
-    family in (:normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull, :beta, :studentt) &&
+    family in (
+        :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull, :beta, :studentt,
+        :cauchy, :halfnormal, :halfcauchy, :logistic, :gumbel,
+    ) && return family
+    if family === :uniform
+        isnothing(_uniform_static_bounds(rhs.args[2:end])) && throw(
+            ArgumentError(
+                "uniform latents require literal (static) finite bounds; use static Number lower and upper bounds, " *
+                "or provide the value as an observation for dynamic bounds",
+            ),
+        )
         return family
+    end
     if family === :dirichlet && !isnothing(_dirichlet_static_size(rhs))
         return family
     end
@@ -580,8 +598,15 @@ function _parameter_transform_expr(rhs, reparam::Symbol=:centered)
     family = _supported_distribution_family(rhs)
     isnothing(family) && throw(ArgumentError("unsupported parameter transform for $rhs"))
 
-    if family === :normal || family === :laplace
+    if family === :normal || family === :laplace ||
+       family === :cauchy || family === :logistic || family === :gumbel
         return :($(_qualify(:IdentityTransform))())
+    elseif family === :halfnormal || family === :halfcauchy
+        return :($(_qualify(:LogTransform))())
+    elseif family === :uniform
+        bounds = _uniform_static_bounds(rhs.args[2:end])
+        isnothing(bounds) && throw(ArgumentError("uniform parameter slots require literal (static) finite bounds"))
+        return :($(_qualify(:BoundedTransform))($(bounds[1]), $(bounds[2])))
     elseif family === :mvnormal
         size = _mvnormal_static_size(rhs)
         isnothing(size) && throw(ArgumentError("mvnormal parameter slots require a statically known vector size"))

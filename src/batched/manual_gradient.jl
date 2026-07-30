@@ -45,6 +45,30 @@ function _backend_gradient_supported_step(step::BackendLaplaceChoicePlanStep)
     return _backend_gradient_supported_expr(step.mu) && _backend_gradient_supported_expr(step.scale)
 end
 
+function _backend_gradient_supported_step(step::BackendCauchyChoicePlanStep)
+    return _backend_gradient_supported_expr(step.mu) && _backend_gradient_supported_expr(step.sigma)
+end
+
+function _backend_gradient_supported_step(step::BackendHalfNormalChoicePlanStep)
+    return _backend_gradient_supported_expr(step.sigma)
+end
+
+function _backend_gradient_supported_step(step::BackendHalfCauchyChoicePlanStep)
+    return _backend_gradient_supported_expr(step.scale)
+end
+
+function _backend_gradient_supported_step(step::BackendUniformChoicePlanStep)
+    return _backend_gradient_supported_expr(step.lower) && _backend_gradient_supported_expr(step.upper)
+end
+
+function _backend_gradient_supported_step(step::BackendLogisticChoicePlanStep)
+    return _backend_gradient_supported_expr(step.mu) && _backend_gradient_supported_expr(step.scale)
+end
+
+function _backend_gradient_supported_step(step::BackendGumbelChoicePlanStep)
+    return _backend_gradient_supported_expr(step.mu) && _backend_gradient_supported_expr(step.scale)
+end
+
 function _backend_gradient_supported_step(step::BackendLognormalChoicePlanStep)
     return _backend_gradient_supported_expr(step.mu) && _backend_gradient_supported_expr(step.sigma)
 end
@@ -189,6 +213,18 @@ _backend_gradient_supported_step(step::BackendNormalChoicePlanStep, numeric_slot
 _backend_gradient_supported_step(step::BackendNoncenteredNormalChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendLaplaceChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendCauchyChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendHalfNormalChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendHalfCauchyChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendUniformChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendLogisticChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendGumbelChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendLognormalChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)

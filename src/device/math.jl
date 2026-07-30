@@ -94,6 +94,36 @@ end
     return -log(T(2) * scale) - abs(x - loc) / scale
 end
 
+# scalar prior families (issue #229). Constants: log(pi) = 1.1447298858494002,
+# log(2) = 0.6931471805599453, log(2pi)/2 = 0.9189385332046727.
+@inline function _device_cauchy_logpdf(mu::T, sigma::T, x::T) where {T}
+    z = (x - mu) / sigma
+    return -T(1.1447298858494002) - log(sigma) - log1p(z * z)
+end
+
+@inline function _device_halfnormal_logpdf(sigma::T, x::T) where {T}
+    z = x / sigma
+    base = T(0.6931471805599453) - log(sigma) - T(0.9189385332046727) - z * z / T(2)
+    return ifelse(x >= zero(T), base, _device_neginf(T))
+end
+
+@inline function _device_halfcauchy_logpdf(scale::T, x::T) where {T}
+    z = x / scale
+    base = T(0.6931471805599453) - T(1.1447298858494002) - log(scale) - log1p(z * z)
+    return ifelse(x >= zero(T), base, _device_neginf(T))
+end
+
+@inline function _device_logistic_logpdf(mu::T, scale::T, x::T) where {T}
+    z = (x - mu) / scale
+    az = abs(z)
+    return -log(scale) - az - T(2) * log1p(exp(-az))
+end
+
+@inline function _device_gumbel_logpdf(mu::T, scale::T, x::T) where {T}
+    z = (x - mu) / scale
+    return -log(scale) - z - exp(-z)
+end
+
 @inline function _device_beta_logpdf(alpha::T, beta::T, x::T) where {T}
     logbeta = _device_loggamma(alpha) + _device_loggamma(beta) - _device_loggamma(alpha + beta)
     base = (alpha - one(T)) * log(x) + (beta - one(T)) * log1p(-x) - logbeta

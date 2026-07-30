@@ -550,6 +550,18 @@ function _truncated_static_bounds(family::Symbol, arguments)
     return (lower, upper)
 end
 
+# uniform(a, b) needs literal finite bounds for a latent slot, reusing the
+# static-bounds discipline the truncated families established. Returns
+# (lower, upper) when both arguments are static finite Numbers, else nothing.
+function _uniform_static_bounds(arguments)
+    length(arguments) == 2 || return nothing
+    lower = _static_bound_value(arguments[1])
+    upper = _static_bound_value(arguments[2])
+    (isnothing(lower) || isnothing(upper)) && return nothing
+    (isfinite(lower) && isfinite(upper) && upper > lower) || return nothing
+    return (lower, upper)
+end
+
 function _truncated_bound_transform(lower::Real, upper::Real)
     lower_finite = isfinite(lower)
     upper_finite = isfinite(upper)
@@ -600,8 +612,15 @@ function _parameter_transform(rhs::DistributionSpec)
         end
         return NoncenteredTransform()
     end
-    if rhs.family === :normal || rhs.family === :laplace || rhs.family === :studentt
+    if rhs.family === :normal || rhs.family === :laplace || rhs.family === :studentt ||
+       rhs.family === :cauchy || rhs.family === :logistic || rhs.family === :gumbel
         return IdentityTransform()
+    elseif rhs.family === :halfnormal || rhs.family === :halfcauchy
+        return LogTransform()
+    elseif rhs.family === :uniform
+        bounds = _uniform_static_bounds(rhs.arguments)
+        isnothing(bounds) && return nothing
+        return BoundedTransform(bounds[1], bounds[2])
     elseif rhs.family === :mvnormal
         size = _mvnormal_static_size(rhs.arguments)
         isnothing(size) || return VectorIdentityTransform(size)
@@ -656,10 +675,12 @@ function _iid_parameter_transform(arguments)
     family = _iid_base_family(arguments)
     size = _iid_static_size(arguments)
     (isnothing(family) || isnothing(size)) && return nothing
-    if family === :normal || family === :laplace || family === :studentt
+    if family === :normal || family === :laplace || family === :studentt ||
+       family === :cauchy || family === :logistic || family === :gumbel
         return VectorIdentityTransform(size)
     elseif family === :lognormal || family === :exponential || family === :gamma ||
-           family === :inversegamma || family === :weibull
+           family === :inversegamma || family === :weibull ||
+           family === :halfnormal || family === :halfcauchy
         return VectorLogTransform(size)
     elseif family === :beta
         return VectorLogitTransform(size)
