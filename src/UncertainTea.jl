@@ -45,7 +45,8 @@ export pathfinder, PathfinderResult
 export variational_mean, variational_samples, variational_covariance
 export predict, PredictiveDraws, addresses, log_evidence
 export normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, beta, dirichlet, mvnormal, bernoulli,
-    bernoullilogit, geometric, negativebinomial, poisson, studentt, categorical
+    bernoullilogit, geometric, negativebinomial, poisson, studentt, categorical, betabinomial, multinomial,
+    discreteuniform
 export cauchy, halfnormal, halfcauchy, uniform, logistic, gumbel
 export truncatednormal, truncatedstudentt
 export mixture

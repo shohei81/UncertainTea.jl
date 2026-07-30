@@ -39,6 +39,7 @@ core_test_files = [
     ("dist_count_logfactorial.jl", "dist"),
     ("dist_bernoulli.jl", "dist"),
     ("dist_bernoulli_logit.jl", "dist"),
+    ("dist_discrete_gaps.jl", "dist"),
     # "backend": CPU/backend batched scoring and vector-latent paths.
     ("vector_backend_sampler.jl", "backend"),
     ("batched_scoring_eltype_f32.jl", "backend"),

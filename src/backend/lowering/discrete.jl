@@ -369,3 +369,62 @@ function _collect_backend_slot_kinds!(
     isnothing(step.binding_slot) || _mark_backend_index_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
     return nothing
 end
+
+# Beta-Binomial observation (issue #231). `trials` is an integer count (index
+# expr); `alpha`/`beta` are latent-flowing numeric exprs whose gradients are
+# digamma differences. Binds the integer count value.
+struct BackendBetaBinomialChoicePlanStep{
+    N<:AbstractBackendExpr,
+    A<:AbstractBackendExpr,
+    B<:AbstractBackendExpr,
+    AD<:BackendAddressSpec,
+} <: BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    trials::N
+    alpha::A
+    beta::B
+    parameter_slot::Union{Nothing,Int}
+end
+
+# Discrete-uniform observation (issue #231). `lower`/`upper` are integer-bound
+# index exprs; no continuous parameters, so no gradient term. Binds the integer
+# value.
+struct BackendDiscreteUniformChoicePlanStep{
+    LO<:AbstractBackendExpr,
+    HI<:AbstractBackendExpr,
+    AD<:BackendAddressSpec,
+} <: BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    lower::LO
+    upper::HI
+    parameter_slot::Union{Nothing,Int}
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendBetaBinomialChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_index_expr_slots!(step.trials, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.alpha, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.beta, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_index_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendDiscreteUniformChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_index_expr_slots!(step.lower, numeric_slots, index_slots, generic_slots)
+    _mark_backend_index_expr_slots!(step.upper, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_index_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end

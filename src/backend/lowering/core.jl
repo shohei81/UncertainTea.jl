@@ -444,6 +444,25 @@ function _backend_lower_step(
             return nothing
         end
         return BackendBinomialChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
+    elseif step.rhs.family === :betabinomial
+        length(arguments) == 3 || begin
+            _backend_issue!(issues, "betabinomial expects exactly 3 backend arguments")
+            return nothing
+        end
+        return BackendBetaBinomialChoicePlanStep(
+            step.binding_slot,
+            address,
+            arguments[1],
+            arguments[2],
+            arguments[3],
+            parameter_row,
+        )
+    elseif step.rhs.family === :discreteuniform
+        length(arguments) == 2 || begin
+            _backend_issue!(issues, "discreteuniform expects exactly 2 backend arguments")
+            return nothing
+        end
+        return BackendDiscreteUniformChoicePlanStep(step.binding_slot, address, arguments[1], arguments[2], parameter_row)
     elseif step.rhs.family === :geometric
         length(arguments) == 1 || begin
             _backend_issue!(issues, "geometric expects exactly 1 backend argument")

@@ -420,6 +420,126 @@ function _score_backend_step_and_gradient!(
     return totals, gradients
 end
 
+# Beta-Binomial (issue #231): the alpha/beta gradients are closed-form digamma
+# differences. With s = alpha + beta,
+#   d/dalpha = psi(k+a) - psi(n+s) - psi(a) + psi(s),
+#   d/dbeta  = psi(n-k+b) - psi(n+s) - psi(b) + psi(s).
+function _accumulate_betabinomial_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    trials_values::AbstractVector{Int},
+    alpha_values::AbstractVector{T},
+    alpha_gradients::AbstractMatrix{T},
+    beta_values::AbstractVector{T},
+    beta_gradients::AbstractMatrix{T},
+    value_values::AbstractVector{T},
+) where {T<:AbstractFloat}
+    for batch_index in eachindex(totals)
+        trials = trials_values[batch_index]
+        alpha = alpha_values[batch_index]
+        beta = beta_values[batch_index]
+        value = value_values[batch_index]
+        totals[batch_index] += _backend_betabinomial_logpdf(trials, alpha, beta, value)
+        count = _poisson_count(value)
+        (isnothing(count) || count > trials) && continue
+        s = alpha + beta
+        dgamma_ns = digamma(trials + s)
+        dgamma_s = digamma(s)
+        dalpha = digamma(count + alpha) - dgamma_ns - digamma(alpha) + dgamma_s
+        dbeta = digamma(trials - count + beta) - dgamma_ns - digamma(beta) + dgamma_s
+        for parameter_index in axes(gradients, 1)
+            gradients[parameter_index, batch_index] +=
+                dalpha * alpha_gradients[parameter_index, batch_index] +
+                dbeta * beta_gradients[parameter_index, batch_index]
+        end
+    end
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendBetaBinomialChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    isnothing(step.parameter_slot) ||
+        throw(BatchedBackendFallback("batched backend gradient does not support BetaBinomial latent parameters"))
+    value_values = env.observed_values
+    trials_values = _batched_index_scratch!(env, 1)
+    alpha_values = _batched_numeric_scratch!(env, 1)
+    alpha_gradients = _batched_backend_gradient_scratch!(cache, 1)
+    beta_values = _batched_numeric_scratch!(env, 2)
+    beta_gradients = _batched_backend_gradient_scratch!(cache, 2)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    _eval_backend_index_value_expr!(trials_values, env, step.trials, 3)
+    _eval_backend_numeric_expr_and_gradient!(alpha_values, alpha_gradients, cache, env, step.alpha, 4)
+    _eval_backend_numeric_expr_and_gradient!(beta_values, beta_gradients, cache, env, step.beta, 5)
+    _accumulate_betabinomial_gradient!(
+        totals,
+        gradients,
+        trials_values,
+        alpha_values,
+        alpha_gradients,
+        beta_values,
+        beta_gradients,
+        value_values,
+    )
+
+    if !isnothing(step.binding_slot)
+        _assign_backend_choice_value!(
+            env,
+            cache.slot_gradients,
+            step.binding_slot,
+            value_values,
+            _zero_gradient!(_batched_backend_gradient_scratch!(cache, 3)),
+        )
+    end
+    return totals, gradients
+end
+
+# Discrete-uniform (issue #231): no continuous parameters, so the step only
+# accumulates its log density into the totals and contributes no gradient.
+function _score_backend_step_and_gradient!(
+    step::BackendDiscreteUniformChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    isnothing(step.parameter_slot) ||
+        throw(BatchedBackendFallback("batched backend gradient does not support DiscreteUniform latent parameters"))
+    value_values = env.observed_values
+    lower_values = _batched_index_scratch!(env, 1)
+    upper_values = _batched_index_scratch!(env, 2)
+    _eval_backend_index_value_expr!(lower_values, env, step.lower, 3)
+    _eval_backend_index_value_expr!(upper_values, env, step.upper, 3)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+
+    _batched_choice_numeric_values!(value_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index in eachindex(totals)
+        totals[batch_index] +=
+            _backend_discreteuniform_logpdf(lower_values[batch_index], upper_values[batch_index], value_values[batch_index])
+    end
+
+    if !isnothing(step.binding_slot)
+        _assign_backend_choice_value!(
+            env,
+            cache.slot_gradients,
+            step.binding_slot,
+            value_values,
+            _zero_gradient!(_batched_backend_gradient_scratch!(cache, 1)),
+        )
+    end
+    return totals, gradients
+end
+
 # --- marginalize=:enumerate analytic gradient (issue #13 PR-5) ----------------
 #
 # With branch terms t_v = log pmf(v) + suffix(v), the marginal gradient is the

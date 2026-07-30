@@ -480,6 +480,25 @@
         return w
     end
 
+    # discrete family gaps (issue #231). betabinomial is an observed count with
+    # latent-flowing alpha/beta whose partials are closed-form digamma
+    # differences; discreteuniform is observation-only with no continuous
+    # parameters (its -log(b-a+1) term is constant, so the analytic gradient of
+    # the enclosing latent must equal the bare prior gradient — a clean check
+    # that the step contributes exactly zero and still sits on the analytic tier).
+    @tea static function gxc_betabinomial_obs()
+        log_alpha ~ normal(0.5f0, 0.3f0)
+        log_beta ~ normal(0.5f0, 0.3f0)
+        {:y} ~ betabinomial(12, exp(log_alpha), exp(log_beta))
+        return log_alpha
+    end
+
+    @tea static function gxc_discreteuniform_obs()
+        m ~ normal(0.0f0, 1.0f0)
+        {:y} ~ discreteuniform(1, 10)
+        return m
+    end
+
     gxc_dense_factor = [1.0 0.0; 0.3 0.8]
     gxc_glm_covariates = reshape(Float32[0.7, -1.1], 2, 1)  # d x n = 2 x 1
 
@@ -531,6 +550,8 @@
             (gxc_bernoullilogit_glm, (gxc_glm_covariates,), choicemap((:y, false))),
         ],
         :binomial => [(gxc_binomial_obs, (), choicemap((:y, 5)))],
+        :betabinomial => [(gxc_betabinomial_obs, (), choicemap((:y, 5)))],
+        :discreteuniform => [(gxc_discreteuniform_obs, (), choicemap((:y, 4)))],
         :geometric => [(gxc_geometric_obs, (), choicemap((:y, 3)))],
         :negativebinomial => [(gxc_negativebinomial_obs, (), choicemap((:y, 4)))],
         :poisson => [(gxc_poisson_obs, (), choicemap((:y, 2)))],
