@@ -52,12 +52,13 @@ end
     return mu
 end
 
-# marginalize=:enumerate: backend-supported (issue #13) but still not device-lowerable.
-@tea static function dnuts_marginalize_model()
-    mu ~ normal(0.0, 1.0)
-    z ~ bernoulli(0.3; marginalize=:enumerate)
-    {:y} ~ normal(mu + z, 1.0)
-    return mu
+# backend-supported but device-UNSUPPORTED (issue #67 made marginalize=:enumerate
+# device-lowerable; #134 did the same for broadcast normal): an lkjcholesky latent
+# above the device dimension cap stays a clean non-lowerable example.
+@tea static function dnuts_unsupported_model()
+    Omega ~ lkjcholesky(9, 2.0)
+    {:y} ~ normal(0.0, 1.0)
+    return Omega
 end
 
 @testset "dnuts_device_masked_conjugate" begin
@@ -180,7 +181,7 @@ end
     @test all(<(1.2), rhat(per_chain))
     # A non-lowerable model raises (pointing at device_lowering_report).
     @test_throws ArgumentError batched_nuts(
-        dnuts_marginalize_model, (), choicemap((:y, 0.3));
+        dnuts_unsupported_model, (), choicemap((:y, 0.3));
         num_chains=2, num_samples=1, tree_strategy=:masked, backend=CPU(),
     )
 end

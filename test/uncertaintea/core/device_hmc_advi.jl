@@ -27,12 +27,13 @@ end
     return mu
 end
 
-# marginalize=:enumerate: backend-supported (issue #13) but still not device-lowerable.
-@tea static function devh_marginalize_model()
-    mu ~ normal(0.0, 1.0)
-    z ~ bernoulli(0.3; marginalize=:enumerate)
-    {:y} ~ normal(mu + z, 1.0)
-    return mu
+# backend-supported but device-UNSUPPORTED (issue #67 made marginalize=:enumerate
+# device-lowerable; #134 did the same for broadcast normal): an lkjcholesky latent
+# above the device dimension cap stays a clean non-lowerable example.
+@tea static function devh_unsupported_model()
+    Omega ~ lkjcholesky(9, 2.0)
+    {:y} ~ normal(0.0, 1.0)
+    return Omega
 end
 
 # issue #70: a non-differentiable point (sqrt(abs(x)) has an infinite/NaN
@@ -167,9 +168,9 @@ end
     per_chain_hmc_draws = posterior_array(per_chain_hmc)
     @test all(isfinite, per_chain_hmc_draws)
     @test isapprox(devh_mean(vec(per_chain_hmc_draws)), 0.15; atol=0.1)
-    # An unsupported (marginalized choice) model raises the lowering ArgumentError.
+    # An unsupported (over-cap lkjcholesky latent) model raises the lowering ArgumentError.
     marg_error = try
-        batched_hmc(devh_marginalize_model, (), choicemap((:y, 0.4)); num_chains=2, num_samples=10, backend=backend)
+        batched_hmc(devh_unsupported_model, (), choicemap((:y, 0.4)); num_chains=2, num_samples=10, backend=backend)
         nothing
     catch err
         err
@@ -178,7 +179,7 @@ end
     @test occursin("device_lowering_report", sprint(showerror, marg_error))
 
     advi_error = try
-        batched_advi(devh_marginalize_model, (), choicemap((:y, 0.4)); num_steps=10, backend=backend)
+        batched_advi(devh_unsupported_model, (), choicemap((:y, 0.4)); num_steps=10, backend=backend)
         nothing
     catch err
         err

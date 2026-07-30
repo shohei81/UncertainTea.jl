@@ -38,13 +38,14 @@ end
     return p
 end
 
-# marginalize=:enumerate (issue #13 track 1): backend-supported but device step
-# lowering still rejects it, so the device report stays honest-unsupported.
-@tea static function dev_marginalize_model()
-    mu ~ normal(0.0, 1.0)
-    z ~ bernoulli(0.3; marginalize=:enumerate)
-    {:y} ~ normal(mu + z, 1.0)
-    return mu
+# backend-supported but device-UNSUPPORTED negative example. marginalize=:enumerate
+# became device-lowerable in issue #67, and broadcast-normal became device-lowerable
+# in #134, so both are no longer valid "unsupported" cases; an lkjcholesky latent
+# above the device dimension cap is a genuinely-still-unsupported one (the backend
+# scores it, the device rejects on the compile-time cap).
+@tea static function dev_unsupported_model()
+    Omega ~ lkjcholesky(9, 2.0)
+    return Omega
 end
 
 # issue #12 group 1 (continuous): studentt (identity latent), inversegamma and
@@ -92,10 +93,10 @@ end
     supported_bern, _ = device_lowering_report(dev_bernoulli_model)
     @test supported_bern
 
-    marg_supported, marg_issues = device_lowering_report(dev_marginalize_model)
+    marg_supported, marg_issues = device_lowering_report(dev_unsupported_model)
     @test !marg_supported
     @test !isempty(marg_issues)
-    @test any(occursin("marginalize", lowercase(issue)) for issue in marg_issues)
+    @test any(occursin("caps lkjcholesky", issue) for issue in marg_issues)
 end
 
 @testset "dev_plan_isbits" begin
@@ -872,7 +873,7 @@ end
 @testset "dev_unsupported_fallback" begin
     # A device-unsupported model must raise a clear error pointing at the report.
     err = try
-        device_batched_logjoint(dev_marginalize_model, reshape([0.1], 1, 1), ())
+        device_batched_logjoint(dev_unsupported_model, reshape([0.1], 1, 1), ())
         nothing
     catch e
         e

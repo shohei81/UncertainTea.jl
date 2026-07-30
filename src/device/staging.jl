@@ -141,6 +141,52 @@ function _stage_step!(
     return nothing
 end
 
+# The conditioned branch selector for a marginalize=:enumerate choice (issue #67):
+# 0 when the address is unconstrained (marginalize over all branches), the 1-based
+# branch index when conditioned on an in-support value, and a sentinel out of
+# `1..S` when conditioned on an out-of-support value (the kernel maps it to -Inf).
+function _device_marginalize_selector(step, value, support_size::Int)
+    matched = if step.family === :bernoulli
+        value isa Bool ? Int(value) + 1 :
+        (value isa Real && (value == 0 || value == 1)) ? Int(value) + 1 : nothing
+    else
+        _categorical_index(value, support_size)
+    end
+    return isnothing(matched) ? support_size + 1 : matched
+end
+
+# marginalize=:enumerate (issue #67): the choice is summed out, not observed, so it
+# stages ONE integer SELECTOR row (conditioned branch index, or 0 to marginalize)
+# to keep the observation cursor aligned; then its suffix stages its own
+# observations recursively (the DeviceLoopStep body precedent). The suffix
+# observation VALUES and any trip counts are independent of the enumerated branch
+# value (a suffix address/loop bound depending on it is rejected at lowering), so
+# staging the suffix once is exact.
+function _stage_step!(
+    rows,
+    step::BackendMarginalizeChoicePlanStep,
+    env,
+    constraints,
+    dummy_params,
+    trip_counts,
+    loop_starts,
+    loop_counter,
+    ::Type{T},
+) where {T}
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    batch_size = size(dummy_params, 2)
+    support_size = length(step.support)
+    selector_row = Vector{T}(undef, batch_size)
+    for batch_index = 1:batch_size
+        address = _concrete_batched_address(address_parts, batch_index)
+        found, value = _choice_tryget_normalized(_batched_constraint(constraints, batch_index), address)
+        selector_row[batch_index] = T(found ? _device_marginalize_selector(step, value, support_size) : 0)
+    end
+    push!(rows, selector_row)
+    _stage_steps!(rows, step.body, env, constraints, dummy_params, trip_counts, loop_starts, loop_counter, T)
+    return nothing
+end
+
 # binomial trials is an integer, parameter-independent argument. Stage it as a
 # LEADING row (exact through the Float64 staging traversal) so the device reads
 # the exact `n` from the integer observation buffer regardless of the compute

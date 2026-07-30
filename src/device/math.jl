@@ -777,6 +777,68 @@ end
     return ifelse(weights_ok & isfinite(shift), result, oftype(result, -Inf))
 end
 
+# ---- marginalize=:enumerate fold (issue #67) ----------------------------------
+#
+# Per-branch log pmf of the enumerated family. bernoulli takes its single
+# probability and the branch value (0/1); categorical picks log(probabilities[k]).
+# Both reuse the exception-free device logpdfs (out-of-support / invalid vectors
+# degrade to -Inf), so a zero-mass branch value naturally scores -Inf.
+@inline _device_marg_logpmf(::Val{:bernoulli}, probabilities::Tuple, value) =
+    _device_bernoulli_logpdf(promote(first(probabilities), value)...)
+@inline _device_marg_logpmf(::Val{:categorical}, probabilities::Tuple, value) =
+    _device_categorical_logpdf(probabilities, value)
+
+# A -Inf with a ZERO derivative, in the working type (plain `T` in the logjoint
+# kernel, `DeviceDual{T}` in the gradient kernel). Used to exclude a branch by its
+# FULL term (issue #62 lesson) BEFORE its degenerate gradient buffer can reach the
+# fold: a raw -Inf branch dual can carry an Inf/NaN derivative, and exp() of it
+# would produce 0 * NaN = NaN; substituting a clean (-Inf, 0) dual makes the
+# excluded branch contribute exactly zero to both the value and the derivative.
+@inline _device_marg_neginf(::Type{T}) where {T<:Real} = T(-Inf)
+@inline _device_marg_neginf(::Type{DeviceDual{T}}) where {T} = DeviceDual{T}(T(-Inf), zero(T))
+
+# Exclude a branch whose FULL term (log pmf + suffix) is non-finite (zero-mass or
+# an impossible/unevaluable suffix): its value channel already contributes ~0 via
+# exp(-Inf), and this scrubs any Inf/NaN derivative it might carry.
+@inline _device_marg_sanitize(t) =
+    ifelse(isfinite(_device_dual_value(t)), t, _device_marg_neginf(typeof(t)))
+@inline _device_marg_sanitize_all(::Tuple{}) = ()
+@inline _device_marg_sanitize_all(t::Tuple) =
+    (_device_marg_sanitize(first(t)), _device_marg_sanitize_all(Base.tail(t))...)
+
+# Compile-time unrolled masked pick of branch `selector` (1-based) for the
+# CONDITIONED single-branch case; unmatched branches contribute zero, so duals
+# promote safely and only the matched branch's term (and its derivative) survives.
+# The selector is a plain float (the staged selector row is a small exact integer,
+# exact even in Float32), so the branch index is compared in float space -- no
+# in-kernel integer conversion (exception-free device contract).
+@inline _device_marg_select(::Tuple{}, ::Int, selector, acc) = acc
+@inline function _device_marg_select(totals::Tuple, index::Int, selector, acc)
+    t = first(totals)
+    chosen = ifelse(oftype(selector, index) == selector, t, zero(t))
+    return _device_marg_select(Base.tail(totals), index + 1, selector, acc + chosen)
+end
+
+# Combine the per-branch full terms `t_v = log pmf(v) + suffix(v)` into the step's
+# contribution, given the staged branch `selector` (0 == marginalize; `v` in
+# `1..S` == condition on branch `v`; anything else == -Inf). `selector` is read
+# from the float observation buffer (never the count-only integer mirror, which is
+# dropped to a dummy when no count family reads it). Marginalization is a
+# max-shifted log-sum-exp over the sanitized terms (the mixture-normal template);
+# the dual arithmetic through `shift + log(sum exp(t - shift))` yields exactly the
+# responsibility-weighted CPU gradient `sum_v r_v * d t_v`. `ifelse` (not control
+# flow) keeps the kernel divergence-free.
+@inline function _device_marg_combine(totals::Tuple, selector)
+    sanitized = _device_marg_sanitize_all(totals)
+    shift = _device_tuple_max(sanitized)
+    marginal = shift + log(_device_exp_shift_sum(sanitized, shift))
+    marginal = ifelse(isfinite(_device_dual_value(shift)), marginal, _device_marg_neginf(typeof(shift)))
+    chosen = _device_marg_select(totals, 1, selector, zero(first(totals)))
+    in_range = (selector >= oftype(selector, 1)) & (selector <= oftype(selector, length(totals)))
+    conditioned = ifelse(in_range, chosen, _device_marg_neginf(typeof(first(totals))))
+    return ifelse(selector == zero(selector), marginal, conditioned)
+end
+
 # ---- dense multivariate normal ------------------------------------------------
 
 # Forward substitution solving L z = x - mu over a COLUMN-MAJOR PACKED lower
