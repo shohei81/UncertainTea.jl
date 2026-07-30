@@ -23,6 +23,7 @@ function batched_nuts(
     tree_strategy::Symbol=:hybrid,
     backend=nothing,
     precision=nothing,
+    persistent_gradient::Symbol=:auto,
     device_sync_per_leaf::Bool=false,
     rng::AbstractRNG=Random.default_rng(),
 )
@@ -103,6 +104,7 @@ function batched_nuts(
         DevicePersistentNUTSWorkspace(
             model, num_chains, max_tree_depth;
             backend=backend, precision=device_precision, args=args, constraints=constraints,
+            gradient_mode=persistent_gradient,
         ) :
         DeviceNUTSWorkspace(
             model, num_chains, max_tree_depth;

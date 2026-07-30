@@ -42,17 +42,14 @@ end
 # Returns (value_dual, logabsdet_dual, new_cursor). Latent values seed derivative 1 on
 # the differentiation target row `pidx`; observed values are constants (derivative 0).
 @inline function _device_grad_choice_value(step, params, observed, pidx, b, cursor::Int32, ::Type{TD}) where {TD}
-    T = _device_dual_basetype(TD)
     if step.value_source > Int32(0)
         raw = @inbounds params[step.value_source, b]
-        seed = ifelse(step.value_source == Int32(pidx), one(T), zero(T))
-        u = DeviceDual{T}(convert(T, raw), seed)
+        u = _seed_latent(TD, raw, step.value_source, pidx)
         c, lad = _device_transform(step.transform, u)
         return (c, lad, cursor)
     else
         v = _obsval(observed, cursor, b)
-        z = zero(T)
-        return (DeviceDual{T}(convert(T, v), z), DeviceDual{T}(z, z), cursor + Int32(1))
+        return (_seed_obs(TD, v), _seed_obs(TD, zero(_device_dual_basetype(TD))), cursor + Int32(1))
     end
 end
 
@@ -90,12 +87,10 @@ end
     b,
     cursor,
 )
-    T = _device_dual_basetype(eltype(slots))
     mu = _device_grad_eval(step.mu, slots, pidx, b)
     sigma = _device_grad_eval(step.sigma, slots, pidx, b)
     raw = @inbounds params[step.value_source, b]
-    seed = ifelse(step.value_source == Int32(pidx), one(T), zero(T))
-    z = DeviceDual{T}(convert(T, raw), seed)
+    z = _seed_latent(eltype(slots), raw, step.value_source, pidx)
     m, s, zz = promote(mu, sigma, z)
     _device_grad_store_binding!(slots, step.binding_slot, m + s * zz, pidx, b)
     return (_device_normal_logpdf(zero(zz), one(zz), zz), cursor)
@@ -262,7 +257,6 @@ end
     b,
     cursor,
 )
-    T = _device_dual_basetype(eltype(slots))
     p = _device_grad_eval(step.probability, slots, pidx, b)
     # trials `n` is an exact integer staged as a leading observation row (issue
     # #71); the -1 sentinel means the host could not resolve it (a deterministic
@@ -277,7 +271,7 @@ end
         return (_device_binomial_logpdf(n, k, p) + lad, cur)
     end
     k = _obsint(observed_int, cur, b)
-    value = DeviceDual{T}(convert(T, _obsval(observed, cur, b)), zero(T))
+    value = _seed_obs(eltype(slots), _obsval(observed, cur, b))
     _device_grad_store_binding!(slots, step.binding_slot, value, pidx, b)
     return (_device_binomial_logpdf(n, k, p), cur + Int32(1))
 end
@@ -398,18 +392,18 @@ end
     b,
     cursor,
 ) where {D}
-    T = _device_dual_basetype(eltype(slots))
+    TD = eltype(slots)
     intercept = _device_grad_eval(step.intercept, slots, pidx, b)
     terms = ntuple(Val(D)) do i
         row = step.coef_value_source + Int32(i - 1)
         raw = @inbounds params[row, b]
-        coef = DeviceDual{T}(convert(T, raw), ifelse(row == Int32(pidx), one(T), zero(T)))
+        coef = _seed_latent(TD, raw, row, pidx)
         x = _obsval(observed, cursor + Int32(i - 1), b)
         coef * x
     end
     eta = intercept + _device_tuple_sum(terms)
     cur = cursor + Int32(D)
-    y = DeviceDual{T}(convert(T, _obsval(observed, cur, b)), zero(T))
+    y = _seed_obs(TD, _obsval(observed, cur, b))
     _device_grad_store_binding!(slots, step.binding_slot, y, pidx, b)
     e, v = promote(eta, y)
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
@@ -446,17 +440,16 @@ end
     ::Type{TD},
     ::Val{D},
 ) where {TD,D}
-    T = _device_dual_basetype(TD)
     if step.value_source > Int32(0)
         value = ntuple(Val(D)) do i
             row = step.value_source + Int32(i - 1)
             raw = @inbounds params[row, b]
-            DeviceDual{T}(convert(T, raw), ifelse(row == Int32(pidx), one(T), zero(T)))
+            _seed_latent(TD, raw, row, pidx)
         end
         return (value, cursor)
     end
     value = ntuple(Val(D)) do i
-        DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T))
+        _seed_obs(TD, _obsval(observed, cursor + Int32(i - 1), b))
     end
     return (value, cursor + Int32(D))
 end
@@ -473,13 +466,13 @@ end
     b,
     cursor,
 )
-    T = _device_dual_basetype(eltype(slots))
+    TD = eltype(slots)
     alpha = _device_grad_eval_args(step.alpha, slots, pidx, b)
     if step.value_source > Int32(0)
         z = ntuple(Val(length(step.alpha) - 1)) do i
             row = step.value_source + Int32(i - 1)
             raw = @inbounds params[row, b]
-            DeviceDual{T}(convert(T, raw), ifelse(row == Int32(pidx), one(T), zero(T)))
+            _seed_latent(TD, raw, row, pidx)
         end
         # duals flow through the register softmax, reproducing the CPU analytic
         # simplex Jacobian and log-abs-det derivative
@@ -487,7 +480,7 @@ end
         return (_device_dirichlet_logpdf(alpha, value) + lad, cursor)
     end
     value = ntuple(Val(length(step.alpha))) do i
-        DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T))
+        _seed_obs(TD, _obsval(observed, cursor + Int32(i - 1), b))
     end
     return (_device_dirichlet_logpdf(alpha, value), cursor + Int32(length(step.alpha)))
 end
@@ -504,13 +497,13 @@ end
     b,
     cursor,
 ) where {D}
-    T = _device_dual_basetype(eltype(slots))
+    TD = eltype(slots)
     eta = _device_grad_eval(step.eta, slots, pidx, b)
     if step.value_source > Int32(0)
         z = ntuple(Val((D * (D - 1)) ÷ 2)) do i
             row = step.value_source + Int32(i - 1)
             raw = @inbounds params[row, b]
-            DeviceDual{T}(convert(T, raw), ifelse(row == Int32(pidx), one(T), zero(T)))
+            _seed_latent(TD, raw, row, pidx)
         end
         # duals flow through the register tanh/stick constrain, reproducing
         # the CPU analytic z-space gradient and log-abs-det derivative
@@ -518,7 +511,7 @@ end
         return (_device_lkjcholesky_logpdf(eta, value, Val(D)) + lad, cursor)
     end
     value = ntuple(Val((D * (D + 1)) ÷ 2)) do i
-        DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T))
+        _seed_obs(TD, _obsval(observed, cursor + Int32(i - 1), b))
     end
     return (_device_lkjcholesky_logpdf(eta, value, Val(D)), cursor + Int32((D * (D + 1)) ÷ 2))
 end
@@ -535,11 +528,11 @@ end
     b,
     cursor,
 )
-    T = _device_dual_basetype(eltype(slots))
+    TD = eltype(slots)
     mu = _device_grad_eval_args(step.mu, slots, pidx, b)
     # the factor is constant data (zero derivative), matching the CPU contract
     scale_packed = ntuple(
-        i -> DeviceDual{T}(convert(T, _obsval(observed, cursor + Int32(i - 1), b)), zero(T)),
+        i -> _seed_obs(TD, _obsval(observed, cursor + Int32(i - 1), b)),
         Val((length(step.mu) * (length(step.mu) + 1)) ÷ 2),
     )
     cur = cursor + Int32((length(step.mu) * (length(step.mu) + 1)) ÷ 2)
