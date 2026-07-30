@@ -98,7 +98,13 @@ end
 # Lower a broadcast argument expression. Dotted operators are mapped to their scalar
 # base op; leaves (slots, literals) reuse the standard backend lowering. Referenced
 # vector model arguments stay generic environment slots (never forced numeric).
-function _backend_lower_broadcast_arg(model::TeaModel, layout::EnvironmentLayout, expr, issues::Vector{String}, context::String)
+function _backend_lower_broadcast_arg(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    expr,
+    issues::Vector{String},
+    context::String,
+)
     if expr isa Expr && expr.head == :call && !isempty(expr.args)
         op = _backend_broadcast_op(expr.args[1])
         if isnothing(op)
@@ -113,7 +119,7 @@ function _backend_lower_broadcast_arg(model::TeaModel, layout::EnvironmentLayout
 end
 
 function _backend_lower_broadcast_normal_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     step::ChoicePlanStep,
     issues::Vector{String},
@@ -137,7 +143,13 @@ function _backend_lower_broadcast_normal_choice_step(
     return BackendBroadcastNormalChoicePlanStep(step.binding_slot, address, mu, sigma, step.parameter_slot)
 end
 
-function _backend_lower_tuple_argument(model::TeaModel, layout::EnvironmentLayout, expr, issues::Vector{String}, context::String)
+function _backend_lower_tuple_argument(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    expr,
+    issues::Vector{String},
+    context::String,
+)
     if expr isa Expr && expr.head in (:vect, :tuple)
         lowered = map(arg -> _backend_lower_expr(model, layout, arg, issues, context), expr.args)
         any(isnothing, lowered) && return nothing
@@ -161,7 +173,7 @@ function _backend_lower_tuple_argument(model::TeaModel, layout::EnvironmentLayou
 end
 
 function _backend_lower_mvnormal_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -210,7 +222,7 @@ function _backend_lower_mvnormal_choice_step(
 end
 
 function _backend_lower_dirichlet_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -256,7 +268,7 @@ function _backend_lower_dirichlet_choice_step(
 end
 
 function _backend_lower_lkjcholesky_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -302,7 +314,12 @@ end
 
 # Lower one `mixture` component constructor call into `(family, mu_expr, sigma_expr)`.
 # Only `normal(mu, sigma)` components are supported for backend lowering.
-function _backend_lower_mixture_component(model::TeaModel, layout::EnvironmentLayout, component, issues::Vector{String})
+function _backend_lower_mixture_component(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    component,
+    issues::Vector{String},
+)
     if component isa Expr && component.head == :call && length(component.args) == 3 && component.args[1] === :normal
         mu = _backend_lower_expr(model, layout, component.args[2], issues, "mixture normal mean")
         sigma = _backend_lower_expr(model, layout, component.args[3], issues, "mixture normal scale")
@@ -314,7 +331,7 @@ function _backend_lower_mixture_component(model::TeaModel, layout::EnvironmentLa
 end
 
 function _backend_lower_mixture_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -362,7 +379,7 @@ function _backend_lower_mixture_choice_step(
 end
 
 function _backend_lower_mvnormaldense_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,

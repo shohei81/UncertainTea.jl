@@ -73,7 +73,7 @@ function _is_glm_linear_predictor_sum(expr)
 end
 
 function _backend_lower_linear_predictor_arg(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     expr,
@@ -139,7 +139,7 @@ function _backend_lower_linear_predictor_arg(
 end
 
 function _backend_lower_bernoullilogit_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
@@ -249,7 +249,7 @@ function _collect_backend_slot_kinds!(
 end
 
 function _backend_lower_marginalize_choice_step(
-    model::TeaModel,
+    @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
     parameter_layout::ParameterLayout,
     step::ChoicePlanStep,
