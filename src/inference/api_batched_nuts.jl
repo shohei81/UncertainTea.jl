@@ -26,8 +26,12 @@ function batched_nuts(
     device_sync_per_leaf::Bool=false,
     rng::AbstractRNG=Random.default_rng(),
 )
-    tree_strategy in (:hybrid, :masked) ||
-        throw(ArgumentError("batched_nuts tree_strategy must be :hybrid or :masked, got $(repr(tree_strategy))"))
+    tree_strategy in (:hybrid, :masked, :persistent) ||
+        throw(ArgumentError("batched_nuts tree_strategy must be :hybrid, :masked, or :persistent, got $(repr(tree_strategy))"))
+    # `:persistent` (issue #154 increment 2) is a device-only strategy: the whole tree
+    # is built inside a device kernel, so it has no host fallback and REQUIRES a backend.
+    !(tree_strategy === :persistent && backend === nothing) ||
+        throw(ArgumentError("batched_nuts tree_strategy=:persistent requires a `backend` (it is a device-only path)"))
     init in (:prior, :uniform) ||
         throw(ArgumentError("batched_nuts init must be :prior or :uniform, got $(repr(init))"))
     init_max_retries >= 0 ||
@@ -58,8 +62,16 @@ function batched_nuts(
     if backend !== nothing
         backend isa KernelAbstractions.Backend ||
             throw(ArgumentError("batched_nuts `backend` must be a KernelAbstractions.Backend or nothing, got $(typeof(backend))"))
-        tree_strategy === :masked ||
-            throw(ArgumentError("batched_nuts device backend requires tree_strategy=:masked, got $(repr(tree_strategy))"))
+        tree_strategy in (:masked, :persistent) ||
+            throw(
+                ArgumentError(
+                    "batched_nuts device backend requires tree_strategy=:masked or :persistent, got $(repr(tree_strategy))",
+                ),
+            )
+        # `:persistent` (issue #154 increment 2): one kernel launch per iteration, each
+        # grid lane building its own device-resident NUTS tree with on-device Philox
+        # randomness. Statistically -- not bitwise -- equivalent to the host/masked
+        # paths (RNG semantics differ; validated by the #121 gate). Diagonal mass only.
         # Per-chain adaptation IS supported on the device (issue #137): it routes to
         # the pooled-mass / per-chain-step driver (shared diagonal mass, per-chain
         # step). per_chain_adaptation=false still selects shared adaptation.
@@ -87,6 +99,11 @@ function batched_nuts(
     )
     device_nuts_workspace =
         backend === nothing ? nothing :
+        tree_strategy === :persistent ?
+        DevicePersistentNUTSWorkspace(
+            model, num_chains, max_tree_depth;
+            backend=backend, precision=device_precision, args=args, constraints=constraints,
+        ) :
         DeviceNUTSWorkspace(
             model, num_chains, max_tree_depth;
             backend=backend, precision=device_precision, args=args, constraints=constraints,
@@ -292,8 +309,8 @@ function batched_nuts(
     for iteration = 1:total_iterations
         nuts_step_size = driver.step_size
         inverse_mass_matrix = driver.inverse_mass_matrix
-        if tree_strategy === :masked && device_nuts_workspace !== nothing
-            _device_batched_nuts_proposals_masked!(
+        if device_nuts_workspace !== nothing
+            _device_nuts_proposals_dispatch!(
                 device_nuts_workspace,
                 workspace,
                 model,
@@ -306,6 +323,7 @@ function batched_nuts(
                 nuts_step_size,
                 max_tree_depth,
                 nuts_max_delta_energy,
+                iteration,
                 rng,
             )
         elseif tree_strategy === :masked
@@ -779,7 +797,7 @@ function _batched_nuts_device_per_chain!(
         inverse_mass_matrix = driver.mass.inverse_mass_matrix
         mean_step_size = sum(driver.step_sizes) / num_chains
 
-        _device_batched_nuts_proposals_masked!(
+        _device_nuts_proposals_dispatch!(
             dws,
             workspace,
             model,
@@ -792,6 +810,7 @@ function _batched_nuts_device_per_chain!(
             driver.step_sizes,
             max_tree_depth,
             nuts_max_delta_energy,
+            iteration,
             rng,
         )
 
