@@ -77,16 +77,16 @@ end
         )
 
         # PR-4 landed the suffix-owning backend step and PR-5 its analytic
-        # gradient; the device rejects the step through the generic choice
-        # fallback
+        # gradient; issue #67 landed the device mirror, so the step now lowers to
+        # the device plan (parity in device_marginalize_lowering.jl)
         denum_report = backend_report(denum_bernoulli_model)
         @test denum_report.supported == true
         denum_plan = backend_execution_plan(denum_bernoulli_model)
         @test denum_plan.steps[end] isa UncertainTea.BackendMarginalizeChoicePlanStep
         @test UncertainTea._backend_gradient_supported(denum_plan)
         denum_device_supported, denum_device_issues = device_lowering_report(denum_bernoulli_model)
-        @test !denum_device_supported
-        @test any(issue -> occursin("marginalize", lowercase(issue)), denum_device_issues)
+        @test denum_device_supported
+        @test isempty(denum_device_issues)
 
         # the noncentered dependency audit must keep walking the suffix the
         # marginalize step owns: a noncentered location depending on the

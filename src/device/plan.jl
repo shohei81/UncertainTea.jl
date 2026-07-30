@@ -365,6 +365,37 @@ struct DeviceLoopStep{B<:Tuple} <: AbstractDevicePlanStep
     body::B
 end
 
+# marginalize=:enumerate (issue #67, the device mirror of the CPU-native
+# BackendMarginalizeChoicePlanStep). A finite-support discrete latent summed out
+# analytically: the step OWNS its plan suffix as a nested lowered step tuple (the
+# `DeviceLoopStep` body precedent) and folds the per-support-value branch totals
+# through a max-shifted log-sum-exp -- exactly the CPU right-fold semantics
+# (docs/discrete-enumeration.md), using the mixture-normal fold as the in-kernel
+# template. `F` is the family (`:bernoulli` / `:categorical`, a Symbol type param)
+# selecting the per-branch pmf; `support` is the compile-time tuple of the BINDING
+# values the branches materialize (bernoulli: `(0, 1)`; categorical: `(1..K)`),
+# bounded by the backend's 32 total-support-product cap so the unrolled kernel body
+# stays inside the Metal shader budget. `probabilities` holds the lowered pmf
+# argument exprs (bernoulli: `(p,)`; categorical: the K entries).
+#
+# The step consumes ONE staged SELECTOR observation row (0 == marginalize over all
+# branches; `v` in `1..S` == conditioned on branch `v`; anything else == -Inf) so
+# the observation cursor stays aligned across the batch; every branch then re-scores
+# the identical suffix from the SAME post-selector cursor and advances it equally
+# (issue #67 point 4). The binding slot IS materialized per branch (a scalar, unlike
+# the vector families) so the suffix can read it; the per-branch value carries a
+# ZERO derivative in the gradient kernel (a discrete branch constant), reproducing
+# the CPU cleared-slot-gradient contract.
+struct DeviceMarginalizeChoiceStep{F,PS<:Tuple,SP<:Tuple,B<:Tuple} <: AbstractDeviceChoiceStep
+    probabilities::PS
+    support::SP
+    body::B
+    binding_slot::Int32
+end
+
+DeviceMarginalizeChoiceStep{F}(probabilities::PS, support::SP, body::B, binding_slot) where {F,PS<:Tuple,SP<:Tuple,B<:Tuple} =
+    DeviceMarginalizeChoiceStep{F,PS,SP,B}(probabilities, support, body, Int32(binding_slot))
+
 struct DeviceExecutionPlan{T,S<:Tuple}
     steps::S
     slot_count::Int32
@@ -1306,6 +1337,75 @@ function _lower_device_step!(
     return nothing
 end
 
+# ---- marginalize=:enumerate (issue #67) ----
+#
+# A marginalize suffix that owns a loop or a broadcast observation would allocate
+# loop-id / trip-count slots inside the branch scan, breaking the pre-order
+# alignment between lowering and host staging (which walk the suffix identically);
+# it would also multiply the unrolled kernel body by the loop trip count. The
+# supported acceptance class is loop-free suffixes (scalar choices/deterministics,
+# possibly nested marginalize), so reject the dynamic forms honestly.
+function _device_marg_body_has_dynamic(steps)
+    for step in steps
+        (step isa DeviceLoopStep || step isa DeviceBroadcastNormalChoiceStep) && return true
+        step isa DeviceMarginalizeChoiceStep && _device_marg_body_has_dynamic(step.body) && return true
+    end
+    return false
+end
+
+function _lower_device_step!(
+    out,
+    step::BackendMarginalizeChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    if in_loop
+        # loop-scoped marginalized choices are rejected at BACKEND lowering already;
+        # guard for honesty (a marginalize suffix carrying `M` per-iterate would need
+        # per-iterate staging the device does not encode).
+        _device_issue!(issues, "device lowering does not support marginalize=:enumerate choices inside a loop")
+        return nothing
+    end
+    family = step.family
+    if !(family === :bernoulli || family === :categorical)
+        _device_issue!(
+            issues,
+            "device lowering supports marginalize=:enumerate for bernoulli and categorical only, got `$family`",
+        )
+        return nothing
+    end
+    probabilities =
+        map(p -> _lower_device_expr(p, backend.generic_slots, T, issues, "marginalize $family probability"), step.probabilities)
+    any(isnothing, probabilities) && return nothing
+    # lower the suffix body recursively (the nested-step precedent of DeviceLoopStep)
+    body_vec = Any[]
+    for inner in step.body
+        _lower_device_step!(body_vec, inner, backend, layout, T, issues, loop_counter, in_loop)
+    end
+    any(isnothing, body_vec) && return nothing
+    body = tuple(body_vec...)
+    if _device_marg_body_has_dynamic(body)
+        _device_issue!(
+            issues,
+            "device lowering does not support a marginalize=:enumerate suffix containing a loop or broadcast observation",
+        )
+        return nothing
+    end
+    # binding VALUES the branches materialize: bernoulli false/true -> 0/1, the
+    # categorical category is its own index. The backend caps the total support
+    # product at 32, bounding the unrolled kernel body.
+    support = family === :bernoulli ? (Int32(0), Int32(1)) : ntuple(i -> Int32(i), length(step.support))
+    push!(
+        out,
+        DeviceMarginalizeChoiceStep{family}(tuple(probabilities...), support, body, _device_slot32(step.binding_slot)),
+    )
+    return nothing
+end
+
 function _lower_device_step!(out, step::BackendChoicePlanStep, backend, layout, ::Type{T}, issues, loop_counter, in_loop) where {T}
     _device_issue!(issues, "device lowering does not support the $(nameof(typeof(step))) distribution family yet")
     return nothing
@@ -1465,6 +1565,13 @@ function _device_collect_expr_reads!(reads_by_loop::Dict{Int32,BitSet}, steps, l
     for step in steps
         if step isa DeviceLoopStep
             _device_collect_expr_reads!(reads_by_loop, step.body, step.loop_id)
+        elseif step isa DeviceMarginalizeChoiceStep
+            # the marginalize step's own pmf argument reads live in this scope; the
+            # suffix body is scored INLINE in the same kernel scope (no separate loop
+            # id), so its reads join this scope and see the branch binding + any
+            # fresh suffix bindings the body materializes.
+            _device_step_expr_reads!(reads, step)
+            _device_collect_expr_reads!(reads_by_loop, step.body, loop_id)
         else
             _device_step_expr_reads!(reads, step)
         end
@@ -1493,6 +1600,13 @@ function _device_collect_written_slots!(written_by_loop::Dict{Int32,BitSet}, ste
             body_written = get!(BitSet, written_by_loop, step.loop_id)
             step.iterator_slot > Int32(0) && push!(body_written, Int(step.iterator_slot))
             _device_collect_written_slots!(written_by_loop, step.body, step.loop_id)
+        elseif step isa DeviceMarginalizeChoiceStep
+            # the branch binding is materialized per branch, and the suffix runs in
+            # the enclosing scope: record the binding and the suffix's writes here so
+            # the suffix's own reads resolve (a suffix rebind of a PRE-EXISTING slot
+            # is rejected separately, see _device_check_marginalize_rebinds!).
+            step.binding_slot > Int32(0) && push!(written, Int(step.binding_slot))
+            _device_collect_written_slots!(written_by_loop, step.body, loop_id)
         elseif _device_step_writes_binding(step) && step.binding_slot > Int32(0)
             push!(written, Int(step.binding_slot))
         end
@@ -1577,6 +1691,13 @@ function _device_staging_taint_pass!(taint::BitSet, steps, changed::Ref{Bool})
     for step in steps
         if step isa BackendLoopPlanStep
             _device_staging_taint_pass!(taint, step.body, changed)
+        elseif step isa BackendMarginalizeChoicePlanStep
+            slot = step.binding_slot
+            if !isnothing(slot) && !(slot in taint)
+                push!(taint, slot)
+                changed[] = true
+            end
+            _device_staging_taint_pass!(taint, step.body, changed)
         elseif step isa BackendChoicePlanStep
             slot = step.binding_slot
             if !isnothing(slot) && !(slot in taint)
@@ -1607,6 +1728,19 @@ function _device_check_staging_refs!(issues::Vector{String}, steps, taint::BitSe
                     issues,
                     "device staging cannot resolve a loop range that depends on the random choice binding `$(symbols[slot])`",
                 )
+            end
+            _device_check_staging_refs!(issues, step.body, taint, symbols)
+        elseif step isa BackendMarginalizeChoicePlanStep
+            for part in step.address.parts
+                part isa BackendAddressExprPart || continue
+                refs = BitSet()
+                _backend_expr_slot_refs!(refs, part.expr)
+                for slot in intersect(refs, taint)
+                    _device_issue!(
+                        issues,
+                        "device staging cannot resolve a choice address that depends on the random choice binding `$(symbols[slot])`",
+                    )
+                end
             end
             _device_check_staging_refs!(issues, step.body, taint, symbols)
         elseif step isa BackendChoicePlanStep
@@ -1779,6 +1913,13 @@ function _lower_device_plan(model::TeaModel, resolved::ResolvedSignaturePlan, ::
         return issues, nothing
     end
 
+    # a marginalize suffix that rebinds a pre-existing slot leaks across the
+    # sequential enumeration branches (no per-branch restore on device); reject it
+    _device_check_marginalize_rebinds!(issues, out, BitSet(environment_layout.argument_slots), symbols)
+    if !isempty(issues)
+        return issues, nothing
+    end
+
     slot_count = length(environment_layout.symbols)
     steps = tuple(out...)
     plan = DeviceExecutionPlan{T}(steps, slot_count, loop_counter[])
@@ -1792,6 +1933,62 @@ Reports whether `model` can be lowered to the device (KernelAbstractions) logjoi
 path. `issues` is empty iff `supported` is `true`; otherwise each entry is a precise
 explanation of what is not representable.
 """
+# Slots a marginalize suffix (recursively) MATERIALIZES: choice/deterministic
+# bindings, nested-marginalize bindings, loop iterators. Used to reject a suffix
+# that rebinds a pre-existing slot (see below).
+function _device_marg_body_writes!(w::BitSet, steps)
+    for step in steps
+        if step isa DeviceLoopStep
+            step.iterator_slot > Int32(0) && push!(w, Int(step.iterator_slot))
+            _device_marg_body_writes!(w, step.body)
+        elseif step isa DeviceMarginalizeChoiceStep
+            step.binding_slot > Int32(0) && push!(w, Int(step.binding_slot))
+            _device_marg_body_writes!(w, step.body)
+        elseif _device_step_writes_binding(step) && step.binding_slot > Int32(0)
+            push!(w, Int(step.binding_slot))
+        end
+    end
+    return nothing
+end
+
+# ENV DISCIPLINE (issue #67 point 3): the CPU path snapshots/restores the
+# environment per enumeration branch. The device scores the branches sequentially
+# in one kernel with NO restore, reusing the `slots` matrix. That is correct
+# whenever every slot the suffix reads is either pre-existing (never written by the
+# suffix, so stable) or written-before-read WITHIN the branch (fresh each branch by
+# program order). The one unsound shape is a suffix that REBINDS a slot already
+# materialized before the marginalize step (a leaked write would carry into the
+# next branch -- e.g. `s = 1.0; z ~ bernoulli(..; marginalize); s = s + 1.0`), so
+# match the CPU honest-rejection precedent and reject it here rather than restore.
+function _device_check_marginalize_rebinds!(issues::Vector{String}, steps, before::BitSet, symbols)
+    accumulated = copy(before)
+    for step in steps
+        if step isa DeviceMarginalizeChoiceStep
+            body_writes = BitSet()
+            _device_marg_body_writes!(body_writes, step.body)
+            for slot in intersect(body_writes, accumulated)
+                _device_issue!(
+                    issues,
+                    "device lowering does not support a marginalize=:enumerate suffix that rebinds the pre-existing binding `$(symbols[slot])` (slot $slot); the per-branch write would leak across enumeration branches",
+                )
+            end
+            inner_before = copy(accumulated)
+            step.binding_slot > Int32(0) && push!(inner_before, Int(step.binding_slot))
+            _device_check_marginalize_rebinds!(issues, step.body, inner_before, symbols)
+        elseif step isa DeviceLoopStep
+            inner_before = copy(accumulated)
+            step.iterator_slot > Int32(0) && push!(inner_before, Int(step.iterator_slot))
+            _device_check_marginalize_rebinds!(issues, step.body, inner_before, symbols)
+        end
+        if step isa DeviceLoopStep
+            step.iterator_slot > Int32(0) && push!(accumulated, Int(step.iterator_slot))
+        elseif _device_step_writes_binding(step) && step.binding_slot > Int32(0)
+            push!(accumulated, Int(step.binding_slot))
+        end
+    end
+    return nothing
+end
+
 function _device_steps_rebind_argument(steps, argument_slots::BitSet)
     for step in steps
         if _device_step_writes_binding(step)

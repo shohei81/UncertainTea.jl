@@ -771,6 +771,67 @@ end
     @test divrate < 0.05
 end
 
+# marginalize=:enumerate on Metal Float32 (issue #67): a discrete latent summed
+# out analytically via the in-kernel max-shifted log-sum-exp fold, which the device
+# path previously rejected. Checks logjoint + gradient parity against the Float64
+# CPU reference and a unimodal contamination posterior recovery. Standalone so a
+# `gpu_count_model` abort elsewhere does not mask it.
+@tea static function gpu_marginalize_model()
+    m1 ~ normal(-2.0, 1.0)
+    m2 ~ normal(2.0, 1.0)
+    z ~ bernoulli(0.3; marginalize=:enumerate)
+    {:y} ~ normal(z * m1 + (1 - z) * m2, 0.5)
+    return m1
+end
+
+@tea static function gpu_marginalize_recover_model()
+    mu ~ normal(0.0, 3.0)
+    z ~ bernoulli(0.1; marginalize=:enumerate)
+    {:y1} ~ normal(mu + z * 12.0, 0.8)
+    {:y2} ~ normal(mu + z * 12.0, 0.8)
+    {:y3} ~ normal(mu + z * 12.0, 0.8)
+    {:y4} ~ normal(mu + z * 12.0, 0.8)
+    return mu
+end
+
+@testset "device Metal marginalize=:enumerate smoke" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping marginalize smoke test."
+        @test true
+        return
+    end
+    backend = Metal.MetalBackend()
+
+    cm = choicemap((:y, 0.8))
+    params = [-1.5 -1.2; 1.7 2.1]
+    ref = batched_logjoint_unconstrained(gpu_marginalize_model, params, (), cm)
+    dev = device_batched_logjoint(gpu_marginalize_model, Float32.(params), (), cm; backend=backend, precision=Float32)
+    @test gpu_check_float32(dev, ref)
+    gref = batched_logjoint_gradient_unconstrained(gpu_marginalize_model, params, (), cm)
+    _, g = device_batched_logjoint_gradient(
+        gpu_marginalize_model, Float32.(params), (), cm; backend=backend, precision=Float32,
+    )
+    @test gpu_check_float32(vec(Float64.(g)), vec(gref))
+
+    # unimodal contamination posterior recovery on Metal Float32.
+    data = choicemap((:y1, 1.8), (:y2, 2.2), (:y3, 1.9), (:y4, 2.1))
+    res = batched_nuts(
+        gpu_marginalize_recover_model, (), data;
+        num_chains=64, num_samples=300, num_warmup=300,
+        tree_strategy=:masked, backend=backend, precision=Float32,
+        rng=Random.MersenneTwister(67),
+    )
+    pooled = hcat((c.constrained_samples for c in res.chains)...)
+    mean_mu = sum(pooled) / length(pooled)
+    divrate =
+        sum(sum(chain.divergent) for chain in res.chains) /
+        sum(length(chain.divergent) for chain in res.chains)
+    @test all(isfinite, pooled)
+    @test isapprox(mean_mu, 2.0; atol=0.3)
+    @test maximum(rhat(res)) < 1.05
+    @test divrate < 0.05
+end
+
 # issue #227: an observation-consuming step AFTER a tiled loop. The tiled gradient
 # splits the plan into prelude + per-tile body; the post-loop observed choice must
 # resume its observation cursor past the loop's full consumption, else it silently

@@ -42,12 +42,13 @@ end
     return p
 end
 
-# marginalize=:enumerate: backend-supported (issue #13) but still not device-lowerable.
-@tea static function devg_marginalize_model()
-    mu ~ normal(0.0, 1.0)
-    z ~ bernoulli(0.3; marginalize=:enumerate)
-    {:y} ~ normal(mu + z, 1.0)
-    return mu
+# backend-supported but device-UNSUPPORTED negative example. marginalize=:enumerate
+# became device-lowerable in issue #67 (and broadcast-normal in #134), so an
+# lkjcholesky latent above the device dimension cap is a genuinely-still-unsupported
+# case: the backend scores it, the device rejects on the compile-time cap.
+@tea static function devg_unsupported_model()
+    Omega ~ lkjcholesky(9, 2.0)
+    return Omega
 end
 
 # issue #12 group 1 mirrors of device_lowering_parity.jl.
@@ -431,7 +432,7 @@ end
 
 @testset "devg_unsupported_throws" begin
     err = try
-        device_batched_logjoint_gradient(devg_marginalize_model, reshape([0.1], 1, 1), ())
+        device_batched_logjoint_gradient(devg_unsupported_model, reshape([0.1], 1, 1), ())
         nothing
     catch e
         e

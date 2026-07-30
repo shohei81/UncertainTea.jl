@@ -470,6 +470,81 @@ end
     return (total, cur)
 end
 
+# ---- marginalize=:enumerate (issue #67) ----------------------------------------
+#
+# Score one branch per compile-time support value, threading a tuple of per-branch
+# full terms `log pmf(v) + suffix(v)`. Every branch re-scores the IDENTICAL suffix
+# from the SAME cursor (so all advance it equally by construction); the returned
+# cursor is one branch's -- they agree. The binding slot is written per branch so
+# the suffix reads the branch value.
+@inline function _device_marg_scan(
+    binding::Int32,
+    vf::Val,
+    probs,
+    support::Tuple{A},
+    body,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+) where {A}
+    Tt = eltype(slots)
+    v = Tt(first(support))
+    _device_store_binding!(slots, binding, v, col)
+    lp = _device_marg_logpmf(vf, probs, v)
+    suffix, cur = _device_score_steps(body, slots, params, observed, observed_int, tc, ls, col, cursor)
+    return ((lp + suffix,), cur)
+end
+@inline function _device_marg_scan(
+    binding::Int32,
+    vf::Val,
+    probs,
+    support::Tuple,
+    body,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    Tt = eltype(slots)
+    v = Tt(first(support))
+    _device_store_binding!(slots, binding, v, col)
+    lp = _device_marg_logpmf(vf, probs, v)
+    suffix, cur = _device_score_steps(body, slots, params, observed, observed_int, tc, ls, col, cursor)
+    rest, _ =
+        _device_marg_scan(binding, vf, probs, Base.tail(support), body, slots, params, observed, observed_int, tc, ls, col, cursor)
+    return ((lp + suffix, rest...), cur)
+end
+
+@inline function _device_score_step(
+    step::DeviceMarginalizeChoiceStep{F},
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+) where {F}
+    selector = _obsval(observed, cursor, col) # 0 marginalize; v conditions branch v
+    branch_cursor = cursor + Int32(1)
+    probs = _device_eval_args(step.probabilities, slots, col)
+    totals, cur = _device_marg_scan(
+        step.binding_slot, Val(F), probs, step.support, step.body, slots, params, observed, observed_int, tc, ls, col,
+        branch_cursor,
+    )
+    return (_device_marg_combine(totals, selector), cur)
+end
+
 # ---- recursive step-tuple walk -------------------------------------------------
 
 @inline _device_score_steps(::Tuple{}, slots, params, observed, observed_int, tc, ls, col, cursor) =

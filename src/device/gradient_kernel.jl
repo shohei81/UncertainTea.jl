@@ -710,6 +710,88 @@ end
     return (total, cur)
 end
 
+# ---- marginalize=:enumerate in duals (issue #67) -------------------------------
+#
+# The dual analog of the logjoint scan: duals flow through the branch bodies and
+# the log-sum-exp fold, reproducing the CPU responsibility-weighted gradient
+# `d logsumexp = sum_v r_v * d(log pmf_v + suffix_v)`. The branch value is a
+# ZERO-derivative constant dual (`TD(v)`), so a downstream suffix read of the
+# binding picks up a discrete branch constant, matching the CPU cleared
+# slot-gradient plane. Impossible/zero-mass branches are excluded by their FULL
+# term inside `_device_marg_combine` (the #62 lesson) so a degenerate branch
+# derivative cannot contaminate the marginal gradient.
+@inline function _device_marg_grad_scan(
+    binding::Int32,
+    vf::Val,
+    probs,
+    support::Tuple{A},
+    body,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+) where {A}
+    TD = eltype(slots)
+    v = TD(first(support))
+    _device_grad_store_binding!(slots, binding, v, pidx, b)
+    lp = _device_marg_logpmf(vf, probs, v)
+    suffix, cur = _device_grad_score_steps(body, slots, params, observed, observed_int, tc, ls, pidx, b, cursor)
+    return ((lp + suffix,), cur)
+end
+@inline function _device_marg_grad_scan(
+    binding::Int32,
+    vf::Val,
+    probs,
+    support::Tuple,
+    body,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    TD = eltype(slots)
+    v = TD(first(support))
+    _device_grad_store_binding!(slots, binding, v, pidx, b)
+    lp = _device_marg_logpmf(vf, probs, v)
+    suffix, cur = _device_grad_score_steps(body, slots, params, observed, observed_int, tc, ls, pidx, b, cursor)
+    rest, _ = _device_marg_grad_scan(
+        binding, vf, probs, Base.tail(support), body, slots, params, observed, observed_int, tc, ls, pidx, b, cursor,
+    )
+    return ((lp + suffix, rest...), cur)
+end
+
+@inline function _device_grad_score_step(
+    step::DeviceMarginalizeChoiceStep{F},
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+) where {F}
+    selector = _obsval(observed, cursor, b)
+    branch_cursor = cursor + Int32(1)
+    probs = _device_grad_eval_args(step.probabilities, slots, pidx, b)
+    totals, cur = _device_marg_grad_scan(
+        step.binding_slot, Val(F), probs, step.support, step.body, slots, params, observed, observed_int, tc, ls, pidx, b,
+        branch_cursor,
+    )
+    return (_device_marg_combine(totals, selector), cur)
+end
+
 # ---- recursive dual step-tuple walk --------------------------------------------
 
 @inline _device_grad_score_steps(::Tuple{}, slots, params, observed, observed_int, tc, ls, pidx, b, cursor) =
