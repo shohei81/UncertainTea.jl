@@ -77,3 +77,102 @@ Not ported (BlackJAX extras outside increment-2 scope): the opt-in `mass_matrix_
 
 - NUTS remains the CPU/reference default; ChEES is additive.
 - No change to existing `batched_hmc` / `batched_nuts` behavior or RNG order.
+
+## MEADS (issue #233) — the self-tuning many-chain companion
+
+`batched_meads` (`src/inference/api_batched_meads.jl`) is the second half of the
+#161 device-native pair: MEADS (Maximum-Eigenvalue Adaptation of Damping and
+Step-size; Hoffman & Sountsov, "Tuning-Free Generalized Hamiltonian Monte Carlo",
+AISTATS 2022). Where ChEES adapts a fixed-length HMC's trajectory length during a
+warmup phase, MEADS is a **generalized-HMC ensemble sampler** with **no warmup /
+dual-averaging phase at all**: every chain takes exactly ONE leapfrog step per
+iteration with a partially refreshed persistent momentum and a
+Metropolis-with-persistent-slice accept, and the step size, damping, slice drift,
+and diagonal preconditioner are recomputed EVERY iteration from cross-chain
+ensemble statistics. Every lane does identical fixed work each step (no U-turn
+recursion, no per-leaf sync), so it is the sampler whose structure matches the
+device backend best.
+
+### Update rule (paper Algorithm 1)
+
+Persistent-MH generalized HMC on state `(θ, m, u)`:
+
+- Partial momentum refresh (whitened, `m ~ N(0,I)`): `m̃ = √(1-α)·m + √α·ξ`, `ξ ~ N(0,I)`.
+- Persistent-slice drift: `ũ = ((u + 1 + δ) mod 2) − 1`, keeping `u ∈ [-1, 1)`.
+- One leapfrog step `θ', m' = leapfrog(θ, m̃; ε_d = ε·σ_d)`.
+- Accept iff `|ũ| ≤ p(θ')N(m';0,I) / (p(θ)N(m̃;0,I))`, i.e. `log|ũ| ≤ −ΔH`.
+  - Accept: keep `(θ', m', ũ/ratio)`.
+  - Reject: keep `(θ, −m̃, ũ)` (negate the refreshed momentum; the persistent slice
+    variable makes consecutive accept decisions correlated, avoiding GHMC's
+    "gauntlet of rejections").
+
+The persistent momentum is stored in the WHITENED (`N(0,I)`) space and carried
+across iterations even as the per-fold preconditioner changes. The paper's
+per-dimension step `ε_d = ε·σ_d` with unit-variance momentum is realized on the
+existing original-coordinate `batched_leapfrog_trajectory!` (per-chain overload)
+by using a scalar step `ε` and a diagonal inverse mass `M⁻¹ = σ²`: original-coords
+leapfrog with `M⁻¹_d = σ_d²` and step `ε` is algebraically identical to the paper's
+whitened per-dimension integrator, and `_batched_hamiltonian!`/
+`_sample_batched_momentum!` then give the whitened `N(0,I)` kinetic energy for free.
+On accept the leapfrog's (negated) endpoint momentum is converted back to the unit
+space via `m = −m'·σ`.
+
+### Fold adaptation (paper Algorithms 2, 3)
+
+Chains are split into `num_folds` (default `K=4`) contiguous folds; fold `k`'s
+parameters are computed from its NEIGHBOR fold `(k-1) mod K`'s pre-update states,
+and one fold `skip = ((t-1) mod K) + 1` is NOT updated each iteration (rotating),
+which keeps the complementary-folds dependency structure a DAG (paper Figure 1/2).
+From the neighbor fold's `N` states and gradients (per parameter `d`):
+
+- **Diagonal preconditioner** (`§4.1`): `μ̂_d, σ̂_d` = mean, std over the fold's
+  states; inverse mass `M⁻¹_d = σ̂_d²`.
+- **Whitening**: `θ̄_{n,d} = (θ_{n,d}−μ̂_d)/σ̂_d`, `ḡ_{n,d} = g_{n,d}·σ̂_d`.
+- **Largest-eigenvalue estimator** (`Algorithm 2`, `Eq. 7`): for columns `x_n ∈ ℝ^D`
+  with Gram `S[n,n']=x_n·x_n'`, the trace ratio `λ̄² / λ̄` with
+  `λ̄ = tr(S)/N ≈ tr(Σ)` and `λ̄² = (1/(N(N-1)))Σ_{n≠n'} S[n,n']² ≈ tr(Σ²)`
+  approximates `λmax` from noisy low-rank estimates without second derivatives
+  (`_meads_max_eig`).
+- **Step size** (`§4.2`, `Algorithm 3` line 8): `ε = min{1, 0.5/√max_eig(ḡ)}` — the
+  leapfrog-stability bound `ε ≤ 2/√λmax(−H̄)` with the paper's `½` margin, using the
+  gradient outer product `−Ĥ = (1/N)Σ ḡḡ'` (the expected negative Hessian at
+  stationarity, `Eq. 4`).
+- **Damping / slice drift** (`§4.3`, `Algorithm 3` lines 9-10):
+  `γ = max{1/(t·ε), 1/√max_eig(θ̄)}` (the `1/(t·ε)` floor forces more forgetting
+  early, before the ensemble covariance is trustworthy), `α = 1 − e^{−2εγ}`,
+  `δ = α/2`.
+
+All reductions are host-side `O(P·C)` column reductions (`_meads_fold_parameters!`),
+matching the ChEES-warmup pattern; **moving them on-device is a deliberate
+follow-up** (the #220 pattern), so `batched_meads` currently rejects a `backend=`
+argument. The skipped fold's chains are recorded as trivially-kept (identity)
+transitions so they don't distort divergence/acceptance diagnostics.
+
+### Deviations / simplifications (with justification)
+
+- **CPU only for now.** The device fold reductions are the follow-up; the host path
+  is the validated deliverable. `backend=`/`precision=` throw a clear error.
+- **Random fold reshuffle deferred.** The paper reshuffles states into new folds
+  every `K` iterations to speed information flow; the fixed contiguous partition +
+  rotating skip is already a correct K-fold ECA (the reshuffle is a mixing
+  nicety, not a correctness requirement). Deferred.
+- **No nested-R̂ diagnostic.** A paper nice-to-have, explicitly a non-goal in #233.
+
+### Validation (`test/uncertaintea/core/batched_meads.jl`)
+
+- Conjugate gauss `N(0.15, 0.5)`: mean/sd within tolerance, `R̂ < 1.05`, min-ESS ≫
+  the matched-budget ChEES/NUTS floor.
+- Ill-conditioned diagonal Gaussian (marginal scales `0.1 … 10`): all three
+  marginal sds recovered within `12%`, means `≈ 0`, `R̂ < 1.05`, **0 divergences**,
+  and the preconditioner tracks the widest marginal.
+- Self-tuning: the adaptation runs on EVERY iteration (one trace entry per total
+  iteration, warmup + sampling — there is no separate warmup phase), and the
+  adapted step/damping/mass stay finite and settle (the `1/(t·ε)` damping floor
+  decays with `t`).
+- Determinism under a fixed seed; SBC (`sampler=:meads`) rank-uniformity (no
+  warnings). `sbc(...; sampler=:meads)` mirrors the `:chees` branch.
+
+## Non-goals / invariants (MEADS)
+
+- NUTS remains the reference default; `batched_meads` is additive and does NOT
+  change `batched_nuts` / `batched_hmc` / `batched_chees` behavior or RNG order.
