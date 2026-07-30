@@ -111,6 +111,26 @@ run_metal() {
     done
 }
 
+run_persistent() {
+    # Persistent per-chain tree kernel (issue #154): one device kernel launch per NUTS
+    # iteration builds each chain's whole tree, GPU-native. Reported as its own
+    # `uncertaintea-batched-metal-persistent` label alongside the `:masked`
+    # `batched-metal` rows. The CPU()-Float64 leg is the debuggable correctness-gate
+    # reference (the Metal leg is Float32, statistically -- not bitwise -- equivalent).
+    # Scoped to gauss (the many-chain story model); observation-tiling the in-kernel
+    # gradient for heavy-per-gradient models like logistic_large is increment 4.
+    "${JL[@]}" -e 'using Pkg; Pkg.instantiate()'
+    echo "=== gauss: persistent-NUTS Metal scaling sweep ==="
+    for k in "${SCALE_CHAINS[@]}"; do
+        "${JL[@]}" julia/run.jl --model gauss --variant batched-metal-persistent \
+            --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
+            --seed $SCALE_SEED --reps "$(scale_reps "$k")"
+    done
+    echo "=== gauss: persistent-NUTS CPU() Float64 correctness-gate leg ==="
+    "${JL[@]}" julia/run.jl --model gauss --variant batched-cpu-persistent \
+        --chains $CHAINS --samples $SAMPLES --warmup $WARMUP --seed $SEED --reps $REPS
+}
+
 run_chees() {
     # ChEES-HMC leg (issue #161): a different sampler (fixed-length jittered HMC
     # with cross-chain trajectory-length adaptation), reported as its own
@@ -174,8 +194,9 @@ case "${1:-}" in
     cpu) run_cpu ;;
     metal) run_metal ;;
     chees) run_chees ;;
+    persistent) run_persistent ;;
     pinned) run_pinned ;;
     pathfinder) run_pathfinder ;;
     analyze) "${PY[@]}" python/analyze.py ;;
-    *) echo "usage: $0 {cpu|metal|chees|pinned|pathfinder|analyze}" >&2; exit 1 ;;
+    *) echo "usage: $0 {cpu|metal|chees|persistent|pinned|pathfinder|analyze}" >&2; exit 1 ;;
 esac

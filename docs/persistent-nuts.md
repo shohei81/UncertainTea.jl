@@ -183,3 +183,16 @@ Promote the kernel to a general `tree_strategy` on the device path, then bench t
 4096-chain Gaussian Metal leg — target ~2–5 s total versus today's ~228 s (and
 NumPyro-CPU's ~171 s), the point at which "GPU-native" is demonstrably true at
 every chain count ≥ 64. Validate across 64–16384 chains with the #121 gates.
+
+**Bench integration (done).** The cross-PPL harness gained a `batched-metal-persistent`
+variant (Metal Float32) plus a `batched-cpu-persistent` Float64 correctness-gate leg
+(`bench/crossppl/julia/run.jl`; `./run_all.sh persistent` runs the gauss sweep). Both
+clear the #121 gate (rank-normalized split R-hat < 1.01, mean/quantile within combined
+MCSEs) with 0 divergences. Measured on the gauss Metal sweep (min-bulk ESS/s; local
+`reps=1`): persistent **2,583** @64 and **17,017** @512 chains vs the `:masked`
+`batched-metal` rows (~1,261–2,411 @64, ~6,195–9,648 @512) — **~2× ESS/s and ~3–4×
+faster wall-clock** in the canonical harness. gauss is a trivial target, so this is a
+best case; the full `reps=3` 64–16384 sweep and the summary refresh are a maintainer
+step. Remaining increment-3/4 work: obs-tiling the in-kernel gradient for
+heavy-per-gradient models (e.g. `logistic_large`), threadgroup-per-chain for the
+few-chains/large-N regime, and on-device SBC.
