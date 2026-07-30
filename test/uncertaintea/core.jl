@@ -81,6 +81,7 @@ core_test_files = [
     ("nuts_uturn_turning.jl", "inference"),
     ("mcmc_diagnostics_ess_mcse.jl", "inference"),
     ("predictive_sampling_smc_resampling.jl", "inference"),
+    ("nested_sampling.jl", "inference"),
     ("waic_psis_loo.jl", "inference"),
     ("pointwise_marginal_enum.jl", "inference"),
     ("map_laplace_approximation.jl", "inference"),
