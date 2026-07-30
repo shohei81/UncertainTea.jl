@@ -475,6 +475,208 @@ function _score_backend_step_and_gradient!(
     return totals, gradients
 end
 
+# --- diagonal / dense multivariate Student-t gradient -------------------------
+
+# The multivariate-t density couples all d dimensions through the single
+# quadratic q, so the gradient is a q-dependent scalar reweighting r =
+# (nu+d)/(nu+q) of the mvnormal partials, plus a degrees-of-freedom channel.
+# nu's derivative (digamma normalizer + the log1p tail term) chains through the
+# nu expression, mirroring lkjcholesky's eta channel.
+function _mvstudentt_nu_derivative(nu, d::Int, q)
+    half = (nu + d) / 2
+    return oftype(q, 0.5) * digamma(half) - oftype(q, 0.5) * digamma(nu / 2) - d / (2 * nu) -
+           oftype(q, 0.5) * log1p(q / nu) + (nu + d) * q / (2 * nu * (nu + q))
+end
+
+function _accumulate_mvstudentt_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    d::Int,
+    value_values::AbstractVector{<:AbstractVector},
+    value_gradients::AbstractVector{<:AbstractMatrix},
+    mu_values::AbstractVector{<:AbstractVector},
+    mu_gradients::AbstractVector{<:AbstractMatrix},
+    sigma_values::AbstractVector{<:AbstractVector},
+    sigma_gradients::AbstractVector{<:AbstractMatrix},
+    nu_values::AbstractVector,
+    nu_gradients::AbstractMatrix,
+) where {T<:AbstractFloat}
+    z = Vector{T}(undef, d)
+    inv_sigma = Vector{T}(undef, d)
+    for batch_index in eachindex(totals)
+        nu = nu_values[batch_index]
+        quadratic = zero(T)
+        log_det = zero(T)
+        for c = 1:d
+            s = sigma_values[c][batch_index]
+            zc = (value_values[c][batch_index] - mu_values[c][batch_index]) / s
+            z[c] = zc
+            inv_sigma[c] = one(T) / s
+            quadratic += zc * zc
+            log_det += log(s)
+        end
+        totals[batch_index] += _backend_mvstudentt_density(nu, d, log_det, quadratic)
+        r = (nu + d) / (nu + quadratic)
+        dnu = _mvstudentt_nu_derivative(nu, d, quadratic)
+        for parameter_row in axes(gradients, 1)
+            gradients[parameter_row, batch_index] += dnu * nu_gradients[parameter_row, batch_index]
+        end
+        for c = 1:d
+            zc = z[c]
+            is = inv_sigma[c]
+            dvalue = -r * zc * is
+            dmu = r * zc * is
+            dsigma = (r * zc * zc - one(T)) * is
+            cvg = value_gradients[c]
+            cmg = mu_gradients[c]
+            csg = sigma_gradients[c]
+            for parameter_row in axes(gradients, 1)
+                gradients[parameter_row, batch_index] +=
+                    dvalue * cvg[parameter_row, batch_index] +
+                    dmu * cmg[parameter_row, batch_index] +
+                    dsigma * csg[parameter_row, batch_index]
+            end
+        end
+    end
+    return totals, gradients
+end
+
+function _accumulate_mvstudenttdense_gradient!(
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    d::Int,
+    value_values::AbstractVector{<:AbstractVector},
+    value_gradients::AbstractVector{<:AbstractMatrix},
+    mu_values::AbstractVector{<:AbstractVector},
+    mu_gradients::AbstractVector{<:AbstractMatrix},
+    scale_storage::AbstractVector,
+    nu_values::AbstractVector,
+    nu_gradients::AbstractMatrix,
+) where {T<:AbstractFloat}
+    z = Vector{T}(undef, d)
+    w = Vector{T}(undef, d)
+    for batch_index in eachindex(totals)
+        Lmat = _backend_mvnormaldense_scale_matrix(scale_storage[batch_index], d)
+        mu = ntuple(index -> mu_values[index][batch_index], d)
+        x = ntuple(index -> value_values[index][batch_index], d)
+        nu = nu_values[batch_index]
+        quadratic = zero(T)
+        log_det = zero(T)
+        for row = 1:d
+            residual = x[row] - mu[row]
+            for col = 1:(row-1)
+                residual -= Lmat[row, col] * z[col]
+            end
+            z[row] = residual / Lmat[row, row]
+            quadratic += z[row] * z[row]
+            log_det += log(Lmat[row, row])
+        end
+        totals[batch_index] += _backend_mvstudentt_density(nu, d, log_det, quadratic)
+        # back substitution Lᵀ w = z
+        for row = d:-1:1
+            accumulator = z[row]
+            for col = (row+1):d
+                accumulator -= Lmat[col, row] * w[col]
+            end
+            w[row] = accumulator / Lmat[row, row]
+        end
+        r = (nu + d) / (nu + quadratic)
+        dnu = _mvstudentt_nu_derivative(nu, d, quadratic)
+        for parameter_row in axes(gradients, 1)
+            gradients[parameter_row, batch_index] += dnu * nu_gradients[parameter_row, batch_index]
+        end
+        for c = 1:d
+            dmu = r * w[c]
+            dvalue = -r * w[c]
+            cmg = mu_gradients[c]
+            cvg = value_gradients[c]
+            for parameter_row in axes(gradients, 1)
+                gradients[parameter_row, batch_index] +=
+                    dmu * cmg[parameter_row, batch_index] + dvalue * cvg[parameter_row, batch_index]
+            end
+        end
+    end
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendMvStudentTChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    d = step.value_length
+    choice_values = [_batched_numeric_scratch!(env, index) for index = 1:d]
+    choice_gradients = [_batched_backend_gradient_scratch!(cache, index) for index = 1:d]
+    mu_values = [_batched_numeric_scratch!(env, d + index) for index = 1:d]
+    mu_gradients = [_batched_backend_gradient_scratch!(cache, d + index) for index = 1:d]
+    sigma_values = [_batched_numeric_scratch!(env, 2 * d + index) for index = 1:d]
+    sigma_gradients = [_batched_backend_gradient_scratch!(cache, 2 * d + index) for index = 1:d]
+    nu_values = _batched_numeric_scratch!(env, 3 * d + 1)
+    nu_gradients = _batched_backend_gradient_scratch!(cache, 3 * d + 1)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+
+    _batched_choice_vector_values!(choice_values, step.value_index, d, params, constraints, address_parts)
+    _eval_backend_numeric_expr_and_gradient!(nu_values, nu_gradients, cache, env, step.nu, 3 * d + 2)
+    for component_index = 1:d
+        _fill_choice_vector_gradient!(choice_gradients[component_index], step.value_index, component_index, cache.seed_rows)
+        _eval_backend_numeric_expr_and_gradient!(
+            mu_values[component_index], mu_gradients[component_index], cache, env, step.mu[component_index], 3 * d + 3,
+        )
+        _eval_backend_numeric_expr_and_gradient!(
+            sigma_values[component_index], sigma_gradients[component_index], cache, env, step.sigma[component_index], 3 * d + 4,
+        )
+    end
+
+    _accumulate_mvstudentt_gradient!(
+        totals, gradients, d, choice_values, choice_gradients, mu_values, mu_gradients,
+        sigma_values, sigma_gradients, nu_values, nu_gradients,
+    )
+    isnothing(step.binding_slot) ||
+        _assign_backend_choice_vector_value!(env, cache.slot_gradients, step.binding_slot, choice_values, choice_gradients)
+    return totals, gradients
+end
+
+function _score_backend_step_and_gradient!(
+    step::BackendMvStudentTDenseChoicePlanStep,
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {T<:AbstractFloat}
+    d = step.value_length
+    choice_values = [_batched_numeric_scratch!(env, index) for index = 1:d]
+    choice_gradients = [_batched_backend_gradient_scratch!(cache, index) for index = 1:d]
+    mu_values = [_batched_numeric_scratch!(env, d + index) for index = 1:d]
+    mu_gradients = [_batched_backend_gradient_scratch!(cache, d + index) for index = 1:d]
+    nu_values = _batched_numeric_scratch!(env, 2 * d + 1)
+    nu_gradients = _batched_backend_gradient_scratch!(cache, 2 * d + 1)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+
+    _batched_choice_vector_values!(choice_values, step.value_index, d, params, constraints, address_parts)
+    _eval_backend_numeric_expr_and_gradient!(nu_values, nu_gradients, cache, env, step.nu, 2 * d + 2)
+    for component_index = 1:d
+        _fill_choice_vector_gradient!(choice_gradients[component_index], step.value_index, component_index, cache.seed_rows)
+        _eval_backend_numeric_expr_and_gradient!(
+            mu_values[component_index], mu_gradients[component_index], cache, env, step.mu[component_index], 2 * d + 3,
+        )
+    end
+    env.assigned[step.scale_tril.slot] ||
+        throw(BatchedBackendFallback("mvstudenttdense scale_tril slot $(step.scale_tril.slot) is not assigned"))
+    _accumulate_mvstudenttdense_gradient!(
+        totals, gradients, d, choice_values, choice_gradients, mu_values, mu_gradients,
+        env.generic_values[step.scale_tril.slot], nu_values, nu_gradients,
+    )
+    isnothing(step.binding_slot) ||
+        _assign_backend_choice_vector_value!(env, cache.slot_gradients, step.binding_slot, choice_values, choice_gradients)
+    return totals, gradients
+end
+
 # --- mixture-of-normals gradient ----------------------------------------------
 
 function _accumulate_mixture_normal_gradient!(

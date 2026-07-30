@@ -286,6 +286,81 @@ function logabsdetjac(transform::CholeskyCorrTransform, value::AbstractVector)
     return _to_constrained_cholesky_corr!(destination, transform, value)
 end
 
+# log-Cholesky covariance transform. The packed layout is column-major with the
+# diagonal included; the diagonal packed coordinates carry log(L[i,i]) in the
+# unconstrained space (exp on constrain) while the below-diagonal coordinates are
+# passed through unchanged. The log-abs-det of unconstrained -> L is the sum of
+# the diagonal unconstrained coordinates (= sum_i log(L[i,i])).
+function _to_constrained_cholesky_cov!(
+    destination::AbstractVector,
+    transform::CholeskyCovTransform,
+    values::AbstractVector,
+)
+    d = transform.size
+    expected = (d * (d + 1)) ÷ 2
+    length(values) == expected ||
+        throw(DimensionMismatch("expected $expected unconstrained cholesky covariance values, got $(length(values))"))
+    length(destination) == expected ||
+        throw(DimensionMismatch("expected packed cholesky covariance destination of length $expected, got $(length(destination))"))
+    logabsdet = zero(float(values[firstindex(values)]))
+    for col = 1:d, row = col:d
+        position = _packed_lower_index(d, row, col)
+        unconstrained = values[position]
+        if row == col
+            destination[position] = exp(unconstrained)
+            logabsdet += unconstrained
+        else
+            destination[position] = unconstrained
+        end
+    end
+    return logabsdet
+end
+
+function _to_unconstrained_cholesky_cov!(
+    destination::AbstractVector,
+    transform::CholeskyCovTransform,
+    values::AbstractVector,
+)
+    d = transform.size
+    expected = (d * (d + 1)) ÷ 2
+    length(values) == expected ||
+        throw(DimensionMismatch("expected packed cholesky covariance values of length $expected, got $(length(values))"))
+    length(destination) == expected ||
+        throw(
+            DimensionMismatch(
+                "expected cholesky covariance unconstrained destination of length $expected, got $(length(destination))",
+            ),
+        )
+    for col = 1:d, row = col:d
+        position = _packed_lower_index(d, row, col)
+        if row == col
+            diagonal = values[position]
+            diagonal > zero(diagonal) ||
+                throw(ArgumentError("cholesky covariance values require strictly positive diagonal entries"))
+            destination[position] = log(diagonal)
+        else
+            destination[position] = values[position]
+        end
+    end
+    return destination
+end
+
+function to_constrained(transform::CholeskyCovTransform, value::AbstractVector)
+    destination = similar(collect(value), (transform.size * (transform.size + 1)) ÷ 2)
+    _to_constrained_cholesky_cov!(destination, transform, value)
+    return destination
+end
+
+function to_unconstrained(transform::CholeskyCovTransform, value::AbstractVector)
+    destination = similar(collect(value), (transform.size * (transform.size + 1)) ÷ 2)
+    return _to_unconstrained_cholesky_cov!(destination, transform, value)
+end
+
+function logabsdetjac(transform::CholeskyCovTransform, value::AbstractVector)
+    destination = similar(collect(value), (transform.size * (transform.size + 1)) ÷ 2)
+    return _to_constrained_cholesky_cov!(destination, transform, value)
+end
+
 function _slot_parameter_values(params::AbstractVector, slot::ParameterSlotSpec)
     indices = parametervalueindices(slot)
     if slot.value_length == 1
@@ -372,6 +447,10 @@ function _transform_slot_to_constrained!(
         unconstrained = view(params, parameterindices(slot))
         constrained = view(destination, parametervalueindices(slot))
         return _to_constrained_cholesky_corr!(constrained, slot.transform, unconstrained)
+    elseif slot.transform isa CholeskyCovTransform
+        unconstrained = view(params, parameterindices(slot))
+        constrained = view(destination, parametervalueindices(slot))
+        return _to_constrained_cholesky_cov!(constrained, slot.transform, unconstrained)
     end
 
     throw(ArgumentError("unsupported parameter transform $(typeof(slot.transform))"))
@@ -417,6 +496,10 @@ function _transform_slot_to_unconstrained!(
         unconstrained = view(destination, parameterindices(slot))
         constrained = view(params, parametervalueindices(slot))
         _to_unconstrained_cholesky_corr!(unconstrained, slot.transform, constrained)
+    elseif slot.transform isa CholeskyCovTransform
+        unconstrained = view(destination, parameterindices(slot))
+        constrained = view(params, parametervalueindices(slot))
+        _to_unconstrained_cholesky_cov!(unconstrained, slot.transform, constrained)
     else
         throw(ArgumentError("unsupported parameter transform $(typeof(slot.transform))"))
     end

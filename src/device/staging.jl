@@ -264,6 +264,46 @@ function _stage_step!(
     return nothing
 end
 
+# mvstudenttdense stages exactly like mvnormaldense: the constant scale_tril
+# packs its column-major lower triangle into d(d+1)/2 rows FIRST, then an
+# observed value stages d more.
+function _stage_step!(
+    rows,
+    step::BackendMvStudentTDenseChoicePlanStep,
+    env,
+    constraints,
+    dummy_params,
+    trip_counts,
+    loop_starts,
+    loop_counter,
+    ::Type{T},
+) where {T}
+    d = step.value_length
+    env.assigned[step.scale_tril.slot] || throw(
+        ArgumentError(
+            "device staging requires the mvstudenttdense scale_tril binding to be resolvable on the host (a model argument or captured constant)",
+        ),
+    )
+    storage = env.generic_values[step.scale_tril.slot]
+    batch_size = size(dummy_params, 2)
+    for col = 1:d, row = col:d
+        packed_row = Vector{T}(undef, batch_size)
+        for batch_index = 1:batch_size
+            scale = _backend_mvnormaldense_scale_matrix(storage[batch_index], d)
+            packed_row[batch_index] = T(scale[row, col])
+        end
+        push!(rows, packed_row)
+    end
+    isnothing(step.parameter_slot) || return nothing # latent: no observed value rows
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    block = Matrix{T}(undef, d, batch_size)
+    _batched_choice_vector_values!(block, nothing, d, dummy_params, constraints, address_parts)
+    for component_index = 1:d
+        push!(rows, block[component_index, :])
+    end
+    return nothing
+end
+
 # bernoullilogit whose eta is the fused GLM linear predictor (issues #135/#150):
 # the covariate column `X[:, index]` is per-observation CONSTANT data (like
 # observed values), so it rides the observation buffer with addresses erased.
@@ -368,7 +408,12 @@ end
 # d(d+1)/2 rows).
 function _stage_step!(
     rows,
-    step::Union{BackendMvNormalChoicePlanStep,BackendDirichletChoicePlanStep,BackendLKJCholeskyChoicePlanStep},
+    step::Union{
+        BackendMvNormalChoicePlanStep,
+        BackendMvStudentTChoicePlanStep,
+        BackendDirichletChoicePlanStep,
+        BackendLKJCholeskyChoicePlanStep,
+    },
     env,
     constraints,
     dummy_params,

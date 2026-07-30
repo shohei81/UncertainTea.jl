@@ -34,6 +34,7 @@ core_test_files = [
     ("dist_truncated.jl", "dist"),
     ("dist_mixture.jl", "dist"),
     ("dist_mvnormal_dense.jl", "dist"),
+    ("dist_multivariate.jl", "dist"),
     ("dist_lkj_cholesky.jl", "dist"),
     ("transform_logit_saturation.jl", "dist"),
     ("dist_integer_params.jl", "dist"),

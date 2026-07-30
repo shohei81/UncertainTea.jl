@@ -365,6 +365,10 @@ function _backend_lower_step(
     step.rhs.family === :mixture && return _backend_lower_mixture_choice_step(model, layout, parameter_layout, step, issues)
     step.rhs.family === :mvnormaldense &&
         return _backend_lower_mvnormaldense_choice_step(model, layout, parameter_layout, step, issues)
+    step.rhs.family === :mvstudentt &&
+        return _backend_lower_mvstudentt_choice_step(model, layout, parameter_layout, step, issues)
+    step.rhs.family === :mvstudenttdense &&
+        return _backend_lower_mvstudenttdense_choice_step(model, layout, parameter_layout, step, issues)
     step.rhs.family === :bernoullilogit &&
         return _backend_lower_bernoullilogit_choice_step(model, layout, parameter_layout, step, issues)
 
@@ -943,6 +947,8 @@ function _backend_loop_observed_choice(step::BackendLoopPlanStep)
     choice isa BackendMvNormalChoicePlanStep && return nothing
     choice isa BackendMarginalizeChoicePlanStep && return nothing
     choice isa BackendMvNormalDenseChoicePlanStep && return nothing
+    choice isa BackendMvStudentTChoicePlanStep && return nothing
+    choice isa BackendMvStudentTDenseChoicePlanStep && return nothing
     choice isa BackendLKJCholeskyChoicePlanStep && return nothing
     choice isa BackendTruncatedNormalChoicePlanStep && return nothing
     choice isa BackendTruncatedStudentTChoicePlanStep && return nothing

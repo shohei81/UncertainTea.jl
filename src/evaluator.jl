@@ -276,6 +276,20 @@ function _rewrite_compiled_call(expr::CompiledCallExpr)
     return expr
 end
 
+# Build a dense `nrows` x `ncols` matrix from row-major elements. `map(identity,
+# ...)` narrows a `Vector{Any}` (e.g. elements carrying ForwardDiff Duals) to the
+# promoted element type so downstream arithmetic stays differentiable.
+function _build_matrix(nrows::Int, ncols::Int, elements...)
+    narrowed = map(identity, collect(elements))
+    result = Matrix{eltype(narrowed)}(undef, nrows, ncols)
+    index = 1
+    for row = 1:nrows, col = 1:ncols
+        result[row, col] = narrowed[index]
+        index += 1
+    end
+    return result
+end
+
 function _compile_plan_expr(@nospecialize(model::TeaModel), layout::EnvironmentLayout, expr)
     if expr isa QuoteNode
         return CompiledLiteralExpr(expr.value)
@@ -309,6 +323,25 @@ function _compile_plan_expr(@nospecialize(model::TeaModel), layout::EnvironmentL
         elseif expr.head == :vect
             arguments = tuple((_compile_plan_expr(model, layout, arg) for arg in expr.args)...)
             return CompiledVectorExpr(arguments)
+        elseif expr.head == :vcat || expr.head == :hcat
+            # matrix / row-vector literal, e.g. `[a b; c d]` (a `:vcat` of `:row`s)
+            # or `[a b]` (an `:hcat`). Reconstruct row-major into a dense matrix so
+            # `mvnormaldense`/`mvstudenttdense`/`wishart` scale-matrix literals score.
+            rows =
+                expr.head == :hcat ? Any[expr.args] :
+                Any[row isa Expr && row.head == :row ? row.args : Any[row] for row in expr.args]
+            ncols = length(first(rows))
+            all(row -> length(row) == ncols, rows) ||
+                throw(ArgumentError("matrix literal rows must all have the same length: $expr"))
+            nrows = length(rows)
+            elements = Any[]
+            for row in rows, element in row
+                push!(elements, _compile_plan_expr(model, layout, element))
+            end
+            return CompiledCallExpr(
+                CompiledLiteralExpr(_build_matrix),
+                tuple(CompiledLiteralExpr(nrows), CompiledLiteralExpr(ncols), elements...),
+            )
         elseif expr.head == :ref
             callee = CompiledLiteralExpr(getindex)
             arguments = tuple((_compile_plan_expr(model, layout, arg) for arg in expr.args)...)

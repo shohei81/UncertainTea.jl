@@ -86,6 +86,36 @@ struct BackendMvNormalDenseChoicePlanStep{M<:Tuple,L<:AbstractBackendExpr,AD<:Ba
     value_length::Int
 end
 
+# Diagonal-scale multivariate Student-t (heavy-tailed `mvnormal`). Mirrors
+# `BackendMvNormalChoicePlanStep` with an added degrees-of-freedom expression
+# `nu`; the d dimensions couple through one quadratic form so scoring is not a
+# per-component fold.
+struct BackendMvStudentTChoicePlanStep{N<:AbstractBackendExpr,M<:Tuple,S<:Tuple,AD<:BackendAddressSpec} <:
+       BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    nu::N
+    mu::M
+    sigma::S
+    parameter_slot::Union{Nothing,Int}
+    value_index::Union{Nothing,Int}
+    value_length::Int
+end
+
+# Dense-scale multivariate Student-t (heavy-tailed `mvnormaldense`). Mirrors
+# `BackendMvNormalDenseChoicePlanStep` with an added `nu` expression.
+struct BackendMvStudentTDenseChoicePlanStep{N<:AbstractBackendExpr,M<:Tuple,L<:AbstractBackendExpr,AD<:BackendAddressSpec} <:
+       BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    nu::N
+    mu::M
+    scale_tril::L
+    parameter_slot::Union{Nothing,Int}
+    value_index::Union{Nothing,Int}
+    value_length::Int
+end
+
 # Underlying scalar operator symbol for a (possibly dotted) broadcast operator, e.g.
 # `.*` -> `:*`. Returns `nothing` when the callee is not a supported broadcast op.
 function _backend_broadcast_op(callee)
@@ -428,6 +458,127 @@ function _backend_lower_mvnormaldense_choice_step(
         value_index,
         dimension,
     )
+end
+
+function _backend_lower_mvstudentt_choice_step(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    parameter_layout::ParameterLayout,
+    step::ChoicePlanStep,
+    issues::Vector{String},
+)
+    length(step.rhs.arguments) == 3 || begin
+        _backend_issue!(issues, "mvstudentt expects exactly 3 backend arguments")
+        return nothing
+    end
+    address = _backend_lower_address(model, layout, step.address, issues)
+    isnothing(address) && return nothing
+    nu = _backend_lower_expr(model, layout, step.rhs.arguments[1], issues, "mvstudentt degrees of freedom")
+    mu = _backend_lower_tuple_argument(model, layout, step.rhs.arguments[2], issues, "mvstudentt mean")
+    sigma = _backend_lower_tuple_argument(model, layout, step.rhs.arguments[3], issues, "mvstudentt scale")
+    (isnothing(nu) || isnothing(mu) || isnothing(sigma)) && return nothing
+    length(mu) == length(sigma) || begin
+        _backend_issue!(issues, "mvstudentt requires mean and scale vectors with the same backend length")
+        return nothing
+    end
+    isempty(mu) && begin
+        _backend_issue!(issues, "mvstudentt requires at least one backend dimension")
+        return nothing
+    end
+    value_index = nothing
+    if !isnothing(step.parameter_slot)
+        slot = parameter_layout.slots[step.parameter_slot]
+        slot.transform isa VectorIdentityTransform || begin
+            _backend_issue!(issues, "mvstudentt backend lowering expects a vector identity transform")
+            return nothing
+        end
+        slot.value_length == length(mu) || begin
+            _backend_issue!(issues, "mvstudentt backend lowering requires a parameter slot with matching vector length")
+            return nothing
+        end
+        value_index = slot.value_index
+    end
+    return BackendMvStudentTChoicePlanStep(
+        step.binding_slot, address, nu, mu, sigma, step.parameter_slot, value_index, length(mu),
+    )
+end
+
+function _backend_lower_mvstudenttdense_choice_step(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    parameter_layout::ParameterLayout,
+    step::ChoicePlanStep,
+    issues::Vector{String},
+)
+    length(step.rhs.arguments) == 3 || begin
+        _backend_issue!(issues, "mvstudenttdense expects exactly 3 backend arguments")
+        return nothing
+    end
+    address = _backend_lower_address(model, layout, step.address, issues)
+    isnothing(address) && return nothing
+    nu = _backend_lower_expr(model, layout, step.rhs.arguments[1], issues, "mvstudenttdense degrees of freedom")
+    mu = _backend_lower_tuple_argument(model, layout, step.rhs.arguments[2], issues, "mvstudenttdense mean")
+    scale_tril = _backend_lower_expr(model, layout, step.rhs.arguments[3], issues, "mvstudenttdense scale_tril")
+    (isnothing(nu) || isnothing(mu) || isnothing(scale_tril)) && return nothing
+    scale_tril isa BackendSlotExpr || begin
+        _backend_issue!(issues, "mvstudenttdense backend lowering requires a scale_tril model argument or captured matrix")
+        return nothing
+    end
+    dimension = length(mu)
+    dimension >= 1 || begin
+        _backend_issue!(issues, "mvstudenttdense requires at least one backend dimension")
+        return nothing
+    end
+    value_index = nothing
+    if !isnothing(step.parameter_slot)
+        slot = parameter_layout.slots[step.parameter_slot]
+        slot.transform isa VectorIdentityTransform || begin
+            _backend_issue!(issues, "mvstudenttdense backend lowering expects a vector identity transform")
+            return nothing
+        end
+        slot.value_length == dimension || begin
+            _backend_issue!(issues, "mvstudenttdense backend lowering requires a parameter slot with matching vector length")
+            return nothing
+        end
+        value_index = slot.value_index
+    end
+    return BackendMvStudentTDenseChoicePlanStep(
+        step.binding_slot, address, nu, mu, scale_tril, step.parameter_slot, value_index, dimension,
+    )
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendMvStudentTChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.nu, numeric_slots, index_slots, generic_slots)
+    for expr in step.mu
+        _mark_backend_numeric_expr_slots!(expr, numeric_slots, index_slots, generic_slots)
+    end
+    for expr in step.sigma
+        _mark_backend_numeric_expr_slots!(expr, numeric_slots, index_slots, generic_slots)
+    end
+    isnothing(step.binding_slot) || _mark_backend_generic_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendMvStudentTDenseChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    _mark_backend_numeric_expr_slots!(step.nu, numeric_slots, index_slots, generic_slots)
+    for expr in step.mu
+        _mark_backend_numeric_expr_slots!(expr, numeric_slots, index_slots, generic_slots)
+    end
+    _mark_backend_generic_expr_slots!(step.scale_tril, numeric_slots, index_slots, generic_slots)
+    isnothing(step.binding_slot) || _mark_backend_generic_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
 end
 
 function _collect_backend_slot_kinds!(

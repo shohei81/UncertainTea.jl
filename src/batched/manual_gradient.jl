@@ -210,6 +210,16 @@ function _backend_gradient_supported_step(step::BackendMvNormalDenseChoicePlanSt
     return all(_backend_gradient_supported_expr, step.mu)
 end
 
+function _backend_gradient_supported_step(step::BackendMvStudentTChoicePlanStep)
+    return _backend_gradient_supported_expr(step.nu) &&
+           all(_backend_gradient_supported_expr, step.mu) &&
+           all(_backend_gradient_supported_expr, step.sigma)
+end
+
+function _backend_gradient_supported_step(step::BackendMvStudentTDenseChoicePlanStep)
+    return _backend_gradient_supported_expr(step.nu) && all(_backend_gradient_supported_expr, step.mu)
+end
+
 function _backend_gradient_supported_step(step::BackendDirichletChoicePlanStep)
     return all(_backend_gradient_supported_expr, step.alpha)
 end
@@ -308,6 +318,10 @@ _backend_gradient_supported_step(step::BackendMixtureNormalChoicePlanStep, numer
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendMvNormalDenseChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendMvStudentTChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendMvStudentTDenseChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendDirichletChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendLKJCholeskyChoicePlanStep, numeric_slots::BitVector) =
@@ -330,6 +344,8 @@ function _mark_backend_latent_vector_bindings!(tainted::BitVector, steps)
         elseif step isa Union{
             BackendMvNormalChoicePlanStep,
             BackendMvNormalDenseChoicePlanStep,
+            BackendMvStudentTChoicePlanStep,
+            BackendMvStudentTDenseChoicePlanStep,
             BackendDirichletChoicePlanStep,
             BackendLKJCholeskyChoicePlanStep,
         }

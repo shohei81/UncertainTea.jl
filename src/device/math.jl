@@ -927,6 +927,50 @@ end
     return ifelse(diag_ok, base, oftype(base, -Inf))
 end
 
+# ---- multivariate Student-t ---------------------------------------------------
+
+# Shared multivariate-t log density from the Cholesky log-determinant
+# `log_det = sum_i log(scale diagonal)` and the Mahalanobis quadratic `q`,
+# mirroring the CPU `_mvstudentt_log_density`. `d` is the compile-time dimension.
+@inline function _device_mvstudentt_density(nu, d::Integer, log_det, quadratic)
+    half = (nu + d) / 2
+    cst = _device_loggamma(half) - _device_loggamma(nu / 2)
+    return cst - (d / 2) * log(nu * oftype(nu, pi)) - log_det - half * log1p(quadratic / nu)
+end
+
+# Compile-time-unrolled reduction of a diagonal-scale multivariate-t into
+# (log_det, quadratic); per-component `promote` keeps heterogeneous
+# (literal/dual) argument tuples safe, mirroring `_device_mvnormal_logpdf_fold`.
+@inline function _device_mvt_diag_reduce(mu::Tuple{A}, sigma::Tuple{B}, value::Tuple{C}) where {A,B,C}
+    m, s, v = promote(mu[1], sigma[1], value[1])
+    z = (v - m) / s
+    return (log(s), z * z)
+end
+@inline function _device_mvt_diag_reduce(mu::Tuple, sigma::Tuple, value::Tuple)
+    m, s, v = promote(first(mu), first(sigma), first(value))
+    z = (v - m) / s
+    ld, q = _device_mvt_diag_reduce(Base.tail(mu), Base.tail(sigma), Base.tail(value))
+    return (log(s) + ld, z * z + q)
+end
+
+@inline function _device_mvstudentt_diag_logpdf(nu, mu::Tuple, sigma::Tuple, value::Tuple)
+    log_det, quadratic = _device_mvt_diag_reduce(mu, sigma, value)
+    return _device_mvstudentt_density(nu, length(mu), log_det, quadratic)
+end
+
+# Dense-scale multivariate-t: reuse the mvnormaldense forward substitution for
+# (log_det, quadratic, diag_ok), then wrap the quadratic in the Student-t tail.
+@inline function _device_mvstudentt_dense_logpdf(
+    nu,
+    scale_packed::NTuple{P,TL},
+    mu::Tuple,
+    x::NTuple{D,TX},
+) where {P,TL,D,TX}
+    log_det, quadratic, diag_ok = _device_mvnormaldense_solve(scale_packed, mu, x)
+    base = _device_mvstudentt_density(nu, D, log_det, quadratic)
+    return ifelse(diag_ok, base, oftype(base, -Inf))
+end
+
 # ---- lkj cholesky correlation ---------------------------------------------------
 
 # Numerically stable log(1 - tanh(z)^2), mirroring the CPU `_log1m_tanh_sq`

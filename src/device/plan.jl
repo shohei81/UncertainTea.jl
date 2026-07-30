@@ -362,6 +362,28 @@ struct DeviceMvNormalDenseChoiceStep{M<:Tuple} <: AbstractDeviceChoiceStep
     binding_slot::Int32
 end
 
+# Diagonal-scale multivariate Student-t: the heavy-tailed `DeviceMvNormalChoiceStep`.
+# `nu` is a compile-time scalar arg expression (a latent-dependent df flows in as a
+# slot expression); mu/sigma are arg tuples; the value follows the mvnormal
+# latent/observed conventions. Binding carried but never written.
+struct DeviceMvStudentTChoiceStep{N,M<:Tuple,S<:Tuple} <: AbstractDeviceChoiceStep
+    nu::N
+    mu::M
+    sigma::S
+    value_source::Int32
+    binding_slot::Int32
+end
+
+# Dense-scale multivariate Student-t: the heavy-tailed `DeviceMvNormalDenseChoiceStep`,
+# with an added `nu` scalar arg expression. The constant scale_tril factor rides
+# the observation buffer exactly as for mvnormaldense.
+struct DeviceMvStudentTDenseChoiceStep{N,M<:Tuple} <: AbstractDeviceChoiceStep
+    nu::N
+    mu::M
+    value_source::Int32
+    binding_slot::Int32
+end
+
 # LKJ prior over a packed correlation Cholesky factor (issue #57, mirroring
 # the CPU-native step from issue #49). `D` is the compile-time dimension (the
 # backend step guarantees a macro-time literal); a latent reads d(d-1)/2
@@ -1183,6 +1205,87 @@ end
 
 function _lower_device_step!(
     out,
+    step::BackendMvStudentTChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    dimension = length(step.mu)
+    if dimension > DEVICE_MAX_VECTOR_DIMENSION
+        _device_issue!(
+            issues,
+            "device lowering caps vector dimensions at $DEVICE_MAX_VECTOR_DIMENSION (kernel compile-time budget), got an mvstudentt of dimension $dimension",
+        )
+        return nothing
+    end
+    if isnothing(step.parameter_slot)
+        value_source = Int32(-1)
+    else
+        if in_loop
+            _device_issue!(issues, "device lowering does not support latent mvstudentt choices inside a loop")
+            return nothing
+        end
+        slot = layout.slots[step.parameter_slot]
+        if !(slot.transform isa VectorIdentityTransform) || slot.dimension != dimension ||
+           slot.value_length != dimension
+            _device_issue!(issues, "device lowering could not resolve the mvstudentt parameter slot")
+            return nothing
+        end
+        value_source = Int32(slot.index)
+    end
+    nu = _lower_device_expr(step.nu, backend.generic_slots, T, issues, "mvstudentt degrees of freedom")
+    mu = map(expr -> _lower_device_expr(expr, backend.generic_slots, T, issues, "mvstudentt argument"), step.mu)
+    sigma = map(expr -> _lower_device_expr(expr, backend.generic_slots, T, issues, "mvstudentt argument"), step.sigma)
+    (isnothing(nu) || any(isnothing, mu) || any(isnothing, sigma)) && return nothing
+    push!(out, DeviceMvStudentTChoiceStep(nu, mu, sigma, value_source, _device_slot32(step.binding_slot)))
+    return nothing
+end
+
+function _lower_device_step!(
+    out,
+    step::BackendMvStudentTDenseChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    dimension = length(step.mu)
+    if dimension > DEVICE_MAX_DENSE_DIMENSION
+        _device_issue!(
+            issues,
+            "device lowering caps mvstudenttdense at dimension $DEVICE_MAX_DENSE_DIMENSION (the unrolled forward substitution is quadratic in the kernel body), got dimension $dimension",
+        )
+        return nothing
+    end
+    if isnothing(step.parameter_slot)
+        value_source = Int32(-1)
+    else
+        if in_loop
+            _device_issue!(issues, "device lowering does not support latent mvstudenttdense choices inside a loop")
+            return nothing
+        end
+        slot = layout.slots[step.parameter_slot]
+        if !(slot.transform isa VectorIdentityTransform) || slot.dimension != dimension ||
+           slot.value_length != dimension
+            _device_issue!(issues, "device lowering could not resolve the mvstudenttdense parameter slot")
+            return nothing
+        end
+        value_source = Int32(slot.index)
+    end
+    nu = _lower_device_expr(step.nu, backend.generic_slots, T, issues, "mvstudenttdense degrees of freedom")
+    mu = map(expr -> _lower_device_expr(expr, backend.generic_slots, T, issues, "mvstudenttdense argument"), step.mu)
+    (isnothing(nu) || any(isnothing, mu)) && return nothing
+    push!(out, DeviceMvStudentTDenseChoiceStep(nu, mu, value_source, _device_slot32(step.binding_slot)))
+    return nothing
+end
+
+function _lower_device_step!(
+    out,
     step::BackendMixtureNormalChoicePlanStep,
     backend,
     layout,
@@ -1794,6 +1897,8 @@ _device_step_writes_binding(step::AbstractDevicePlanStep) = true
 _device_step_writes_binding(::DeviceMvNormalChoiceStep) = false
 _device_step_writes_binding(::DeviceDirichletChoiceStep) = false
 _device_step_writes_binding(::DeviceMvNormalDenseChoiceStep) = false
+_device_step_writes_binding(::DeviceMvStudentTChoiceStep) = false
+_device_step_writes_binding(::DeviceMvStudentTDenseChoiceStep) = false
 _device_step_writes_binding(::DeviceLKJCholeskyChoiceStep) = false
 # broadcast normal binds the whole observed VECTOR (issue #134); the scalar slots
 # matrix cannot hold it, so like the mvnormal families the binding is never

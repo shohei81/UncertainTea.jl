@@ -387,7 +387,9 @@ The initial GPU-targeted distribution set should stay small:
 - `mixture`
 - a restricted diagonal `mvnormal`
 - `mvnormaldense` (dense covariance via a Cholesky factor)
+- `mvstudentt` / `mvstudenttdense` (heavy-tailed multivariate Student-t)
 - `lkjcholesky` (LKJ prior over correlation Cholesky factors)
+- `wishart` / `inversewishart` (covariance-matrix priors, CPU-reference)
 - simple transformed distributions
 
 Requirements:
@@ -415,6 +417,17 @@ Requirements:
   **latent** (parameter slot sampled by HMC/NUTS) the mean must have a
   statically known length (vector literal/tuple), mirroring the diagonal
   `mvnormal` rule; with a non-static mean it is observation-only (no slot).
+- `mvstudentt(nu, mu, sigma)` and `mvstudenttdense(nu, mu, scale_tril)` are the
+  heavy-tailed analogues of `mvnormal` / `mvnormaldense`: a multivariate
+  Student-t with `nu` degrees of freedom whose `d` dimensions couple through one
+  chi-square mixing variable (a single quadratic form, not a product of
+  univariate t's). The diagonal form takes a scale **vector** `sigma`; the dense
+  form takes a lower-triangular Cholesky **factor** `scale_tril` (scale matrix
+  `L * L'`), reading only the lower triangle. `nu` may flow from a latent (its
+  gradient uses the digamma degrees-of-freedom channel). Both are backend-native
+  and device-lowered where `mvnormal` / `mvnormaldense` are (the device dense
+  path caps `d` at 8, riding the same forward-substitution unroll). As latents
+  the mean must have a statically known length, mirroring the Gaussian rule.
 - `lkjcholesky(d, eta)` is the LKJ prior over the Cholesky factor of a `d`×`d`
   correlation matrix, scored on the column-major **packed** lower triangle
   (length `d*(d+1)/2`, diagonal included) so the value stays a flat vector. The
@@ -442,6 +455,23 @@ Requirements:
       return Omega
   end
   ```
+- `wishart(nu, S)` and `inversewishart(nu, S)` are the classical conjugate
+  covariance-matrix priors (`nu` degrees of freedom, `d`×`d` scale matrix `S`,
+  requiring `nu > d - 1`). The value is the column-major **packed** lower
+  Cholesky factor `L` of the sampled PD matrix `M = L * L'` (length `d*(d+1)/2`),
+  the same flat-vector convention as `lkjcholesky`; `logpdf` is the induced
+  density over `L` (including the `L -> L*L'` Jacobian), and `rand` uses the
+  Bartlett decomposition. Latents unconstrain through the new log-Cholesky
+  `CholeskyCovTransform` (`exp` on the Cholesky diagonal, identity below it), so
+  HMC/NUTS explores an unconstrained `d*(d+1)/2`-vector. As latents these
+  families need a **static square scale-matrix literal** `S` (its side length is
+  the value dimension — there is no vector argument to read it from); a
+  non-literal `S` makes the choice observation-only. They are **CPU-reference
+  only**: `backend_report` honestly reports them unsupported and the device
+  rejects them, so batched calls take the ForwardDiff fallback (backend/device
+  lowering is a deliberate follow-up). `lkjcholesky` + per-dimension scale priors
+  remains the recommended default covariance parameterization; the Wishart pair
+  is for interop, conjugacy, and matching published analyses.
 - `betabinomial(n, alpha, beta)` is the overdispersed-binomial likelihood (a
   binomial whose success probability is `Beta(alpha, beta)`), with log-pmf
   `logC(n,k) + logB(k+alpha, n-k+beta) - logB(alpha, beta)`. `n` is an integer

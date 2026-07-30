@@ -571,6 +571,13 @@ function _logjoint_unconstrained_batched_backend!(
                 logabsdet[batch_index] +=
                     _to_constrained_cholesky_corr!(constrained_view, slot.transform, unconstrained_view)
             end
+        elseif slot.transform isa CholeskyCovTransform
+            for batch_index = 1:batch_size
+                constrained_view = view(constrained, destination_indices, batch_index)
+                unconstrained_view = view(params, source_indices, batch_index)
+                logabsdet[batch_index] +=
+                    _to_constrained_cholesky_cov!(constrained_view, slot.transform, unconstrained_view)
+            end
         else
             throw(ArgumentError("unsupported parameter transform $(typeof(slot.transform))"))
         end

@@ -37,6 +37,10 @@ function _qualify_builtin_distribution(name)
         :dirichlet,
         :mvnormal,
         :mvnormaldense,
+        :mvstudentt,
+        :mvstudenttdense,
+        :wishart,
+        :inversewishart,
         :lkjcholesky,
         :bernoulli,
         :bernoullilogit,
@@ -82,7 +86,8 @@ const _BROADCAST_DISTRIBUTION_FAMILIES = (:normal,)
 
 const _KNOWN_DISTRIBUTION_FAMILIES = (
     :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull,
-    :beta, :dirichlet, :mvnormal, :mvnormaldense, :lkjcholesky, :bernoulli, :bernoullilogit, :binomial,
+    :beta, :dirichlet, :mvnormal, :mvnormaldense, :mvstudentt, :mvstudenttdense,
+    :wishart, :inversewishart, :lkjcholesky, :bernoulli, :bernoullilogit, :binomial,
     :betabinomial, :multinomial, :discreteuniform, :geometric,
     :negativebinomial, :poisson, :studentt, :categorical, :truncatednormal, :truncatedstudentt, :mixture,
     :cauchy, :halfnormal, :halfcauchy, :uniform, :logistic, :gumbel,
@@ -533,6 +538,21 @@ function _supported_distribution_family(rhs)
     if family === :mvnormaldense && !isnothing(_mvnormaldense_static_size(rhs))
         return family
     end
+    if family === :mvstudentt && !isnothing(_mvstudentt_static_size(rhs))
+        return family
+    end
+    if family === :mvstudenttdense && !isnothing(_mvstudenttdense_static_size(rhs))
+        return family
+    end
+    if family === :wishart || family === :inversewishart
+        isnothing(_wishart_static_size(rhs)) && throw(
+            ArgumentError(
+                "$family latents require a static square scale-matrix literal (its side length is the value " *
+                "dimension); pass S as a matrix literal, or provide the value as an observation for a dynamic S",
+            ),
+        )
+        return family
+    end
     if family === :lkjcholesky
         isnothing(_lkjcholesky_static_dim(rhs)) && throw(ArgumentError(
             "lkjcholesky latents require a literal integer dimension `d >= 2` as the first argument",
@@ -579,6 +599,22 @@ function _mvnormaldense_static_size(rhs)
     return _mvnormaldense_static_size(rhs.args[2:end])
 end
 
+function _mvstudentt_static_size(rhs)
+    rhs isa Expr && rhs.head == :call && !isempty(rhs.args) && rhs.args[1] === :mvstudentt || return nothing
+    return _mvstudentt_static_size(rhs.args[2:end])
+end
+
+function _mvstudenttdense_static_size(rhs)
+    rhs isa Expr && rhs.head == :call && !isempty(rhs.args) && rhs.args[1] === :mvstudenttdense || return nothing
+    return _mvstudenttdense_static_size(rhs.args[2:end])
+end
+
+function _wishart_static_size(rhs)
+    rhs isa Expr && rhs.head == :call && !isempty(rhs.args) &&
+    (rhs.args[1] === :wishart || rhs.args[1] === :inversewishart) || return nothing
+    return _wishart_static_size(rhs.args[2:end])
+end
+
 function _lkjcholesky_static_dim(rhs)
     rhs isa Expr && rhs.head == :call && !isempty(rhs.args) && rhs.args[1] === :lkjcholesky || return nothing
     return _lkjcholesky_static_size(rhs.args[2:end])
@@ -599,6 +635,18 @@ function _parameter_layout_sizes(rhs)
         size = _mvnormaldense_static_size(rhs)
         isnothing(size) && throw(ArgumentError("mvnormaldense parameter slots require a statically known mean vector size"))
         return size, size
+    elseif family === :mvstudentt
+        size = _mvstudentt_static_size(rhs)
+        isnothing(size) && throw(ArgumentError("mvstudentt parameter slots require a statically known vector size"))
+        return size, size
+    elseif family === :mvstudenttdense
+        size = _mvstudenttdense_static_size(rhs)
+        isnothing(size) && throw(ArgumentError("mvstudenttdense parameter slots require a statically known mean vector size"))
+        return size, size
+    elseif family === :wishart || family === :inversewishart
+        size = _wishart_static_size(rhs)
+        isnothing(size) && throw(ArgumentError("$family parameter slots require a static square scale-matrix literal"))
+        return (size * (size + 1)) ÷ 2, (size * (size + 1)) ÷ 2
     elseif family === :lkjcholesky
         size = _lkjcholesky_static_dim(rhs)
         isnothing(size) && throw(ArgumentError("lkjcholesky parameter slots require a literal integer dimension"))
@@ -634,6 +682,18 @@ function _parameter_transform_expr(rhs, reparam::Symbol=:centered)
         size = _mvnormaldense_static_size(rhs)
         isnothing(size) && throw(ArgumentError("mvnormaldense parameter slots require a statically known mean vector size"))
         return :($(_qualify(:VectorIdentityTransform))($size))
+    elseif family === :mvstudentt
+        size = _mvstudentt_static_size(rhs)
+        isnothing(size) && throw(ArgumentError("mvstudentt parameter slots require a statically known vector size"))
+        return :($(_qualify(:VectorIdentityTransform))($size))
+    elseif family === :mvstudenttdense
+        size = _mvstudenttdense_static_size(rhs)
+        isnothing(size) && throw(ArgumentError("mvstudenttdense parameter slots require a statically known mean vector size"))
+        return :($(_qualify(:VectorIdentityTransform))($size))
+    elseif family === :wishart || family === :inversewishart
+        size = _wishart_static_size(rhs)
+        isnothing(size) && throw(ArgumentError("$family parameter slots require a static square scale-matrix literal"))
+        return :($(_qualify(:CholeskyCovTransform))($size))
     elseif family === :lkjcholesky
         size = _lkjcholesky_static_dim(rhs)
         isnothing(size) && throw(ArgumentError("lkjcholesky parameter slots require a literal integer dimension"))
