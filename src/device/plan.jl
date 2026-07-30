@@ -32,6 +32,20 @@ end
 
 DevicePrimitiveExpr(op::Symbol, args::Tuple) = DevicePrimitiveExpr{op,typeof(args)}(args)
 
+# Per-element covariate leaf inside a broadcast observation expression (issue #134).
+# A broadcast-normal mu/sigma expression references a per-observation COVARIATE
+# vector (a model argument like `xs` in `{:y} ~ normal.(a .+ b .* xs, s)`). Such a
+# vector argument is NOT a scalar slot the kernel can read from the `slots` buffer:
+# it varies per observed element, so -- exactly like the GLM covariate column
+# (issue #150) -- staging rides its per-element values on the observation buffer,
+# addresses erased. Each distinct covariate vector referenced by mu/sigma gets a
+# fixed `offset` inside the per-element observation block; the broadcast handler
+# reads it at `elem_base + offset`. Constants (zero derivative in the gradient
+# kernel): they never seed a dual.
+struct DeviceObservedColumnExpr <: AbstractDeviceExpr
+    offset::Int32
+end
+
 # ---- device plan steps ---------------------------------------------------------
 
 abstract type AbstractDevicePlanStep end
@@ -165,6 +179,40 @@ DeviceBernoulliLogitGLMChoiceStep{D}(intercept::I, coef_value_source, value_sour
         Int32(value_source),
         Int32(binding_slot),
     )
+
+# Broadcast (vectorized) normal observation `{:y} ~ normal.(mu_expr, sigma)` --
+# docs/dsl.md's flagship GPU-lowering form (issue #134). A VECTOR observation
+# `y[1..M]` scored per element against `normal(mu_i, sigma)`, where `mu_i` is a
+# broadcast affine expression over one or more per-observation COVARIATE vectors
+# (model arguments) and scalar latents/args, and `sigma` is a scalar expression
+# (a latent scale, a scalar arg, or a literal). This is dense per-column scoring
+# of a vector observation -- exactly what the device batched logjoint is good at
+# (the issue's own framing), so the whole vector reduces in one thread-serial fold
+# with no per-element choice steps.
+#
+# Layout mirrors the GLM step (issue #150): the covariate columns ride the
+# observation buffer, addresses erased. Per element `i` staging emits `C` covariate
+# rows (one per distinct covariate vector referenced, in the mu-then-sigma
+# first-encounter order the lowering assigns offsets) followed by the observed
+# `y[i]` row, so one element consumes `C + 1 == stride` observation rows and the
+# kernel reads them cursor-first. `mu`/`sigma` are device expressions whose scalar
+# leaves read the `slots` buffer (materialized latent/arg bindings) and whose
+# covariate leaves are `DeviceObservedColumnExpr(offset)` reading `elem_base +
+# offset`. `count_id` indexes the shared `trip_counts` buffer (the broadcast step
+# takes a loop-id slot like a `DeviceLoopStep`; staging fills it with `M`), so the
+# element count `M` -- resolved once per workspace from the observation vector
+# length -- is uniform across the batch, matching the host `_broadcast_uniform_length`.
+# `value_source` is always -1 (broadcast latents are rejected at BACKEND lowering);
+# the binding slot is carried but NEVER materialized (a vector binding, like the
+# mvnormal families) so a downstream read is honestly rejected by the audit.
+struct DeviceBroadcastNormalChoiceStep{M<:AbstractDeviceExpr,S<:AbstractDeviceExpr} <: AbstractDeviceChoiceStep
+    mu::M
+    sigma::S
+    count_id::Int32
+    stride::Int32
+    value_source::Int32
+    binding_slot::Int32
+end
 
 struct DeviceBinomialChoiceStep{N,P} <: AbstractDeviceChoiceStep
     trials::N
@@ -1114,6 +1162,150 @@ function _lower_device_step!(
     return nothing
 end
 
+# ---- broadcast normal (issue #134) ----
+#
+# A broadcast mu/sigma leaf slot is either SCALAR (a numeric or index slot: a
+# scalar latent binding, a scalar model argument, a loop iterator -- read once from
+# the `slots` buffer and broadcast across every element, matching the host
+# `_eval_backend_broadcast_numeric!` numeric/index branch) or a per-element
+# COVARIATE VECTOR (everything else: a generic-storage argument read per element,
+# matching the host generic-storage branch). Collect the DISTINCT covariate slots
+# in mu-then-sigma, left-to-right first-encounter order; the position in this list
+# is the covariate's observation-block offset. Staging walks the same backend exprs
+# in the same order, so the offsets it emits line up with the ones lowered here.
+_device_broadcast_leaf_is_covariate(slot::Int, numeric_slots::BitVector, index_slots::BitVector) =
+    !(numeric_slots[slot] || index_slots[slot])
+
+function _collect_broadcast_covariate_slots!(slots::Vector{Int}, expr::BackendSlotExpr, numeric_slots, index_slots)
+    if _device_broadcast_leaf_is_covariate(expr.slot, numeric_slots, index_slots) && !(expr.slot in slots)
+        push!(slots, expr.slot)
+    end
+    return nothing
+end
+function _collect_broadcast_covariate_slots!(
+    slots::Vector{Int},
+    expr::Union{BackendPrimitiveExpr,BackendBlockExpr},
+    numeric_slots,
+    index_slots,
+)
+    for argument in expr.arguments
+        _collect_broadcast_covariate_slots!(slots, argument, numeric_slots, index_slots)
+    end
+    return nothing
+end
+_collect_broadcast_covariate_slots!(slots::Vector{Int}, ::AbstractBackendExpr, numeric_slots, index_slots) = nothing
+
+function _broadcast_covariate_slots(mu, sigma, numeric_slots::BitVector, index_slots::BitVector)
+    slots = Int[]
+    _collect_broadcast_covariate_slots!(slots, mu, numeric_slots, index_slots)
+    _collect_broadcast_covariate_slots!(slots, sigma, numeric_slots, index_slots)
+    return slots
+end
+
+# Lower a broadcast argument expression, replacing each per-element covariate slot
+# leaf with a `DeviceObservedColumnExpr` at its assigned observation-block offset;
+# scalar leaves reuse the standard scalar expr lowering (`DeviceSlotExpr` etc.).
+function _lower_device_broadcast_expr(
+    expr::BackendSlotExpr,
+    covariate_offsets::Dict{Int,Int32},
+    backend,
+    ::Type{T},
+    issues::Vector{String},
+    context::String,
+) where {T}
+    offset = get(covariate_offsets, expr.slot, Int32(-1))
+    offset >= Int32(0) && return DeviceObservedColumnExpr(offset)
+    return _lower_device_expr(expr, backend.generic_slots, T, issues, context)
+end
+function _lower_device_broadcast_expr(
+    expr::BackendPrimitiveExpr,
+    covariate_offsets::Dict{Int,Int32},
+    backend,
+    ::Type{T},
+    issues::Vector{String},
+    context::String,
+) where {T}
+    if !(expr.op in DEVICE_SUPPORTED_PRIMITIVES)
+        _device_issue!(issues, "device lowering does not support primitive `$(expr.op)` in $context")
+        return nothing
+    end
+    lowered = map(arg -> _lower_device_broadcast_expr(arg, covariate_offsets, backend, T, issues, context), expr.arguments)
+    any(isnothing, lowered) && return nothing
+    return DevicePrimitiveExpr(expr.op, tuple(lowered...))
+end
+function _lower_device_broadcast_expr(
+    expr::BackendBlockExpr,
+    covariate_offsets::Dict{Int,Int32},
+    backend,
+    ::Type{T},
+    issues::Vector{String},
+    context::String,
+) where {T}
+    if length(expr.arguments) == 1
+        return _lower_device_broadcast_expr(first(expr.arguments), covariate_offsets, backend, T, issues, context)
+    end
+    _device_issue!(issues, "device lowering does not support multi-statement block expressions in $context")
+    return nothing
+end
+function _lower_device_broadcast_expr(
+    expr::AbstractBackendExpr,
+    covariate_offsets::Dict{Int,Int32},
+    backend,
+    ::Type{T},
+    issues::Vector{String},
+    context::String,
+) where {T}
+    # a covariate leaf is only ever a slot; every other leaf lowers as a scalar
+    return _lower_device_expr(expr, backend.generic_slots, T, issues, context)
+end
+
+function _lower_device_step!(
+    out,
+    step::BackendBroadcastNormalChoicePlanStep,
+    backend,
+    layout,
+    ::Type{T},
+    issues,
+    loop_counter,
+    in_loop,
+) where {T}
+    # broadcast latents are rejected at backend lowering, so a step reaching here is
+    # observed-only; guard anyway for honesty.
+    if !isnothing(step.parameter_slot)
+        _device_issue!(issues, "device lowering does not support broadcast normal latent parameters")
+        return nothing
+    end
+    # A broadcast observation carries a dynamic per-workspace element count `M`,
+    # resolved by staging like a loop trip count; nesting it inside a loop would make
+    # `M` depend on the loop iterate, which staging does not encode. Scope to the
+    # top-level flagship form.
+    if in_loop
+        _device_issue!(issues, "device lowering does not support broadcast normal observations inside a loop")
+        return nothing
+    end
+    covariate_slots = _broadcast_covariate_slots(step.mu, step.sigma, backend.numeric_slots, backend.index_slots)
+    if length(covariate_slots) > DEVICE_MAX_VECTOR_DIMENSION
+        _device_issue!(
+            issues,
+            "device lowering caps broadcast covariate vectors at $DEVICE_MAX_VECTOR_DIMENSION (kernel compile-time budget), got $(length(covariate_slots))",
+        )
+        return nothing
+    end
+    covariate_offsets = Dict{Int,Int32}()
+    for (position, slot) in enumerate(covariate_slots)
+        covariate_offsets[slot] = Int32(position - 1)
+    end
+    mu = _lower_device_broadcast_expr(step.mu, covariate_offsets, backend, T, issues, "broadcast normal mean")
+    sigma = _lower_device_broadcast_expr(step.sigma, covariate_offsets, backend, T, issues, "broadcast normal scale")
+    (isnothing(mu) || isnothing(sigma)) && return nothing
+    # take a shared trip-count slot (like a loop): staging fills it with `M`.
+    loop_counter[] += Int32(1)
+    count_id = loop_counter[]
+    stride = Int32(length(covariate_slots) + 1) # C covariate rows + the y row
+    push!(out, DeviceBroadcastNormalChoiceStep(mu, sigma, count_id, stride, Int32(-1), _device_slot32(step.binding_slot)))
+    return nothing
+end
+
 function _lower_device_step!(out, step::BackendChoicePlanStep, backend, layout, ::Type{T}, issues, loop_counter, in_loop) where {T}
     _device_issue!(issues, "device lowering does not support the $(nameof(typeof(step))) distribution family yet")
     return nothing
@@ -1288,6 +1480,10 @@ _device_step_writes_binding(::DeviceMvNormalChoiceStep) = false
 _device_step_writes_binding(::DeviceDirichletChoiceStep) = false
 _device_step_writes_binding(::DeviceMvNormalDenseChoiceStep) = false
 _device_step_writes_binding(::DeviceLKJCholeskyChoiceStep) = false
+# broadcast normal binds the whole observed VECTOR (issue #134); the scalar slots
+# matrix cannot hold it, so like the mvnormal families the binding is never
+# materialized and a downstream read is honestly rejected by the audit.
+_device_step_writes_binding(::DeviceBroadcastNormalChoiceStep) = false
 
 function _device_collect_written_slots!(written_by_loop::Dict{Int32,BitSet}, steps, loop_id::Int32)
     written = get!(BitSet, written_by_loop, loop_id)
@@ -1430,6 +1626,34 @@ function _device_check_staging_refs!(issues::Vector{String}, steps, taint::BitSe
     return nothing
 end
 
+# Broadcast observation covariates ride the observation buffer, so staging must be
+# able to resolve them on the host: a per-element covariate vector must be a MODEL
+# ARGUMENT (a direct argument or captured constant vector stored in generic env
+# storage), never a random-choice or deterministic binding computed later. Reject
+# anything else honestly here rather than leaking a staging error (issue #134).
+function _device_check_broadcast_covariates!(
+    issues::Vector{String},
+    steps,
+    argument_slots::BitSet,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    symbols,
+)
+    for step in steps
+        if step isa BackendLoopPlanStep
+            _device_check_broadcast_covariates!(issues, step.body, argument_slots, numeric_slots, index_slots, symbols)
+        elseif step isa BackendBroadcastNormalChoicePlanStep
+            for slot in _broadcast_covariate_slots(step.mu, step.sigma, numeric_slots, index_slots)
+                slot in argument_slots || _device_issue!(
+                    issues,
+                    "device lowering only supports broadcast normal covariates that are model arguments; `$(symbols[slot])` is not a model argument",
+                )
+            end
+        end
+    end
+    return nothing
+end
+
 # When the audit rejects a read of a deterministic binding, recover the concrete
 # reason its device emission was skipped (the emission probe discards issues) so
 # the report points at the real blocker instead of a generic host-only message.
@@ -1490,6 +1714,16 @@ function _lower_device_plan(model::TeaModel, resolved::ResolvedSignaturePlan, ::
     # bindings are never materialized; reject those dependencies here instead of
     # leaking a staging error out of workspace construction.
     _device_check_staging_refs!(issues, backend.steps, _device_staging_taint(backend), symbols)
+    # broadcast covariates ride the observation buffer, so they must be host-
+    # stageable model arguments (issue #134)
+    _device_check_broadcast_covariates!(
+        issues,
+        backend.steps,
+        BitSet(environment_layout.argument_slots),
+        backend.numeric_slots,
+        backend.index_slots,
+        symbols,
+    )
     if !isempty(issues)
         return issues, nothing
     end
