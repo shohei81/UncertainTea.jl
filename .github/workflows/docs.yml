@@ -1,0 +1,40 @@
+# Build the Documenter.jl site and deploy it to GitHub Pages (the gh-pages
+# branch). Deploy uses same-repo GITHUB_TOKEN auth -- no SSH DOCUMENTER_KEY --
+# so `contents: write` is granted below. GitHub Pages must be enabled once in
+# repo Settings -> Pages to serve from the gh-pages branch (a one-time maintainer
+# step). The Literate example executes at build time, so this also smoke-tests a
+# small model on every push.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+
+# Needed for deploydocs to push to gh-pages via GITHUB_TOKEN.
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    name: build & deploy docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+      - uses: julia-actions/cache@v2
+      - name: Install docs environment
+        run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Build and deploy
+        run: julia --project=docs docs/make.jl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}

@@ -49,6 +49,14 @@ function _chain_progress_callback(callback, callback_lock::ReentrantLock, chain_
     end
 end
 
+"""
+    hmc_chains(model, args=(), constraints=choicemap(); num_chains, num_samples, kwargs...) -> HMCChains
+
+Run `num_chains` independent [`hmc`](@ref) chains (each with its own seed and
+warmup) and collect them into an [`HMCChains`](@ref) result suitable for
+[`summarize`](@ref), `rhat`, and `ess`. Accepts the same per-chain keyword
+arguments as [`hmc`](@ref).
+"""
 function hmc_chains(
     model::TeaModel,
     args::Tuple=(),
@@ -108,6 +116,15 @@ function hmc_chains(
     return HMCChains(model, args, constraints, chains)
 end
 
+"""
+    nuts_chains(model, args=(), constraints=choicemap(); num_chains, num_samples, kwargs...) -> HMCChains
+
+Run `num_chains` independent [`nuts`](@ref) chains (each with its own seed and
+warmup) and collect them into an [`HMCChains`](@ref) result suitable for
+[`summarize`](@ref), `rhat`, and `ess`. Accepts the same per-chain keyword
+arguments as [`nuts`](@ref). For many parallel chains over a dense layout, see
+[`batched_nuts`](@ref).
+"""
 function nuts_chains(
     model::TeaModel,
     args::Tuple=(),
