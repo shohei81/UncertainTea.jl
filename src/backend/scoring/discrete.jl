@@ -269,6 +269,188 @@ function _backend_binomial_logpdf(trials, probability, x)
            (trial_count - count) * log1p(-probability_)
 end
 
+# Beta-Binomial (issue #231): shares `_betabinomial_logpdf_core` with the CPU
+# reference; `alpha`/`beta` may be latent-flowing.
+function _backend_betabinomial_logpdf(trials, alpha, beta, x)
+    alpha_, beta_ = promote(float(alpha), float(beta))
+    alpha_ > zero(alpha_) || throw(ArgumentError("betabinomial requires alpha > 0"))
+    beta_ > zero(beta_) || throw(ArgumentError("betabinomial requires beta > 0"))
+    trial_count = _binomial_trials(trials)
+    isnothing(trial_count) && throw(ArgumentError("betabinomial requires integer trials >= 0"))
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(alpha_, -Inf)
+    count <= trial_count || return oftype(alpha_, -Inf)
+    return _betabinomial_logpdf_core(trial_count, alpha_, beta_, count)
+end
+
+# Discrete-uniform (issue #231): trivial `-log(b - a + 1)` density with no
+# continuous parameters.
+function _backend_discreteuniform_logpdf(lower, upper, x)
+    lo = _discrete_integer(lower)
+    hi = _discrete_integer(upper)
+    (isnothing(lo) || isnothing(hi)) && throw(ArgumentError("discreteuniform requires integer bounds"))
+    lo <= hi || throw(ArgumentError("discreteuniform requires a <= b"))
+    value = _discrete_integer(x)
+    (isnothing(value) || value < lo || value > hi) && return -Inf
+    return -log(float(hi - lo + 1))
+end
+
+function _score_backend_step!(
+    step::BackendBetaBinomialChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    trials = _eval_backend_index_value_expr(env, step.trials)
+    alpha = _eval_backend_numeric_expr(env, step.alpha)
+    beta = _eval_backend_numeric_expr(env, step.beta)
+    count = _binomial_trials(value)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, isnothing(count) ? value : count)
+    return _backend_betabinomial_logpdf(trials, alpha, beta, value)
+end
+
+function _score_backend_step!(
+    step::BackendDiscreteUniformChoicePlanStep,
+    env::PlanEnvironment,
+    params::AbstractVector,
+    constraints::ChoiceMap,
+)
+    address = _concrete_address(env, step.address)
+    value = _backend_choice_value(step.parameter_slot, params, constraints, address)
+    lower = _eval_backend_index_value_expr(env, step.lower)
+    upper = _eval_backend_index_value_expr(env, step.upper)
+    count = _discrete_integer(value)
+    isnothing(step.binding_slot) || _environment_set!(env, step.binding_slot, isnothing(count) ? value : count)
+    return _backend_discreteuniform_logpdf(lower, upper, value)
+end
+
+function _score_backend_step!(
+    step::BackendBetaBinomialChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    trials_values = _batched_index_scratch!(env, 1)
+    alpha_values = _batched_numeric_scratch!(env, 1)
+    beta_values = _batched_numeric_scratch!(env, 2)
+    _eval_backend_index_value_expr!(trials_values, env, step.trials, 2)
+    _eval_backend_numeric_expr!(alpha_values, env, step.alpha, 3)
+    _eval_backend_numeric_expr!(beta_values, env, step.beta, 4)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        value = choice_values[batch_index]
+        totals[batch_index] += _backend_betabinomial_logpdf(
+            trials_values[batch_index],
+            alpha_values[batch_index],
+            beta_values[batch_index],
+            value,
+        )
+        if !isnothing(step.binding_slot)
+            count = _binomial_trials(value)
+            isnothing(count) && throw(
+                BatchedBackendFallback("index backend slot $(step.binding_slot) received non-betabinomial choice value"),
+            )
+            if env.numeric_slots[step.binding_slot]
+                env.numeric_values[step.binding_slot, batch_index] = convert(eltype(env.numeric_values), count)
+            elseif env.index_slots[step.binding_slot]
+                env.index_values[step.binding_slot, batch_index] = count
+            else
+                env.generic_values[step.binding_slot][batch_index] = count
+            end
+        end
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_step!(
+    step::BackendDiscreteUniformChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+)
+    choice_values = env.observed_values
+    lower_values = _batched_index_scratch!(env, 1)
+    upper_values = _batched_index_scratch!(env, 2)
+    _eval_backend_index_value_expr!(lower_values, env, step.lower, 3)
+    _eval_backend_index_value_expr!(upper_values, env, step.upper, 3)
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    _batched_choice_numeric_values!(choice_values, step.parameter_slot, params, constraints, address_parts)
+    for batch_index = 1:env.batch_size
+        value = choice_values[batch_index]
+        totals[batch_index] += _backend_discreteuniform_logpdf(lower_values[batch_index], upper_values[batch_index], value)
+        if !isnothing(step.binding_slot)
+            count = _discrete_integer(value)
+            isnothing(count) && throw(
+                BatchedBackendFallback("index backend slot $(step.binding_slot) received non-discreteuniform choice value"),
+            )
+            if env.numeric_slots[step.binding_slot]
+                env.numeric_values[step.binding_slot, batch_index] = convert(eltype(env.numeric_values), count)
+            elseif env.index_slots[step.binding_slot]
+                env.index_values[step.binding_slot, batch_index] = count
+            else
+                env.generic_values[step.binding_slot][batch_index] = count
+            end
+        end
+    end
+    isnothing(step.binding_slot) || (env.assigned[step.binding_slot] = true)
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendBetaBinomialChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    trials_values = _batched_index_scratch!(env, 1)
+    alpha_values = _batched_numeric_scratch!(env, 1)
+    beta_values = _batched_numeric_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_index_value_expr!(trials_values, env, step.trials, 2)
+    _eval_backend_numeric_expr!(alpha_values, env, step.alpha, 3)
+    _eval_backend_numeric_expr!(beta_values, env, step.beta, 4)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] += _backend_betabinomial_logpdf(
+            trials_values[batch_index],
+            alpha_values[batch_index],
+            beta_values[batch_index],
+            observed_values[batch_index],
+        )
+    end
+    return totals
+end
+
+function _score_backend_observed_loop_choice!(
+    step::BackendDiscreteUniformChoicePlanStep,
+    totals::AbstractVector,
+    env::BatchedPlanEnvironment,
+    params::AbstractMatrix,
+    constraints,
+    address,
+)
+    lower_values = _batched_index_scratch!(env, 1)
+    upper_values = _batched_index_scratch!(env, 2)
+    observed_values = env.observed_values
+    _eval_backend_index_value_expr!(lower_values, env, step.lower, 3)
+    _eval_backend_index_value_expr!(upper_values, env, step.upper, 3)
+    _batched_observed_choice_values!(observed_values, constraints, address)
+    for batch_index = 1:env.batch_size
+        totals[batch_index] +=
+            _backend_discreteuniform_logpdf(lower_values[batch_index], upper_values[batch_index], observed_values[batch_index])
+    end
+    return totals
+end
+
 # --- marginalize=:enumerate (docs/discrete-enumeration.md, PR-4) -------------
 
 _marginalize_choice_logpmf(step::BackendMarginalizeChoicePlanStep, probabilities::Tuple, value) =

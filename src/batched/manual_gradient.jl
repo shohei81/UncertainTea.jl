@@ -113,6 +113,20 @@ function _backend_gradient_supported_step(step::BackendCategoricalChoicePlanStep
     return isnothing(step.parameter_slot) && all(_backend_gradient_supported_expr, step.probabilities)
 end
 
+# betabinomial: alpha/beta gradients are analytic digamma differences; trials is
+# an integer index expression carrying no gradient (checked constant below).
+function _backend_gradient_supported_step(step::BackendBetaBinomialChoicePlanStep)
+    return isnothing(step.parameter_slot) &&
+           _backend_gradient_supported_expr(step.alpha) &&
+           _backend_gradient_supported_expr(step.beta)
+end
+
+# discreteuniform: no continuous parameters, so the step contributes no
+# gradient; bounds are integer index expressions.
+function _backend_gradient_supported_step(step::BackendDiscreteUniformChoicePlanStep)
+    return isnothing(step.parameter_slot)
+end
+
 function _backend_gradient_supported_step(step::BackendPoissonChoicePlanStep)
     return isnothing(step.parameter_slot) && _backend_gradient_supported_expr(step.lambda)
 end
@@ -214,6 +228,12 @@ _backend_gradient_supported_step(step::BackendNegativeBinomialChoicePlanStep, nu
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendCategoricalChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendBetaBinomialChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step) && _backend_gradient_constant_index_expr(step.trials, numeric_slots)
+_backend_gradient_supported_step(step::BackendDiscreteUniformChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step) &&
+    _backend_gradient_constant_index_expr(step.lower, numeric_slots) &&
+    _backend_gradient_constant_index_expr(step.upper, numeric_slots)
 _backend_gradient_supported_step(step::BackendPoissonChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendStudentTChoicePlanStep, numeric_slots::BitVector) =

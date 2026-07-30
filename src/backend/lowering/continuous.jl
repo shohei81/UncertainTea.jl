@@ -13,6 +13,8 @@ const GPU_BACKEND_SUPPORTED_DISTRIBUTIONS = Symbol[
     :bernoulli,
     :bernoullilogit,
     :binomial,
+    :betabinomial,
+    :discreteuniform,
     :geometric,
     :negativebinomial,
     :poisson,

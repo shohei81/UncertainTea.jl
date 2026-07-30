@@ -335,3 +335,165 @@ function logpdf(dist::PoissonDist, x)
     lambda = dist.lambda
     return count * log(lambda) - lambda - _logfactorial_like(lambda, count)
 end
+
+# --- issue #231: betabinomial, multinomial, discreteuniform ------------------
+
+# Log Beta function `log B(a, b) = loggamma(a) + loggamma(b) - loggamma(a+b)`.
+# Reuses the O(1) `loggamma` discipline from #148 (never an O(count) loop) and
+# stays ForwardDiff-Dual-friendly, so it serves both the CPU reference and the
+# backend scorer with latent-flowing `a`/`b`.
+_logbeta(a, b) = loggamma(a) + loggamma(b) - loggamma(a + b)
+
+# Signed integer coercion for discreteuniform bounds/values: unlike
+# `_poisson_count`, the support may include negative integers, so a value is
+# accepted whenever it is integer-valued (Bool excluded upstream by callers).
+function _discrete_integer(x)
+    if x isa Integer
+        return Int(x)
+    elseif x isa Real && isfinite(x)
+        truncated = trunc(x)
+        return x == truncated ? Int(truncated) : nothing
+    end
+    return nothing
+end
+
+# Beta-Binomial: `k ~ betabinomial(n, alpha, beta)` is a binomial whose success
+# probability is itself `Beta(alpha, beta)` distributed, the standard
+# overdispersed-binomial likelihood. `n` is an integer trial count (data), while
+# `alpha`/`beta` may flow from latents (their gradients are digamma differences).
+struct BetaBinomialDist{T<:Real} <: AbstractTeaDistribution
+    trials::Int
+    alpha::T
+    beta::T
+
+    function BetaBinomialDist(trials::Int, alpha::T, beta::T) where {T<:Real}
+        trials >= 0 || throw(ArgumentError("betabinomial requires trials >= 0"))
+        alpha > zero(T) || throw(ArgumentError("betabinomial requires alpha > 0"))
+        beta > zero(T) || throw(ArgumentError("betabinomial requires beta > 0"))
+        new{T}(trials, alpha, beta)
+    end
+end
+
+# Compositional count data: `x ~ multinomial(n, p)` over a length-K simplex `p`,
+# the natural observation partner of the `dirichlet` prior. `p` flows from a
+# latent (its per-component gradients are `x_i / p_i`).
+struct MultinomialDist{T<:Real} <: AbstractTeaDistribution
+    trials::Int
+    probabilities::Vector{T}
+
+    function MultinomialDist(trials::Int, probabilities::Vector{T}) where {T<:Real}
+        trials >= 0 || throw(ArgumentError("multinomial requires trials >= 0"))
+        isempty(probabilities) && throw(ArgumentError("multinomial requires at least one probability"))
+        total = zero(T)
+        for probability in probabilities
+            zero(T) <= probability <= one(T) || throw(ArgumentError("multinomial requires 0 <= p <= 1"))
+            total += probability
+        end
+        tolerance = sqrt(eps(float(total))) * max(length(probabilities), 1) * 8
+        abs(total - one(total)) <= tolerance || throw(ArgumentError("multinomial probabilities must sum to 1"))
+        new{T}(trials, probabilities)
+    end
+end
+
+# Uniform over the integers `a, a+1, ..., b` (inclusive). Trivial density
+# `-log(b - a + 1)`; important as an index/changepoint latent prior. No
+# continuous parameters, so it contributes no gradient.
+struct DiscreteUniformDist <: AbstractTeaDistribution
+    a::Int
+    b::Int
+
+    function DiscreteUniformDist(a::Int, b::Int)
+        a <= b || throw(ArgumentError("discreteuniform requires a <= b"))
+        new(a, b)
+    end
+end
+
+function betabinomial(trials, alpha, beta)
+    count = _binomial_trials(trials)
+    isnothing(count) && throw(ArgumentError("betabinomial requires integer trials >= 0"))
+    promoted_alpha, promoted_beta = promote(float(alpha), float(beta))
+    return BetaBinomialDist(count, promoted_alpha, promoted_beta)
+end
+
+function multinomial(trials, probabilities::AbstractVector)
+    count = _binomial_trials(trials)
+    isnothing(count) && throw(ArgumentError("multinomial requires integer trials >= 0"))
+    return MultinomialDist(count, map(float, collect(probabilities)))
+end
+
+function discreteuniform(a, b)
+    lower = _discrete_integer(a)
+    upper = _discrete_integer(b)
+    (isnothing(lower) || isnothing(upper)) && throw(ArgumentError("discreteuniform requires integer bounds"))
+    return DiscreteUniformDist(lower, upper)
+end
+
+function Random.rand(rng::AbstractRNG, dist::BetaBinomialDist)
+    probability = rand(rng, BetaDist(float(dist.alpha), float(dist.beta)))
+    return rand(rng, BinomialDist(dist.trials, probability))
+end
+
+# Sequential conditional-binomial sampler: draw component k as
+# Binomial(remaining trials, p_k / remaining probability mass).
+function Random.rand(rng::AbstractRNG, dist::MultinomialDist)
+    k = length(dist.probabilities)
+    counts = zeros(Int, k)
+    remaining_trials = dist.trials
+    remaining_mass = one(float(eltype(dist.probabilities)))
+    for index = 1:(k-1)
+        remaining_trials == 0 && break
+        conditional =
+            remaining_mass > zero(remaining_mass) ?
+            clamp(float(dist.probabilities[index]) / remaining_mass, 0.0, 1.0) : 0.0
+        draw = rand(rng, BinomialDist(remaining_trials, conditional))
+        counts[index] = draw
+        remaining_trials -= draw
+        remaining_mass -= float(dist.probabilities[index])
+    end
+    counts[k] = remaining_trials
+    return counts
+end
+
+Random.rand(rng::AbstractRNG, dist::DiscreteUniformDist) = rand(rng, dist.a:dist.b)
+
+# log-pmf core shared with the backend scorer: logC(n,k) + logB(k+a, n-k+b) -
+# logB(a, b). `alpha` carries the arithmetic type so `_logbinomial_like`
+# converts its (data) combinatorial term to the caller's element type.
+function _betabinomial_logpdf_core(trials::Integer, alpha, beta, count::Integer)
+    log_combination = _logbinomial_like(alpha, trials, count)
+    return log_combination + _logbeta(count + alpha, trials - count + beta) - _logbeta(alpha, beta)
+end
+
+function logpdf(dist::BetaBinomialDist, x)
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(float(dist.alpha), -Inf)
+    count <= dist.trials || return oftype(float(dist.alpha), -Inf)
+    return _betabinomial_logpdf_core(dist.trials, dist.alpha, dist.beta, count)
+end
+
+function logpdf(dist::MultinomialDist, x)
+    values = x isa Tuple ? collect(x) : x
+    values isa AbstractVector || throw(ArgumentError("multinomial logpdf expects a vector or tuple value"))
+    carrier = float(first(dist.probabilities))
+    length(values) == length(dist.probabilities) || return oftype(carrier, -Inf)
+    accumulator = _logfactorial_like(carrier, dist.trials)
+    total = 0
+    for (value, probability) in zip(values, dist.probabilities)
+        count = _poisson_count(value)
+        isnothing(count) && return oftype(carrier, -Inf)
+        total += count
+        accumulator -= _logfactorial_like(carrier, count)
+        if count > 0
+            probability > zero(probability) || return oftype(carrier, -Inf)
+            accumulator += count * log(probability)
+        end
+    end
+    total == dist.trials || return oftype(carrier, -Inf)
+    return accumulator
+end
+
+function logpdf(dist::DiscreteUniformDist, x)
+    value = _discrete_integer(x)
+    (isnothing(value) || value < dist.a || value > dist.b) && return -Inf
+    return -log(float(dist.b - dist.a + 1))
+end

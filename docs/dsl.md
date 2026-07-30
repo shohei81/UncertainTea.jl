@@ -365,6 +365,9 @@ The initial GPU-targeted distribution set should stay small:
 - `dirichlet`
 - `bernoulli`
 - `binomial`
+- `betabinomial`
+- `multinomial`
+- `discreteuniform`
 - `geometric`
 - `negativebinomial`
 - `poisson`
@@ -430,6 +433,29 @@ Requirements:
       return Omega
   end
   ```
+- `betabinomial(n, alpha, beta)` is the overdispersed-binomial likelihood (a
+  binomial whose success probability is `Beta(alpha, beta)`), with log-pmf
+  `logC(n,k) + logB(k+alpha, n-k+beta) - logB(alpha, beta)`. `n` is an integer
+  trial count; `alpha`/`beta` may flow from latents (their gradients are
+  closed-form digamma differences). As an **observation** it lowers to the
+  backend-native batched path with analytic gradients
+  (`backend_report(model).supported == true`). Device lowering is honestly
+  rejected (it would reuse the Float64 binomial-coefficient helper of #218), so
+  it is CPU/backend-only there.
+- `multinomial(n, p)` is the compositional-count likelihood over a length-`K`
+  simplex `p` (the natural observation partner of the `dirichlet` prior), with
+  log-pmf `logGamma(n+1) - sum logGamma(x_i+1) + sum x_i*log(p_i)`. As a vector
+  observation it is CPU-reference only (honestly reported unsupported by
+  `backend_report`; the batched path uses the ForwardDiff fallback, so
+  dirichlet-multinomial models still sample correctly). Backend/device lowering
+  of the vector observation, and multinomial **latents**, are out of scope
+  (issue #67 / #231).
+- `discreteuniform(a, b)` is uniform over the integers `a..b` (inclusive), with
+  density `-log(b - a + 1)`; `a`/`b` are integer bounds and the family has no
+  continuous parameters (zero gradient). As an **observation** it lowers to the
+  backend-native batched path; device lowering is honestly rejected. Enumerated
+  discrete-**latent** support (`marginalize=:enumerate` / Gibbs) is not yet
+  wired for this family.
 - `truncatednormal(mu, sigma, lower, upper)` and
   `truncatedstudentt(nu, mu, sigma, lower, upper)` renormalize the base density
   over `[lower, upper]` (infinite bounds are allowed on either side). As
@@ -673,8 +699,9 @@ The first real subset should include:
 6. `generate`
 7. a small distribution set starting with `normal`, `lognormal`,
    `laplace`, `exponential`, `gamma`, `inversegamma`, `weibull`, `beta`,
-   `dirichlet`, `bernoulli`, `binomial`, `geometric`, `negativebinomial`,
-   `poisson`, `studentt`, and `categorical`
+   `dirichlet`, `bernoulli`, `binomial`, `betabinomial`, `multinomial`,
+   `discreteuniform`, `geometric`, `negativebinomial`, `poisson`, `studentt`,
+   and `categorical`
 
 That is enough to build a CPU reference backend and a GPU-oriented static lowering path
 without committing to full Gen compatibility.

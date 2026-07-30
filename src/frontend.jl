@@ -41,6 +41,9 @@ function _qualify_builtin_distribution(name)
         :bernoulli,
         :bernoullilogit,
         :binomial,
+        :betabinomial,
+        :multinomial,
+        :discreteuniform,
         :geometric,
         :negativebinomial,
         :poisson,
@@ -69,7 +72,8 @@ const _BROADCAST_DISTRIBUTION_FAMILIES = (:normal,)
 
 const _KNOWN_DISTRIBUTION_FAMILIES = (
     :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull,
-    :beta, :dirichlet, :mvnormal, :mvnormaldense, :lkjcholesky, :bernoulli, :bernoullilogit, :binomial, :geometric,
+    :beta, :dirichlet, :mvnormal, :mvnormaldense, :lkjcholesky, :bernoulli, :bernoullilogit, :binomial,
+    :betabinomial, :multinomial, :discreteuniform, :geometric,
     :negativebinomial, :poisson, :studentt, :categorical, :truncatednormal, :truncatedstudentt, :mixture,
 )
 
