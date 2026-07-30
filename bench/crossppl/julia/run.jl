@@ -113,12 +113,21 @@ function run_once(model, args, cons, opts; num_samples, seed)
     num_warmup = parse(Int, opts["warmup"])
     target_accept = parse(Float64, opts["target-accept"])
     max_tree_depth = parse(Int, opts["max-tree-depth"])
-    # --init "v1,v2,...": pinned unconstrained initial position for every
-    # chain — a diagnostic workaround for issue #137 (prior-draw init strands
-    # chains under shared adaptation).  Runs carry a "-pinned-init" label so
-    # they are never mistaken for default-configuration results.
-    initial_params = haskey(opts, "init") ?
-                     [parse(Float64, x) for x in split(opts["init"], ",")] : nothing
+    # --init pathfinder: seed each chain from a Pathfinder draw AND seed the warmup
+    #   initial inverse-mass metric from the Pathfinder covariance diagonal (issue
+    #   #162). A cheap, deterministic (seeded) fit — few paths/draws. Runs carry a
+    #   "-pathfinder-init" label and sampler.init="pathfinder".
+    # --init "v1,v2,...": pinned unconstrained initial position for every chain — a
+    #   diagnostic workaround for issue #137 (prior-draw init strands chains under
+    #   shared adaptation). Runs carry a "-pinned-init" label.
+    # Both are never mistaken for default-configuration results.
+    initial_params = if get(opts, "init", "") == "pathfinder"
+        pathfinder(model, args, cons; num_paths=1, num_draws=100, rng=MersenneTwister(seed))
+    elseif haskey(opts, "init")
+        [parse(Float64, x) for x in split(opts["init"], ",")]
+    else
+        nothing
+    end
     rng = MersenneTwister(seed)
     if variant == "cpu"
         t = @elapsed chains = nuts_chains(model, args, cons;
@@ -180,7 +189,9 @@ function main(argv)
         sampling_s = max(t_total - t_warmup_only, 0.0)
         draws = permutedims(posterior_array(chains), (2, 1, 3))  # (chains, draws, params)
         names = parameter_names(chains)
-        variant_label = haskey(opts, "init") ? string(variant, "-pinned-init") : variant
+        variant_label =
+            get(opts, "init", "") == "pathfinder" ? string(variant, "-pathfinder-init") :
+            haskey(opts, "init") ? string(variant, "-pinned-init") : variant
         stem = string(model_name, "__uncertaintea-", variant_label,
             "__chains", num_chains, "__seed", seed, "__rep", rep)
         npzwrite(joinpath(outdir, stem * ".npz"), Dict("draws" => draws))

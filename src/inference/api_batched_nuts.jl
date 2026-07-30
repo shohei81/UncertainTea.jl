@@ -182,6 +182,16 @@ function batched_nuts(
     nuts_target_accept = Float64(target_accept)
     nuts_max_delta_energy = Float64(max_delta_energy)
 
+    # Seed the warmup INITIAL diagonal inverse mass from the Pathfinder covariance
+    # diagonal when a PathfinderResult is supplied (issue #162); otherwise the seed
+    # is `ones(num_params)`, so every downstream path reproduces today's behavior
+    # exactly. Threaded into the driver(s), the initial reasonable-step-size search,
+    # and (device path) the initial shared inverse mass uploaded to the device.
+    initial_inverse_mass =
+        initial_params isa PathfinderResult ?
+        _pathfinder_inverse_mass_seed(initial_params, model, num_params, mass_matrix_regularization) :
+        ones(num_params)
+
     if per_chain_adaptation && device_nuts_workspace !== nothing
         return _batched_nuts_device_per_chain!(
             device_nuts_workspace,
@@ -218,6 +228,7 @@ function batched_nuts(
             find_reasonable_step_size,
             mass_matrix_regularization,
             mass_matrix_min_samples,
+            initial_inverse_mass,
             callback,
             callback_every,
             rng,
@@ -257,6 +268,7 @@ function batched_nuts(
             find_reasonable_step_size,
             mass_matrix_regularization,
             mass_matrix_min_samples,
+            initial_inverse_mass,
             callback,
             callback_every,
             tree_strategy,
@@ -264,7 +276,7 @@ function batched_nuts(
         )
     end
 
-    inverse_mass_matrix = ones(num_params)
+    inverse_mass_matrix = copy(initial_inverse_mass)
     step_size_workspace = nothing
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         step_size_workspace = BatchedHMCWorkspace(model, position, batch_args, batch_constraints, inverse_mass_matrix)
@@ -291,6 +303,7 @@ function batched_nuts(
         adapt_mass_matrix=adapt_mass_matrix,
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
+        initial_inverse_mass_matrix=initial_inverse_mass,
     )
     refind = BatchedStepSizeSearch(
         step_size_workspace,
@@ -503,18 +516,23 @@ function _batched_nuts_host_pooled!(
     find_reasonable_step_size::Bool,
     mass_matrix_regularization::Real,
     mass_matrix_min_samples::Int,
+    initial_inverse_mass::AbstractVector,
     callback,
     callback_every::Int,
     tree_strategy::Symbol,
     rng::AbstractRNG,
 )
+    # The starting shared diagonal inverse mass (issue #162): `ones` by default, or
+    # the Pathfinder covariance-diagonal seed. Broadcast into the C mass columns the
+    # per-chain proposal overloads consume, and used for the initial step search.
+    initial_inverse_mass_columns = repeat(collect(Float64, initial_inverse_mass), 1, num_chains)
     # Keep the initial-search workspace ALIVE (issue #158 lever A) so the batched
     # window-end re-search reuses it instead of the retired C scalar searches.
     step_size_workspace = nothing
     step_sizes = fill(nuts_step_size, num_chains)
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         step_size_workspace = BatchedHMCWorkspace(
-            model, position, batch_args, batch_constraints, ones(num_params),
+            model, position, batch_args, batch_constraints, collect(Float64, initial_inverse_mass),
         )
         step_sizes = _find_reasonable_batched_step_size_per_chain(
             step_size_workspace,
@@ -522,7 +540,7 @@ function _batched_nuts_host_pooled!(
             position,
             current_logjoint,
             current_gradient,
-            ones(num_params, num_chains),
+            copy(initial_inverse_mass_columns),
             batch_args,
             batch_constraints,
             nuts_step_size,
@@ -539,6 +557,7 @@ function _batched_nuts_host_pooled!(
         adapt_mass_matrix=adapt_mass_matrix,
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
+        initial_inverse_mass_matrix=initial_inverse_mass,
     )
     # Per-chain window-end re-search (issue #158 lever A): ONE batched call re-searches
     # every chain's step against the SHARED pooled mass in a single vectorized doubling
@@ -560,7 +579,9 @@ function _batched_nuts_host_pooled!(
     # per-chain proposal overloads (Matrix mass + C-length step vector) run with
     # identical mass columns -- numerically identical to a shared-mass integrator,
     # the host analog of the device path's single uploaded inverse-mass vector.
-    inverse_mass_matrices = ones(num_params, num_chains)
+    # Seeded from `initial_inverse_mass` (issue #162); overwritten each iteration
+    # from the driver's current shared mass, so the seed only matters transiently.
+    inverse_mass_matrices = copy(initial_inverse_mass_columns)
 
     sample_index = 0
     cumulative_divergences = 0
@@ -738,17 +759,23 @@ function _batched_nuts_device_per_chain!(
     find_reasonable_step_size::Bool,
     mass_matrix_regularization::Real,
     mass_matrix_min_samples::Int,
+    initial_inverse_mass::AbstractVector,
     callback,
     callback_every::Int,
     rng::AbstractRNG,
 )
+    # The starting shared diagonal inverse mass (issue #162): `ones` by default, or
+    # the Pathfinder covariance-diagonal seed. It seeds the initial step search and
+    # (via the driver's shared mass) is the first `inverse_mass` uploaded to the
+    # device on iteration 1.
+    initial_inverse_mass_columns = repeat(collect(Float64, initial_inverse_mass), 1, num_chains)
     # Keep the initial-search workspace ALIVE (issue #158 lever A) so the batched
     # window-end re-search reuses it instead of the retired C scalar searches.
     step_size_workspace = nothing
     step_sizes = fill(nuts_step_size, num_chains)
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         step_size_workspace = BatchedHMCWorkspace(
-            model, position, batch_args, batch_constraints, ones(num_params),
+            model, position, batch_args, batch_constraints, collect(Float64, initial_inverse_mass),
         )
         step_sizes = _find_reasonable_batched_step_size_per_chain(
             step_size_workspace,
@@ -756,7 +783,7 @@ function _batched_nuts_device_per_chain!(
             position,
             current_logjoint,
             current_gradient,
-            ones(num_params, num_chains),
+            copy(initial_inverse_mass_columns),
             batch_args,
             batch_constraints,
             nuts_step_size,
@@ -773,6 +800,7 @@ function _batched_nuts_device_per_chain!(
         adapt_mass_matrix=adapt_mass_matrix,
         mass_matrix_regularization=mass_matrix_regularization,
         mass_matrix_min_samples=mass_matrix_min_samples,
+        initial_inverse_mass_matrix=initial_inverse_mass,
     )
     # Per-chain window-end re-search (issue #158 lever A): ONE batched call re-searches
     # every chain's step against the SHARED pooled mass in a single vectorized doubling

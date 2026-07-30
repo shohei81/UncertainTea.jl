@@ -77,6 +77,7 @@ core_test_files = [
     ("map_laplace_approximation.jl", "inference"),
     ("advi_structured_guides.jl", "inference"),
     ("pathfinder_init.jl", "inference"),
+    ("pathfinder_mass_seed.jl", "inference"),
     ("batched_initial_positions.jl", "inference"),
     # "sampling": the wall-clock-heavy MCMC draws (many samples/chains). Split out
     # of "inference" so the two shards run in balanced parallel; sampling.jl
