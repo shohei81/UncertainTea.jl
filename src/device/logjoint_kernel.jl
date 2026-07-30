@@ -291,6 +291,55 @@ end
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
 end
 
+# Broadcast (vectorized) normal observation `{:y} ~ normal.(mu_expr, sigma)` --
+# the flagship GPU-lowering form (issue #134). A dense per-element fold over the
+# vector observation `y[1..M]`: read `M` from the shared trip-count buffer, then
+# for each element read its `C` covariate rows and `y` row from the observation
+# buffer (`stride == C + 1` rows per element, staged cursor-first) and add the
+# per-element `normal(mu_i, sigma_i)` logpdf. Scalar mu/sigma leaves read the
+# materialized `slots` buffer (broadcast across every element); covariate leaves
+# read `elem_base + offset`, matching the host `_score_backend_step!` broadcast fold.
+@inline _device_bcast_eval(e::DeviceLiteralExpr, slots, observed, elem_base, col) = e.value
+@inline _device_bcast_eval(e::DeviceSlotExpr, slots, observed, elem_base, col) = @inbounds slots[e.slot, col]
+@inline _device_bcast_eval(e::DeviceObservedColumnExpr, slots, observed, elem_base, col) =
+    _obsval(observed, elem_base + e.offset, col)
+@inline _device_bcast_eval(e::DevicePrimitiveExpr{Op}, slots, observed, elem_base, col) where {Op} =
+    _device_apply(Val(Op), _device_bcast_eval_args(e.args, slots, observed, elem_base, col)...)
+
+@inline _device_bcast_eval_args(::Tuple{}, slots, observed, elem_base, col) = ()
+@inline _device_bcast_eval_args(t::Tuple, slots, observed, elem_base, col) = (
+    _device_bcast_eval(first(t), slots, observed, elem_base, col),
+    _device_bcast_eval_args(Base.tail(t), slots, observed, elem_base, col)...,
+)
+
+@inline function _device_score_step(
+    step::DeviceBroadcastNormalChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    Tt = eltype(slots)
+    m = @inbounds tc[step.count_id]
+    y_offset = step.stride - Int32(1) # y row follows the C covariate rows
+    total = zero(Tt)
+    cur = cursor
+    for _ = Int32(1):m
+        mu = _device_bcast_eval(step.mu, slots, observed, cur, col)
+        sigma = _device_bcast_eval(step.sigma, slots, observed, cur, col)
+        y = _obsval(observed, cur + y_offset, col)
+        total += _device_normal_logpdf(mu, sigma, y)
+        cur += step.stride
+    end
+    # binding deliberately NOT stored (the observed vector has no scalar slot; the
+    # lowering audit rejects any downstream read)
+    return (total, cur)
+end
+
 @inline function _device_score_step(step::DevicePoissonChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)
     lambda = _device_eval(step.lambda, slots, col)
     value, lad, cur = _device_choice_value(step, params, observed, col, cursor)

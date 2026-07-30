@@ -409,6 +409,56 @@ end
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
 end
 
+# Broadcast (vectorized) normal observation in duals (issue #134): the exact
+# gradient-kernel analog of the logjoint handler. mu/sigma scalar leaves read the
+# dual `slots` buffer (a scalar latent binding carries its seed from that latent's
+# choice step, so `d/d(param)` flows through), covariate leaves read the constant
+# observation column (zero derivative), and `y` is a `_seed_obs` constant. The
+# whole per-element `normal` logpdf differentiates through the duals, reproducing
+# the host analytic broadcast gradient (`dmu = z/sigma`, `dsigma = (z^2-1)/sigma`
+# times the argument gradients) family by family.
+@inline _device_grad_bcast_eval(e::DeviceLiteralExpr, slots, observed, elem_base, pidx, b) = e.value
+@inline _device_grad_bcast_eval(e::DeviceSlotExpr, slots, observed, elem_base, pidx, b) =
+    @inbounds slots[e.slot, pidx, b]
+@inline _device_grad_bcast_eval(e::DeviceObservedColumnExpr, slots, observed, elem_base, pidx, b) =
+    _obsval(observed, elem_base + e.offset, b)
+@inline _device_grad_bcast_eval(e::DevicePrimitiveExpr{Op}, slots, observed, elem_base, pidx, b) where {Op} =
+    _device_apply(Val(Op), _device_grad_bcast_eval_args(e.args, slots, observed, elem_base, pidx, b)...)
+
+@inline _device_grad_bcast_eval_args(::Tuple{}, slots, observed, elem_base, pidx, b) = ()
+@inline _device_grad_bcast_eval_args(t::Tuple, slots, observed, elem_base, pidx, b) = (
+    _device_grad_bcast_eval(first(t), slots, observed, elem_base, pidx, b),
+    _device_grad_bcast_eval_args(Base.tail(t), slots, observed, elem_base, pidx, b)...,
+)
+
+@inline function _device_grad_score_step(
+    step::DeviceBroadcastNormalChoiceStep,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    TD = eltype(slots)
+    m = @inbounds tc[step.count_id]
+    y_offset = step.stride - Int32(1)
+    total = zero(TD)
+    cur = cursor
+    for _ = Int32(1):m
+        mu = _device_grad_bcast_eval(step.mu, slots, observed, cur, pidx, b)
+        sigma = _device_grad_bcast_eval(step.sigma, slots, observed, cur, pidx, b)
+        y = _seed_obs(TD, _obsval(observed, cur + y_offset, b))
+        mm, ss, vv = promote(mu, sigma, y)
+        total += _device_normal_logpdf(mm, ss, vv)
+        cur += step.stride
+    end
+    return (total, cur)
+end
+
 @inline function _device_grad_score_step(
     step::DevicePoissonChoiceStep,
     slots,

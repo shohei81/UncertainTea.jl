@@ -265,6 +265,56 @@ function _stage_linear_predictor_covariates!(rows, eta::BackendLinearPredictorEx
     return nothing
 end
 
+# Broadcast (vectorized) normal observation (issue #134): a VECTOR observation
+# `y[1..M]` scored per element against `normal(mu_i, sigma)`. Like a loop it carries
+# a dynamic element count `M`, so it takes a trip-count slot -- kept aligned with the
+# device plan's `count_id` by the shared pre-order loop counter, since both walks
+# cover `backend.steps` in the same order -- filled here with `M`. Its per-observation
+# covariate vectors ride the observation buffer (addresses erased) exactly like the
+# GLM covariate column: for each element `i`, push the `C` covariate values (distinct
+# covariate slots in the mu-then-sigma first-encounter order the lowering assigns
+# offsets) followed by the observed `y[i]`, so one element consumes `C + 1` cursor
+# rows and the device handler reads them cursor-first. A covariate slot is read from
+# generic env storage and indexed per element (a scalar generic broadcasts),
+# mirroring the host `_eval_backend_broadcast_numeric!` generic-storage branch.
+function _stage_step!(
+    rows,
+    step::BackendBroadcastNormalChoicePlanStep,
+    env,
+    constraints,
+    dummy_params,
+    trip_counts,
+    loop_starts,
+    loop_counter,
+    ::Type{T},
+) where {T}
+    loop_counter.count += Int32(1)
+    lid = loop_counter.count
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    observed = _batched_broadcast_observed_values(env, address_parts, constraints)
+    n = _broadcast_uniform_length(observed)
+    trip_counts[lid] = Int32(n)
+    covariate_slots = _broadcast_covariate_slots(step.mu, step.sigma, env.numeric_slots, env.index_slots)
+    batch_size = size(dummy_params, 2)
+    for element_index = 1:n
+        for slot in covariate_slots
+            covariate_row = Vector{T}(undef, batch_size)
+            for batch_index = 1:batch_size
+                value = env.generic_values[slot][batch_index]
+                scalar = value isa AbstractVector ? value[element_index] : value
+                covariate_row[batch_index] = T(_require_numeric_value(env, scalar, "broadcast covariate"))
+            end
+            push!(rows, covariate_row)
+        end
+        y_row = Vector{T}(undef, batch_size)
+        for batch_index = 1:batch_size
+            y_row[batch_index] = T(observed[batch_index][element_index])
+        end
+        push!(rows, y_row)
+    end
+    return nothing
+end
+
 # A vector observation stages as `value_length` consecutive rows in component
 # order; the kernel-side cursor advances by the step's compile-time dimension,
 # preserving the pre-order alignment invariant with a stride. lkjcholesky

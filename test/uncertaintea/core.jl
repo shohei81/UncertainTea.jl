@@ -58,6 +58,7 @@ core_test_files = [
     ("device_persistent_nuts_tiled.jl", "device"),
     ("device_masked_nuts_compaction.jl", "device"),
     ("device_glm_lowering.jl", "device"),
+    ("device_broadcast_normal_lowering.jl", "device"),
     ("device_perchain_stranding.jl", "device"),
     ("host_device_pooled_agreement.jl", "device"),
     ("device_chees.jl", "device"),
