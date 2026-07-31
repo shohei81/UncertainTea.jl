@@ -125,3 +125,35 @@ Convert `chains` into an `MCMCChains.Chains` object. Requires the optional
 `MCMCChains` dependency to be loaded (which activates the package extension).
 """
 function to_mcmcchains end
+
+# Same package-extension pattern for host reverse-mode AD (issue #268, follow-up
+# to RFC #263): the core declares `reverse_mode_gradient` method-less; the
+# UncertainTeaEnzymeExt extension (loaded when Enzyme.jl is present) adds the
+# implementation. Calling without Enzyme loaded raises a MethodError -- the
+# intended "load Enzyme.jl" signal.
+"""
+    reverse_mode_gradient(f, x::AbstractVector) -> Vector
+
+Reverse-mode gradient `∇f(x)` of a scalar objective `f`, via Enzyme.jl. Requires
+the optional `Enzyme` dependency to be loaded (which activates the package
+extension); without it this raises a `MethodError`.
+
+`f` must be a pure scalar function of the vector `x` (it may close over constant
+data, which is treated as non-differentiable). This is the reverse-mode entry
+point for models whose gradient scales badly under the forward-mode
+(`ForwardDiff`) path — e.g. a Gaussian-process marginal likelihood as a function
+of its hyperparameters, or any high-dimensional non-analytic logjoint. On such
+objectives reverse-mode is one `O(1)` cotangent pass instead of `O(P)`
+directional derivatives (see `bench/reverse_mode/`).
+
+The batched sampler gradient path itself (`batched_logjoint_gradient_unconstrained`)
+stays forward-mode/analytic; wiring reverse-mode into it needs a type-stable,
+non-mutating per-column evaluator (tracked in #268).
+
+```julia
+using UncertainTea, Enzyme
+gp_nlml(h) = UncertainTea.logpdf(gaussianprocess(X, exp(h[1]), exp(h[2]), exp(h[3])), y)
+g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])
+```
+"""
+function reverse_mode_gradient end

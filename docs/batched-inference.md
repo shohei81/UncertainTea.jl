@@ -64,6 +64,39 @@ an explicit cache:
 - `BatchedLogjointGradientCache(model, params, args, constraints)`
 - `batched_logjoint_gradient_unconstrained!(cache, params)`
 
+### Gradient backends
+
+The batched gradient path picks, per model, between **hand-derived analytic**
+gradients (the fused families: GLM, iid sufficient statistics, dense-covariance
+Gaussians, LKJ) and a **forward-mode** (`ForwardDiff`) fallback for everything
+else. Forward-mode is `O(P)` in the parameter count, so on genuinely
+high-dimensional non-analytic models it is structurally slower than a
+reverse-mode pass.
+
+For those models a **host reverse-mode** entry point is available through an
+optional Enzyme.jl package extension (issue #268, follow-up to the RFC #263):
+
+- `reverse_mode_gradient(f, x)` — the reverse-mode gradient `∇f(x)` of a pure
+  scalar objective, active once `using Enzyme` loads `UncertainTeaEnzymeExt`
+  (without it the call raises a `MethodError`). Enzyme is a weak dependency and
+  never enters the core load path.
+
+It matches the forward-mode gradient to machine precision and turns the
+non-analytic gradient cost from `O(P²)` into `O(P)` (measured 18.9× at `P=100`,
+107× at `P=800`; see `bench/reverse_mode/`). A Gaussian-process marginal
+likelihood as a function of its hyperparameters is the canonical target:
+
+```julia
+using UncertainTea, Enzyme
+gp_nlml(h) = UncertainTea.logpdf(gaussianprocess(X, exp(h[1]), exp(h[2]), exp(h[3])), y)
+g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])
+```
+
+Wiring reverse-mode into the batched sampler gradient path itself needs a
+type-stable, non-mutating per-column evaluator (the current compiled-plan
+workspace is not Enzyme-differentiable); that evaluator refactor is tracked in
+#268.
+
 Accepted batching modes:
 
 - shared `args::Tuple` for every batch element
