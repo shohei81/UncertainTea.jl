@@ -30,6 +30,38 @@ end
     return mu
 end
 
+# issue #264: the SAME models WITHOUT the `marginalize=:enumerate` annotation.
+# An unobserved finite-support discrete latent is auto-marginalized (there is no
+# valid way to HMC it), so these must match the explicitly-annotated versions.
+@tea static function denc_auto_indicator_model()
+    m1 ~ normal(-2.0, 1.0)
+    m2 ~ normal(2.0, 1.0)
+    z ~ bernoulli(0.3)                          # no annotation -> auto-marginalized
+    {:y} ~ normal(z * m1 + (1 - z) * m2, 0.5)
+    return m1
+end
+
+@tea static function denc_auto_categorical_model()
+    mu ~ normal(0.0, 1.0)
+    z ~ categorical([0.2, 0.3, 0.5])            # no annotation -> auto-marginalized
+    {:y} ~ normal(mu * z, 0.4)
+    return mu
+end
+
+# Past the support-product cap (2^6 = 64 > 32): auto-marginalization declines, so
+# the model stays an error (the user must annotate or observe).
+@tea static function denc_auto_cap_model()
+    mu ~ normal(0.0, 1.0)
+    a ~ bernoulli(0.4)
+    b ~ bernoulli(0.4)
+    c ~ bernoulli(0.4)
+    d ~ bernoulli(0.4)
+    e ~ bernoulli(0.4)
+    f ~ bernoulli(0.4)
+    {:y} ~ normal(mu + a + b + c + d + e + f, 0.5)
+    return mu
+end
+
 # two marginalized latents: the suffix recursion gives product enumeration
 @tea static function denc_two_latent_model()
     mu ~ normal(0.0, 1.0)
@@ -600,5 +632,41 @@ end
         end
         @test denc_mean(denc_ind_m1) ≈ denc_mean(denc_mix_m1) atol = 0.15
         @test denc_mean(denc_ind_m2) ≈ denc_mean(denc_mix_m2) atol = 0.15
+    end
+
+    @testset "denc_auto_marginalize" begin
+        # issue #264: an un-annotated unobserved discrete latent is auto-
+        # marginalized, matching the explicit annotation AND the mixture oracle
+        # to the last bit.
+        denc_auto_cm = choicemap((:y, 0.3))
+        for denc_auto_p in ([0.4, -0.7], [-1.0, 1.3], [0.0, 0.0])
+            denc_auto_lj = logjoint_unconstrained(denc_auto_indicator_model, denc_auto_p, (), denc_auto_cm)
+            denc_expl_lj = logjoint_unconstrained(denc_indicator_model, denc_auto_p, (), denc_auto_cm)
+            denc_mix_lj = logjoint_unconstrained(denc_mixture_model, denc_auto_p, (), denc_auto_cm)
+            @test denc_auto_lj == denc_expl_lj
+            @test denc_auto_lj == denc_mix_lj
+        end
+
+        # categorical form matches its explicit annotation too.
+        denc_auto_ccm = choicemap((:y, 0.6))
+        @test logjoint_unconstrained(denc_auto_categorical_model, [0.5], (), denc_auto_ccm) ==
+              logjoint_unconstrained(denc_categorical_model, [0.5], (), denc_auto_ccm)
+
+        # NUTS now runs on the un-annotated model (it errored before #264).
+        denc_auto_chain = nuts(
+            denc_auto_indicator_model, (), denc_auto_cm;
+            num_samples=100, num_warmup=100, rng=MersenneTwister(1),
+        )
+        @test all(isfinite, denc_auto_chain.constrained_samples)
+
+        # Constraining the discrete choice makes it data again: auto-marginalization
+        # must NOT fire, and the plain joint at that value is scored.
+        denc_auto_zcm = choicemap((:y, 0.3), (:z, 1.0))
+        @test isfinite(logjoint_unconstrained(denc_auto_indicator_model, [0.4, -0.7], (), denc_auto_zcm))
+
+        # Past the support-product cap the model stays an error (opt-in required).
+        @test_throws ArgumentError logjoint_unconstrained(
+            denc_auto_cap_model, [0.2], (), choicemap((:y, 1.0)),
+        )
     end
 end

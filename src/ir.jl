@@ -1101,6 +1101,66 @@ end
 # layout is signature-independent (it depends only on bindings), so it is
 # reused; binding slots are re-annotated because reparameterization rebuilds the
 # choice steps.
+# Automatic marginalization of un-annotated discrete latents (issue #264). A
+# finite-support discrete choice has no parameter transform, so if it is neither
+# observed nor annotated `marginalize=:enumerate` it currently reaches the
+# "requires a provided value" error at score time -- there is no valid way to
+# HMC/NUTS it. Auto-detect such latents and route them through the same
+# enumeration path the explicit annotation uses. Bounded by the support-product
+# cap so a model with many discrete latents cannot silently create an
+# intractable enumeration (all-or-nothing: past the cap they stay erroring so the
+# user must be explicit).
+const AUTO_MARGINALIZE_SUPPORT_LIMIT = 32
+
+# Support size of a discrete latent that can be auto-marginalized (bernoulli, or
+# categorical with a literal probability vector so K is known), and only when it
+# is not already annotated; `nothing` otherwise. Mirrors `_marginalize_support`.
+function _auto_marginalize_support_size(rhs)
+    rhs isa DistributionSpec || return nothing
+    rhs.marginalize === :none || return nothing
+    if rhs.family === :bernoulli
+        return 2
+    elseif rhs.family === :categorical && length(rhs.arguments) == 1
+        probs = rhs.arguments[1]
+        if probs isa Expr && probs.head === :vect
+            return length(probs.args)
+        elseif probs isa AbstractVector
+            return length(probs)
+        end
+    end
+    return nothing
+end
+
+# Flip eligible unobserved discrete latents to `marginalize=:enumerate` in place
+# of the "requires a value" error. Discrete choices carry no parameter slot, so
+# this never changes the parameter layout; it only rewrites the choice rhs.
+function _auto_marginalize_discrete_latents(steps::Vector{AbstractPlanStep}, observed)
+    candidates = Int[]
+    support_product = 1
+    for (i, step) in enumerate(steps)
+        step isa ChoicePlanStep || continue
+        step.parameter_slot === nothing || continue                 # continuous latents keep a slot
+        (isempty(step.scopes) && isstaticaddress(step.address)) || continue
+        (_static_choice_address(step) in observed) && continue      # observed choice: leave as data
+        size = _auto_marginalize_support_size(step.rhs)
+        size === nothing && continue
+        push!(candidates, i)
+        support_product *= size
+    end
+    (isempty(candidates) || support_product > AUTO_MARGINALIZE_SUPPORT_LIMIT) && return steps
+    out = copy(steps)
+    for i in candidates
+        s = steps[i]
+        r = s.rhs
+        out[i] = ChoicePlanStep(
+            s.choice_index, s.binding, s.binding_slot, s.address,
+            DistributionSpec(r.family, r.arguments, r.builder, r.reparam, :enumerate),
+            s.scopes, s.parameter_slot,
+        )
+    end
+    return out
+end
+
 function _signature_execution_plan(base_plan::ExecutionPlan, observed)
     slots = ParameterSlotSpec[]
     step_counter = Ref(1)
@@ -1116,6 +1176,7 @@ function _signature_execution_plan(base_plan::ExecutionPlan, observed)
         parameter_counter,
         value_counter,
     )
+    reparameterized = _auto_marginalize_discrete_latents(reparameterized, observed)
     layout = ParameterLayout(slots, parameter_counter[] - 1, value_counter[] - 1)
     annotated = _annotate_environment_slots(reparameterized, base_plan.environment_layout)
     return ExecutionPlan(base_plan.model_name, annotated, layout, base_plan.environment_layout)

@@ -5,6 +5,17 @@ latents out of the logjoint via logsumexp so HMC/NUTS sample only the
 continuous parameters. Track 2 (MH-within-Gibbs for unbounded discrete
 latents) is out of scope here and stays on issue #13.
 
+**Update (issue #264): the annotation is now optional.** An *unobserved*
+finite-support discrete latent (`bernoulli`, or `categorical` with a literal
+probability vector) that carries no `marginalize=` keyword is auto-marginalized
+by exactly the machinery below — there is no valid way to HMC a discrete latent,
+so this replaces the "requires a provided value" error with the marginal density.
+It is bounded by a support-product cap (`AUTO_MARGINALIZE_SUPPORT_LIMIT = 32`):
+past the cap, auto-marginalization declines (all-or-nothing) and the choice stays
+an error, so a model with many discrete latents cannot silently create an
+intractable `K^n` enumeration. The explicit `marginalize=:enumerate` annotation
+remains valid and is required only to opt a past-cap model in deliberately.
+
 ## Problem
 
 Every sampler is gradient-based, and a discrete latent has no parameter
