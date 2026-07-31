@@ -461,6 +461,26 @@ Requirements:
       return Omega
   end
   ```
+- `gaussianprocess(inputs, lengthscale, variance, noise)` is a zero-mean Gaussian
+  process regression likelihood with a squared-exponential (RBF) kernel. `inputs`
+  is a `D×N` matrix (one column per point) or a length-`N` vector for 1-D inputs;
+  the positive scalars `lengthscale`/`variance`/`noise` are typically `exp` of
+  latent log-hyperparameters. As an observation `{:y} ~ gaussianprocess(X, l, v,
+  n)` scores the length-`N` output vector under `N(0, K)` with `K[i,j] = v² ·
+  exp(-‖xᵢ − xⱼ‖² / (2 l²)) + n² δᵢⱼ`, rebuilding the kernel Cholesky each call so
+  the hyperparameter gradient flows through it by ForwardDiff. It is CPU-reference
+  only (the dense `O(N³)` Cholesky is not device-lowered) and expects centred
+  outputs (the prior mean is zero). Example:
+
+  ```julia
+  @tea static function gp_regression(X, n)
+      logl ~ normal(0.0, 1.0)
+      logv ~ normal(0.0, 1.0)
+      logn ~ normal(-1.0, 1.0)
+      {:y} ~ gaussianprocess(X, exp(logl), exp(logv), exp(logn))
+      return logl
+  end
+  ```
 - `wishart(nu, S)` and `inversewishart(nu, S)` are the classical conjugate
   covariance-matrix priors (`nu` degrees of freedom, `d`×`d` scale matrix `S`,
   requiring `nu > d - 1`). The value is the column-major **packed** lower
