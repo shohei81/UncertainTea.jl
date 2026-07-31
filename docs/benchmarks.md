@@ -292,6 +292,26 @@ Stan's 4,657 ESS/s) — the per-observation mixture density is evaluated without
 the sufficient-statistics fusion the `gauss`/GLM paths enjoy. CPU-only: the
 marginalization is device-unsupported until #67.
 
+### lkj (d=2 correlated MVN, N=400) — all PASS
+
+| framework | chains | min bulk ESS/s | div rate |
+|---|---|---|---|
+| numpyro-parallel | 4 | 4,058 ± 690 | 0 |
+| stan | 4 | 2,070 ± 210 | 0 |
+| uncertaintea-cpu | 4 | 1,173 ± 42 | 0 |
+| uncertaintea-batched-cpu | 4 | 373 ± 25 | 0 |
+
+The correlation-prior leg (#224): a d=2 multivariate normal with an
+`lkjcholesky(2, 2.0)` correlation prior and per-dimension log-normal scales.
+UncertainTea's `CholeskyCorrTransform` + packed logpdf (#49/#57) is checked
+against Stan's `lkj_corr_cholesky` + `multi_normal_cholesky` and NumPyro's
+`LKJCholesky`. All four gate-pass on the packed correlation factor (`Omega[1..3]`)
+and scales (`tau[1..2]`); the free correlation `Omega[2]` and the derived
+`Omega[3]` agree within 4 MCSE, while the structural unit diagonal `Omega[1] == 1`
+is a zero-variance coordinate the gate skips. Here `uncertaintea-cpu` (1,173) is
+competitive with Stan (2,070) — the dense-Cholesky logpdf is a better-fused shape
+than the mixture's per-observation marginalization.
+
 ### eight_schools_centered — all FAIL (funnel; expected)
 
 Every framework, Stan included, exceeds R-hat 1.01 with 1–3% divergences at
@@ -323,6 +343,7 @@ model stays in the suite as the honesty check.
 | `logistic_large` | GLM, N=8000, D=16 | heavy per-gradient GLM; host + device analytic path; chain-count scaling sweep |
 | `gauss` | mean/scale, N=1000 | device path; chain-count scaling sweep |
 | `mixture` | 2-comp Gaussian mixture, N=500 | discrete-latent marginalization (`mixture`/`marginalize=:enumerate`) vs Stan `log_mix`; ordered-means identifiability |
+| `lkj` | d=2 correlated MVN, N=400 | `lkjcholesky` correlation prior + log-normal scales vs Stan `lkj_corr_cholesky` / NumPyro `LKJCholesky` |
 
 Identical joint densities across frameworks; priors in
 `bench/crossppl/julia/models.jl` and `bench/crossppl/python/stan/*.stan`.
@@ -338,7 +359,14 @@ indicator (the DSL's `mixture` machinery, equivalent to `marginalize=:enumerate`
 and checked against Stan's hand-marginalized `log_mix` — all four frameworks
 gate-pass on the ordered-means (`mu2 = mu1 + exp(log_gap)`) identifiable
 parameterization. CPU-only (mixture/enumerate is device-unsupported until #67).
-An `lkjcholesky` correlation model is the remaining planned addition.
+The `lkj` model (#224) is the correlation-prior leg: a d=2 multivariate normal
+with an `lkjcholesky(2, 2.0)` correlation prior and per-dimension log-normal
+scales, checked against Stan's `lkj_corr_cholesky` + `multi_normal_cholesky` and
+NumPyro's `LKJCholesky`. All three expose UncertainTea's packed lower-triangular
+correlation factor (`Omega[1..3]`, column-major) plus the scales (`tau[1..2]`)
+under identical names; the structural `Omega[1] == 1` diagonal is a zero-variance
+coordinate the gate skips. CPU-reference-only (the LKJ family is
+device-unsupported).
 
 ## Methodology notes
 

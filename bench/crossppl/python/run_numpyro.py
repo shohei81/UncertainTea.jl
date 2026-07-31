@@ -90,6 +90,23 @@ def build_model(model_name: str, data: dict):
 
         return model, ["mu1", "log_gap", "s"]
 
+    if model_name == "lkj":
+        # issue #224: d=2 LKJ-Cholesky correlation prior + log-normal scales. The
+        # deterministic `Omega` reproduces UncertainTea's packed lower-triangular
+        # correlation factor ([L11, L21, L22]) so the gate aligns by name.
+        y = jnp.asarray(np.array(data["y"]))  # (n, 2)
+
+        def model():
+            L = numpyro.sample("L", dist.LKJCholesky(2, concentration=2.0))
+            with numpyro.plate("d", 2):
+                tau = numpyro.sample("tau", dist.LogNormal(0.0, 0.5))
+            numpyro.deterministic("Omega", jnp.array([L[0, 0], L[1, 0], L[1, 1]]))
+            scale_tril = tau[:, None] * L
+            with numpyro.plate("obs", y.shape[0]):
+                numpyro.sample("y", dist.MultivariateNormal(jnp.zeros(2), scale_tril=scale_tril), obs=y)
+
+        return model, ["Omega", "tau"]
+
     raise ValueError(f"unknown model {model_name}")
 
 
