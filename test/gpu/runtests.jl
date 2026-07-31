@@ -475,10 +475,12 @@ end
 # --- device-resident ChEES-HMC smoke (issue #161 increment 4) ----------------
 # Mirrors test/uncertaintea/core/device_chees.jl on a Metal.MetalBackend at Float32.
 # The Halton-jittered leapfrog trajectory runs device-resident (one sync per
-# iteration); the cross-chain ChEES trajectory-length adaptation runs on the host
-# during warmup from a per-iteration proposal/momentum download. RNG stays host-side,
-# so results are statistically (not bitwise) equivalent to the CPU path; we assert
-# finite results, posterior-mean sanity, and that the adapted T converges finite.
+# iteration); the cross-chain ChEES trajectory-length adaptation reduces the
+# proposal mean + per-chain whitened moments ON-DEVICE during warmup (issue #220),
+# downloading only O(P)+O(C) instead of two P x C matrices, then runs the scalar
+# state machine on the host. RNG stays host-side, so results are statistically (not
+# bitwise) equivalent to the CPU path; we assert finite results, posterior-mean
+# sanity, and that the adapted T converges finite.
 
 @testset "device Metal GPU batched ChEES smoke" begin
     if !Metal.functional()
