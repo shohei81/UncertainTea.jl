@@ -269,4 +269,99 @@ end
             sampler=:not_a_sampler,
         )
     end
+
+    @testset "sbc_batched_execution" begin
+        # issue #222: run all replications as the chains of ONE batched_nuts call
+        # (num_chains = num_simulations), each chain conditioned on its own data.
+        # Host leg calibrates uniformly.
+        host = sbc(
+            sbc_conjugate_model;
+            num_simulations=128,
+            num_posterior_draws=63,
+            num_warmup=200,
+            thin=2,
+            execution=:batched,
+            rng=MersenneTwister(20260731),
+        )
+        @test size(host.ranks) == (1, 128)
+        @test all(0 .<= host.ranks .<= 63)
+        @test all(p -> p > 1e-3, host.pvalues)
+        @test !has_warnings(host)
+
+        # Device legs: the whole SBC study is a single device run (CPU()/Float64).
+        for strategy in (:masked, :persistent)
+            device = sbc(
+                sbc_conjugate_model;
+                num_simulations=128,
+                num_posterior_draws=63,
+                num_warmup=200,
+                thin=2,
+                execution=:batched,
+                tree_strategy=strategy,
+                backend=CPU(),
+                precision=Float64,
+                rng=MersenneTwister(20260731),
+            )
+            @test size(device.ranks) == (1, 128)
+            @test all(p -> p > 1e-3, device.pvalues)
+            @test !has_warnings(device)
+        end
+
+        # A point-mass coordinate is still reported as NaN through the batched
+        # per-chain constraint-vector path (shared finalize, vector latents).
+        corr = sbc(
+            sbc_corr_model,
+            (sbc_corr_zeros2, sbc_corr_ones2, 8);
+            num_simulations=64,
+            num_posterior_draws=24,
+            num_warmup=80,
+            execution=:batched,
+            rng=MersenneTwister(41),
+        )
+        @test size(corr.ranks) == (3, 64)
+        @test isnan(corr.pvalues[1])
+        @test !has_warnings(corr)
+    end
+
+    @testset "sbc_batched_keeps_teeth_and_guards" begin
+        # A deliberately broken sampler still fails batched SBC.
+        broken = sbc(
+            sbc_conjugate_model;
+            num_simulations=60,
+            num_posterior_draws=24,
+            num_warmup=0,
+            execution=:batched,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            step_size=25.0,
+            rng=MersenneTwister(1),
+        )
+        @test broken.pvalues[1] < 1e-12
+        @test has_warnings(broken)
+
+        # Guards: num_chains is set internally; only :nuts/:batched_nuts allowed.
+        @test_throws ArgumentError sbc(
+            sbc_conjugate_model;
+            num_simulations=8,
+            num_posterior_draws=8,
+            num_warmup=8,
+            execution=:batched,
+            num_chains=4,
+        )
+        @test_throws ArgumentError sbc(
+            sbc_conjugate_model;
+            num_simulations=8,
+            num_posterior_draws=8,
+            num_warmup=8,
+            execution=:batched,
+            sampler=:chees,
+        )
+        @test_throws ArgumentError sbc(
+            sbc_conjugate_model;
+            num_simulations=8,
+            num_posterior_draws=8,
+            num_warmup=8,
+            execution=:not_a_mode,
+        )
+    end
 end
