@@ -77,25 +77,33 @@ For those models a **host reverse-mode** entry point is available through an
 optional Enzyme.jl package extension (issue #268, follow-up to the RFC #263):
 
 - `reverse_mode_gradient(f, x)` — the reverse-mode gradient `∇f(x)` of a pure
-  scalar objective, active once `using Enzyme` loads `UncertainTeaEnzymeExt`
-  (without it the call raises a `MethodError`). Enzyme is a weak dependency and
-  never enters the core load path.
+  scalar objective (e.g. a GP marginal likelihood as a function of its
+  hyperparameters).
+- `reverse_mode_gradient(model, params, args, constraints)` — the reverse-mode
+  analogue of `logjoint_gradient_unconstrained`: `∇` of a whole `@tea` model's
+  unconstrained logjoint. It reuses the same type-stable generated scorer the
+  forward path differentiates, so the result is identical — just computed the
+  cheaper way. Models that fall back to the interpreter (e.g. scalar, non-loop
+  observations) raise an `ArgumentError`; use forward-mode for those.
 
-It matches the forward-mode gradient to machine precision and turns the
+Both are active once `using Enzyme` loads `UncertainTeaEnzymeExt` (without it they
+raise a `MethodError`); Enzyme is a weak dependency and never enters the core load
+path. They match the forward-mode gradient to machine precision and turn the
 non-analytic gradient cost from `O(P²)` into `O(P)` (measured 18.9× at `P=100`,
-107× at `P=800`; see `bench/reverse_mode/`). A Gaussian-process marginal
-likelihood as a function of its hyperparameters is the canonical target:
+107× at `P=800`; see `bench/reverse_mode/`):
 
 ```julia
 using UncertainTea, Enzyme
 gp_nlml(h) = UncertainTea.logpdf(gaussianprocess(X, exp(h[1]), exp(h[2]), exp(h[3])), y)
-g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])
+g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])   # pure objective
+g = reverse_mode_gradient(model, theta, args, constraints)  # whole model
 ```
 
-Wiring reverse-mode into the batched sampler gradient path itself needs a
-type-stable, non-mutating per-column evaluator (the current compiled-plan
-workspace is not Enzyme-differentiable); that evaluator refactor is tracked in
-#268.
+Wiring per-column reverse-mode into the *batched* sampler gradient path is the
+remaining step (each batch column is a single chain, so it can reuse the same
+generated-scorer objective); that integration is tracked in #268. The batched
+per-column *interpreter* objective is not Enzyme-differentiable, which is why the
+single-chain generated-scorer path is the reverse-mode entry point.
 
 Accepted batching modes:
 

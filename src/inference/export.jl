@@ -133,27 +133,35 @@ function to_mcmcchains end
 # intended "load Enzyme.jl" signal.
 """
     reverse_mode_gradient(f, x::AbstractVector) -> Vector
+    reverse_mode_gradient(model::TeaModel, params, args=(), constraints=choicemap()) -> Vector
 
-Reverse-mode gradient `∇f(x)` of a scalar objective `f`, via Enzyme.jl. Requires
-the optional `Enzyme` dependency to be loaded (which activates the package
-extension); without it this raises a `MethodError`.
+Reverse-mode gradient via Enzyme.jl. Requires the optional `Enzyme` dependency to
+be loaded (which activates the package extension); without it these raise a
+`MethodError` — the intended "load Enzyme" signal.
 
-`f` must be a pure scalar function of the vector `x` (it may close over constant
-data, which is treated as non-differentiable). This is the reverse-mode entry
-point for models whose gradient scales badly under the forward-mode
-(`ForwardDiff`) path — e.g. a Gaussian-process marginal likelihood as a function
-of its hyperparameters, or any high-dimensional non-analytic logjoint. On such
-objectives reverse-mode is one `O(1)` cotangent pass instead of `O(P)`
-directional derivatives (see `bench/reverse_mode/`).
+The first form differentiates a pure scalar objective `f` at `x` (`f` may close
+over constant data, treated as non-differentiable) — e.g. a Gaussian-process
+marginal likelihood as a function of its hyperparameters.
 
-The batched sampler gradient path itself (`batched_logjoint_gradient_unconstrained`)
-stays forward-mode/analytic; wiring reverse-mode into it needs a type-stable,
-non-mutating per-column evaluator (tracked in #268).
+The second form is the reverse-mode analogue of `logjoint_gradient_unconstrained`:
+`∇` of `model`'s unconstrained logjoint at `params`. It is `O(1)` in the parameter
+count instead of the forward-mode path's `O(P)`, so it pays off on high-dimensional
+non-analytic models (measured 18.9× at `P=100`, 107× at `P=800`; see
+`bench/reverse_mode/`), returning a result identical to the forward-mode gradient.
+It is available only for models on the type-stable generated-scorer path; a model
+that falls back to the interpreter raises an `ArgumentError` (use the forward-mode
+`logjoint_gradient_unconstrained` for those).
+
+The batched sampler gradient path (`batched_logjoint_gradient_unconstrained`) still
+runs forward-mode/analytic; wiring per-column reverse-mode into it is tracked in #268.
 
 ```julia
 using UncertainTea, Enzyme
+# pure objective
 gp_nlml(h) = UncertainTea.logpdf(gaussianprocess(X, exp(h[1]), exp(h[2]), exp(h[3])), y)
 g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])
+# whole model
+g = reverse_mode_gradient(model, theta, args, constraints)
 ```
 """
 function reverse_mode_gradient end
