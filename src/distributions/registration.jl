@@ -40,6 +40,7 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :mvnormal,
     :mvnormaldense,
     :gaussianprocess,
+    :hmm,
     :mvstudentt,
     :mvstudenttdense,
     :wishart,

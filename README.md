@@ -118,7 +118,8 @@ their `truncatednormal` / `truncatedstudentt` truncations; the discrete families
 `negativebinomial`, `poisson`, `categorical`, `discreteuniform`, and
 `multinomial`; the vector/structured families `dirichlet`, diagonal `mvnormal`,
 dense `mvnormaldense`, `mvstudentt` / `mvstudenttdense`, `lkjcholesky` (with the
-`scale_cholesky` helper), `gaussianprocess` regression, and finite `mixture`s; plus `iid` vectors and
+`scale_cholesky` helper), `gaussianprocess` regression, `hmm` (Gaussian-emission hidden Markov
+models via the forward algorithm), and finite `mixture`s; plus `iid` vectors and
 user-defined families via `register_distribution` (`AbstractTeaDistribution`).
 
 ## Documentation
