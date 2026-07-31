@@ -481,6 +481,31 @@ Requirements:
       return logl
   end
   ```
+- `hmm(init, transition, means, sigma)` is a hidden Markov model with Gaussian
+  emissions. `init` is the length-`K` initial-state distribution and `transition`
+  the `K×K` row-stochastic transition matrix (fixed dynamics, supplied as model
+  arguments); `means` are the `K` per-state emission means and `sigma` the shared
+  emission standard deviation, typically latent. As an observation `{:y} ~
+  hmm(init, transition, means, sigma)` scores the length-`T` observation sequence
+  through the **forward algorithm**, marginalizing the hidden state path in
+  `O(T·K²)` via the log-space `α` recursion (the marginal Stan hand-writes with
+  `log_sum_exp`). This loop-carried Markov chain is exactly the case that needs the
+  forward algorithm rather than per-timestep `marginalize=:enumerate`, whose `Kᵀ`
+  path enumeration is intractable. The recursion is differentiable, so HMC/NUTS
+  infers the emission parameters; give `means` an identifiable (e.g. ordered)
+  parameterization so the marginal posterior is well-defined. It is CPU-reference
+  only (the loop-carried recursion is not device-lowered). Latent
+  transition/initial simplexes and non-Gaussian emissions are follow-ups. Example:
+
+  ```julia
+  @tea static function hmm_regime_model(init, transition, seqlen)
+      m1 ~ normal(-1.0, 2.0)
+      log_gap ~ normal(0.0, 1.0)                 # ordered means for identifiability
+      logs ~ normal(-0.5, 0.5)
+      {:y} ~ hmm(init, transition, [m1, m1 + exp(log_gap)], exp(logs))
+      return m1
+  end
+  ```
 - `wishart(nu, S)` and `inversewishart(nu, S)` are the classical conjugate
   covariance-matrix priors (`nu` degrees of freedom, `d`×`d` scale matrix `S`,
   requiring `nu > d - 1`). The value is the column-major **packed** lower
