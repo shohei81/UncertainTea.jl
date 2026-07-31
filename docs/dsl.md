@@ -489,6 +489,29 @@ Requirements:
   # ARD: a per-dimension lengthscale vector (here supplied as a model argument)
   ard_gp(X, lengthscales, n) = gaussianprocess(X, lengthscales, 1.0, 0.2)
   ```
+
+  `gaussianprocess` marginalizes the latent function analytically, so it only fits
+  a **Gaussian** likelihood. For **direct latent-function inference** — GP
+  classification, count regression, or any non-Gaussian likelihood —
+  `gp_cholesky(inputs, lengthscale, variance, noise)` returns the kernel Cholesky
+  factor `L` (`K = L L'`) as a deterministic binding (mirroring `scale_cholesky`),
+  which feeds the GP prior into `mvnormaldense` so the function values
+  `f ~ N(0, K)` are sampled directly. `noise` here is the diagonal jitter/nugget;
+  the observation noise lives in the likelihood. Because `f` is a **latent**
+  `mvnormaldense`, its zero mean must be a static-length literal/tuple (the same
+  rule as any dense-normal latent), which also fixes the number of function values:
+
+  ```julia
+  @tea static function gp_classification(X)
+      logl ~ normal(0.0, 1.0)
+      L = gp_cholesky(X, exp(logl), 1.0, 1e-6)   # kernel Cholesky, deterministic binding
+      f ~ mvnormaldense((0.0, 0.0, 0.0, 0.0), L) # latent GP function values (N = 4)
+      for i in 1:4
+          {:y => i} ~ bernoullilogit(f[i])       # non-Gaussian likelihood
+      end
+      return logl
+  end
+  ```
 - `hmm(init, transition, means, sigma)` is a hidden Markov model with Gaussian
   emissions. `init` is the length-`K` initial-state distribution and `transition`
   the `K×K` row-stochastic transition matrix (fixed dynamics, supplied as model

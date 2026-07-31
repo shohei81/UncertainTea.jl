@@ -82,6 +82,39 @@ function gaussianprocess(inputs, lengthscale, variance, noise)
     return GaussianProcessDist(matrix, lengthscale, variance, noise)
 end
 
+"""
+    gp_cholesky(inputs, lengthscale, variance, noise)
+
+Lower-triangular Cholesky factor `L` of the RBF kernel matrix `K` (`K = L L'`)
+built from `inputs` and the hyperparameters, for **direct latent-function
+inference**: a plain function usable as a deterministic binding inside `@tea`,
+mirroring `scale_cholesky`. Where `gaussianprocess` scores the analytic
+zero-mean marginal `N(0, K)` (Gaussian likelihood only), `gp_cholesky` feeds the
+GP prior into `mvnormaldense` so the latent function values `f ~ N(0, K)` are
+sampled directly and can drive **any** likelihood — Bernoulli/logit
+classification, Poisson counts, etc. `inputs` is a `D x N` matrix (or length-`N`
+vector for 1-D); `lengthscale` is a scalar or length-`D` ARD vector; `noise` is
+the diagonal jitter/nugget that keeps `K` positive definite.
+
+```julia
+@tea static function gp_classification(X)
+    logl ~ normal(0.0, 1.0)
+    logv ~ normal(0.0, 1.0)
+    L = gp_cholesky(X, exp(logl), exp(logv), 1e-6)   # deterministic binding
+    f ~ mvnormaldense((0.0, 0.0, 0.0, 0.0), L)       # latent GP values (static-length zero mean)
+    for i in 1:4
+        {:y => i} ~ bernoullilogit(f[i])
+    end
+    return logl
+end
+```
+"""
+function gp_cholesky(inputs, lengthscale, variance, noise)
+    matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
+    K = _gp_rbf_covariance(matrix, lengthscale, variance, noise)
+    return cholesky(Symmetric(K)).L
+end
+
 function logpdf(gp::GaussianProcessDist, y::AbstractVector)
     n = size(gp.inputs, 2)
     length(y) == n ||
