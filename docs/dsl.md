@@ -467,10 +467,15 @@ Requirements:
   the positive scalars `lengthscale`/`variance`/`noise` are typically `exp` of
   latent log-hyperparameters. As an observation `{:y} ~ gaussianprocess(X, l, v,
   n)` scores the length-`N` output vector under `N(0, K)` with `K[i,j] = v² ·
-  exp(-‖xᵢ − xⱼ‖² / (2 l²)) + n² δᵢⱼ`, rebuilding the kernel Cholesky each call so
-  the hyperparameter gradient flows through it by ForwardDiff. It is CPU-reference
-  only (the dense `O(N³)` Cholesky is not device-lowered) and expects centred
-  outputs (the prior mean is zero). Example:
+  exp(-½ Σ_d (x_{d,i} − x_{d,j})² / l_d²) + n² δᵢⱼ`, rebuilding the kernel Cholesky
+  each call so the hyperparameter gradient flows through it by ForwardDiff. It is
+  CPU-reference only (the dense `O(N³)` Cholesky is not device-lowered) and expects
+  centred outputs (the prior mean is zero). `lengthscale` is either a positive
+  **scalar** (isotropic) or a length-`D` **vector** for **Automatic Relevance
+  Determination** (one lengthscale per input dimension, so an uninformative
+  dimension is pruned by a large `l_d`); the `D + 2` hyperparameter gradient of the
+  ARD marginal likelihood is a natural `reverse_mode_gradient` target (issue #268)
+  when `D` is large. Example:
 
   ```julia
   @tea static function gp_regression(X, n)
@@ -480,6 +485,9 @@ Requirements:
       {:y} ~ gaussianprocess(X, exp(logl), exp(logv), exp(logn))
       return logl
   end
+
+  # ARD: a per-dimension lengthscale vector (here supplied as a model argument)
+  ard_gp(X, lengthscales, n) = gaussianprocess(X, lengthscales, 1.0, 0.2)
   ```
 - `hmm(init, transition, means, sigma)` is a hidden Markov model with Gaussian
   emissions. `init` is the length-`K` initial-state distribution and `transition`

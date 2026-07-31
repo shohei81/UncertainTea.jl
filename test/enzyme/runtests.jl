@@ -29,6 +29,22 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         @test length(rev) == 3
     end
 
+    @testset "ARD-GP hyperparameter gradient (D+2 params) matches ForwardDiff" begin
+        # the reverse-mode payoff for GP is the many-hyperparameter ARD kernel:
+        # D per-dimension lengthscales + variance + noise (issue #273).
+        rng = MersenneTwister(273)
+        D, N = 16, 40
+        X = randn(rng, D, N)
+        y = randn(rng, N)
+        # hyper = [log-lengthscales (D); log-variance; log-noise]
+        ard_nlml(h) = UT.logpdf(gaussianprocess(X, exp.(h[1:D]), exp(h[D+1]), exp(h[D+2])), y)
+        h0 = vcat(zeros(D), 0.0, -1.0)
+        fd = ForwardDiff.gradient(ard_nlml, h0)
+        rev = reverse_mode_gradient(ard_nlml, h0)
+        @test rev ≈ fd rtol = 1e-6
+        @test length(rev) == D + 2
+    end
+
     @testset "pure high-P coupled logjoint matches ForwardDiff" begin
         # normal(0,1) prior + per-element nonlinear neighbour coupling; nothing
         # sufficient-statistics-fuses, the class where reverse-mode scales O(P)

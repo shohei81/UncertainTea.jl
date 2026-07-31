@@ -9,14 +9,21 @@
 # unsupported by `backend_report`/`device_report`. Users center their outputs
 # (the prior mean is zero). The O(N^3) Cholesky is the exact GP cost.
 
-# RBF covariance `K[i,j] = variance^2 * exp(-||x_i - x_j||^2 / (2 lengthscale^2))`
+# RBF covariance `K[i,j] = variance^2 * exp(-0.5 * sum_d (x_di - x_dj)^2 / l_d^2)`
 # plus `noise^2` on the diagonal, with a tiny jitter for numerical positive-
-# definiteness. `inputs` is a D x N matrix (one column per point). Generic in the
-# element type so ForwardDiff Duals flow through.
+# definiteness. `inputs` is a D x N matrix (one column per point). `lengthscale` is
+# either a scalar (isotropic: one shared lengthscale) or a length-D vector
+# (Automatic Relevance Determination: one lengthscale per input dimension, so an
+# irrelevant dimension can be switched off by a large `l_d`). Generic in the
+# element type so ForwardDiff Duals / Enzyme flow through.
+_gp_inv_two_l2(lengthscale::Number, ::Int) = inv(2 * lengthscale^2)
+_gp_inv_two_l2(lengthscale::AbstractVector, d::Int) = inv(2 * lengthscale[d]^2)
+_gp_lengthscale_eltype(lengthscale::Number) = typeof(lengthscale)
+_gp_lengthscale_eltype(lengthscale::AbstractVector) = eltype(lengthscale)
+
 function _gp_rbf_covariance(inputs::AbstractMatrix, lengthscale, variance, noise)
     n = size(inputs, 2)
-    T = promote_type(eltype(inputs), typeof(lengthscale), typeof(variance), typeof(noise))
-    inv_two_l2 = one(T) / (2 * lengthscale^2)
+    T = promote_type(eltype(inputs), _gp_lengthscale_eltype(lengthscale), typeof(variance), typeof(noise))
     v2 = variance^2
     diag_add = noise^2 + T(1e-8)
     K = Matrix{T}(undef, n, n)
@@ -25,24 +32,32 @@ function _gp_rbf_covariance(inputs::AbstractMatrix, lengthscale, variance, noise
             d2 = zero(T)
             for k in axes(inputs, 1)
                 dk = inputs[k, i] - inputs[k, j]
-                d2 += dk * dk
+                d2 += dk * dk * _gp_inv_two_l2(lengthscale, k)
             end
-            K[i, j] = v2 * exp(-d2 * inv_two_l2) + (i == j ? diag_add : zero(T))
+            K[i, j] = v2 * exp(-d2) + (i == j ? diag_add : zero(T))
         end
     end
     return K
 end
 
-struct GaussianProcessDist{X<:AbstractMatrix,T} <: AbstractTeaDistribution
+struct GaussianProcessDist{X<:AbstractMatrix,L,T} <: AbstractTeaDistribution
     inputs::X            # D x N
-    lengthscale::T
+    lengthscale::L       # scalar (isotropic) or length-D vector (ARD)
     variance::T
     noise::T
 
     function GaussianProcessDist(inputs::AbstractMatrix, lengthscale, variance, noise)
         size(inputs, 2) >= 1 || throw(ArgumentError("gaussianprocess requires at least one input point"))
-        l, v, nz = promote(lengthscale, variance, noise)
-        return new{typeof(inputs),typeof(l)}(inputs, l, v, nz)
+        if lengthscale isa AbstractVector
+            length(lengthscale) == size(inputs, 1) || throw(
+                ArgumentError(
+                    "gaussianprocess ARD lengthscale length $(length(lengthscale)) must match the " *
+                    "input dimension $(size(inputs, 1))",
+                ),
+            )
+        end
+        v, nz = promote(variance, noise)
+        return new{typeof(inputs),typeof(lengthscale),typeof(v)}(inputs, lengthscale, v, nz)
     end
 end
 
@@ -51,11 +66,16 @@ end
 
 Zero-mean Gaussian process regression likelihood with a squared-exponential (RBF)
 kernel. `inputs` is a `D x N` matrix (one column per point) or a length-`N` vector
-for 1-D inputs; `lengthscale`, `variance`, `noise` are positive scalars (typically
-`exp` of latent log-hyperparameters). As an observation `{:y} ~
-gaussianprocess(X, l, v, nz)` scores the length-`N` output vector `y` under
-`N(0, K)` with `K[i,j] = v^2 exp(-||x_i - x_j||^2 / (2 l^2)) + nz^2 delta_ij`.
-CPU-reference only (the dense Cholesky is not device-lowered).
+for 1-D inputs; `variance` and `noise` are positive scalars (typically `exp` of
+latent log-hyperparameters). `lengthscale` is either a positive **scalar**
+(isotropic — one shared lengthscale) or a length-`D` **vector** (Automatic
+Relevance Determination — one lengthscale per input dimension, so an uninformative
+dimension is pruned by a large `l_d`). As an observation `{:y} ~ gaussianprocess(X,
+l, v, nz)` scores the length-`N` output vector `y` under `N(0, K)` with `K[i,j] =
+v^2 exp(-0.5 sum_d (x_di - x_dj)^2 / l_d^2) + nz^2 delta_ij`. CPU-reference only
+(the dense Cholesky is not device-lowered). The `D + 2` hyperparameter gradient of
+the ARD marginal likelihood is a natural `reverse_mode_gradient` target (issue
+#268) once `D` is large.
 """
 function gaussianprocess(inputs, lengthscale, variance, noise)
     matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
