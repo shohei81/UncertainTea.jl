@@ -55,12 +55,12 @@ using Random
 using UncertainTea
 
 @tea static function gaussian_mean()
-    mu ~ normal(0.0f0, 1.0f0)
-    {:y} ~ normal(mu, 1.0f0)
+    mu ~ normal(0.0, 1.0)
+    {:y} ~ normal(mu, 1.0)
     return mu
 end
 
-constraints = choicemap((:y, 0.3f0))
+constraints = choicemap((:y, 0.3))
 
 chains = nuts_chains(
     gaussian_mean,

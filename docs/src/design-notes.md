@@ -1,14 +1,11 @@
 # Design Notes
 
 UncertainTea keeps a set of design and reference documents alongside the code.
-They are accurate to the direction of the project, though several currently lag
-the implementation (tracked as the doc-currency issues #213–#217) and are being
-migrated into this site over time.
-
-For this first cut of the documentation site, the most user-facing material has
-been adapted into [Getting Started](getting-started.md) and the
-[Inference Overview](inference.md); the design documents below remain the
-authoritative deep-dives. They live under `docs/` in the repository:
+They track the architecture and design rationale in depth and are current with
+the implementation. The most user-facing material has been adapted into
+[Getting Started](getting-started.md) and the [Inference Overview](inference.md);
+the design documents below remain the authoritative deep-dives, and live under
+`docs/` in the repository:
 
 ## Architecture and DSL
 
