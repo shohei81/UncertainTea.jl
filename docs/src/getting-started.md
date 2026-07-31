@@ -15,8 +15,8 @@ plan.
 using UncertainTea
 
 @tea static function gaussian_mean()
-    mu ~ normal(0.0f0, 1.0f0)     # random choice bound to `mu`, address :mu
-    {:y} ~ normal(mu, 1.0f0)      # explicitly addressed choice :y
+    mu ~ normal(0.0, 1.0)     # random choice bound to `mu`, address :mu
+    {:y} ~ normal(mu, 1.0)      # explicitly addressed choice :y
     return mu
 end
 ```
@@ -36,7 +36,7 @@ receives a dense parameter slot. Binding a value with `x ~ dist` does not, by
 itself, make a choice a latent or an observation.
 
 ```julia
-constraints = choicemap((:y, 0.3f0))
+constraints = choicemap((:y, 0.3))
 trace, logw = generate(gaussian_mean, (), constraints)
 ```
 
@@ -53,14 +53,14 @@ produced in a `for` loop:
 
 ```julia
 @tea static function iid_model(n)
-    mu ~ normal(0.0f0, 1.0f0)
+    mu ~ normal(0.0, 1.0)
     for i = 1:n
-        {:y => i} ~ normal(mu, 1.0f0)
+        {:y => i} ~ normal(mu, 1.0)
     end
     return mu
 end
 
-ys = Float32[0.1, -0.2, 0.4]
+ys = [0.1, -0.2, 0.4]
 constraints = choicemap((:y => i, ys[i]) for i in eachindex(ys))
 trace, logw = generate(iid_model, (length(ys),), constraints)
 ```
