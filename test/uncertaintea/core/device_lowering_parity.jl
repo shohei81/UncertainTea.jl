@@ -565,6 +565,17 @@ end
     return big
 end
 
+# issue #221: a D > 16 mvnormal with HETEROGENEOUS per-component sigma is NOT iid,
+# so it cannot fold into the runtime-length diagonal-normal loop step and stays
+# capped (the unrolled `Val(D)` fold is the shader-budget hazard).
+@tea static function dev_mvnormal_bignoniid_model()
+    big ~ mvnormal(
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [1.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+    )
+    return big
+end
+
 @testset "dev_numerical_parity_mvnormal" begin
     supported, issues = device_lowering_report(dev_mvnormal_model)
     @test supported
@@ -583,9 +594,24 @@ end
     @test !read_supported
     @test !isempty(read_issues)
 
+    # issue #221: a D > 16 IID latent mvnormal prior now lowers to the runtime-length
+    # diagonal-normal loop step (the coefficient prior of a large GLM), matching the
+    # host to Float64 precision.
     big_supported, big_issues = device_lowering_report(dev_mvnormal_bigdim_model)
-    @test !big_supported
-    @test any(occursin("caps vector dimensions", issue) for issue in big_issues)
+    @test big_supported
+    @test isempty(big_issues)
+    big_params = reshape(collect(0.1:0.05:(0.1+0.05*16)), 17, 1) # 17 unconstrained rows
+    big_dev = device_batched_logjoint(dev_mvnormal_bigdim_model, big_params, (), choicemap())
+    big_ref = batched_logjoint_unconstrained(dev_mvnormal_bigdim_model, big_params, (), choicemap())
+    @test big_dev ≈ big_ref rtol = 1e-12
+    _, big_g = device_batched_logjoint_gradient(dev_mvnormal_bigdim_model, big_params, (), choicemap())
+    big_gref = batched_logjoint_gradient_unconstrained(dev_mvnormal_bigdim_model, big_params, (), choicemap())
+    @test big_g ≈ big_gref rtol = 1e-10
+
+    # A non-iid D > 16 mvnormal still cannot lower (unroll-bound), staying capped.
+    noniid_supported, noniid_issues = device_lowering_report(dev_mvnormal_bignoniid_model)
+    @test !noniid_supported
+    @test any(occursin("caps vector dimensions", issue) for issue in noniid_issues)
 end
 
 # issue #12 group 3 phase 2: dirichlet — the first dimension-changing stride

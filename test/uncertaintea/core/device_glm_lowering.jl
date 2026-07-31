@@ -54,6 +54,22 @@ end
     return beta
 end
 
+# issue #221: a D > 16 GLM. The iid diagonal-mvnormal coefficient prior lowers to
+# the runtime-length diagonal-normal loop step and the fused GLM likelihood to the
+# runtime-length step with the in-kernel ANALYTIC gradient, lifting both D <= 16
+# unroll caps for this model class. Generated with literal mu/sigma tuples (the DSL
+# needs a static vector size).
+let mu = Expr(:tuple, fill(0.0, 20)...), sg = Expr(:tuple, fill(2.5, 20)...)
+    @eval @tea static function devglm_logistic_big(X, n)
+        alpha ~ normal(0.0, 2.5)
+        beta ~ mvnormal($mu, $sg)
+        for i = 1:n
+            {:y => i} ~ bernoullilogit(alpha + sum(beta .* X[:, i]))
+        end
+        return alpha
+    end
+end
+
 function devglm_make_data(rng, D, n, intercept, coefficients)
     X = randn(rng, D, n)
     ys = Vector{Float64}(undef, n)
@@ -149,4 +165,61 @@ end
     host_draws = posterior_array(host)
     @test all(isfinite, device_draws)
     @test maximum(abs, device_draws .- host_draws) < 1e-6
+end
+
+@testset "devglm_D20_above_cap_parity" begin
+    # D = 20 > 16: both the coefficient prior and the fused GLM likelihood must
+    # lower (the caps are lifted for this class) and match the host analytic path.
+    rng = MersenneTwister(2021)
+    D, n = 20, 50
+    X, ys = devglm_make_data(rng, D, n, 0.2, 0.3 .* randn(rng, D))
+    cm = choicemap((:y => i, ys[i]) for i = 1:n)
+
+    supported, issues = device_lowering_report(devglm_logistic_big; constraints=cm)
+    @test supported
+    @test isempty(issues)
+
+    params = reshape(vcat([0.15], 0.1 .* randn(rng, D)), D + 1, 1)
+    v = device_batched_logjoint(devglm_logistic_big, params, (X, n), cm)
+    vref = batched_logjoint_unconstrained(devglm_logistic_big, params, (X, n), cm)
+    @test v ≈ vref rtol = 1e-10
+    dev32 = device_batched_logjoint(devglm_logistic_big, Float32.(params), (Float32.(X), n), cm; precision=Float32)
+    @test isapprox(Float64.(dev32), vref; rtol=1e-3, atol=1e-2)
+
+    # the in-kernel analytic gradient must match the host analytic gradient (#150)
+    _, g = device_batched_logjoint_gradient(devglm_logistic_big, params, (X, n), cm)
+    gref = batched_logjoint_gradient_unconstrained(devglm_logistic_big, params, (X, n), cm)
+    @test g ≈ gref rtol = 1e-8
+end
+
+@testset "devglm_D20_masked_nuts_vs_host_exact" begin
+    # The scalar-dual masked device tree at D = 20 is a faithful reimplementation of
+    # the host masked path (same bitwise-oracle settings as the D = 4 case above).
+    rng = MersenneTwister(2022)
+    D, n = 20, 40
+    X, ys = devglm_make_data(rng, D, n, 0.2, 0.3 .* randn(rng, D))
+    cm = choicemap((:y => i, ys[i]) for i = 1:n)
+    kwargs = (
+        num_chains=4,
+        num_samples=120,
+        num_warmup=0,
+        step_size=0.03,
+        adapt_step_size=false,
+        adapt_mass_matrix=false,
+        tree_strategy=:masked,
+        device_sync_per_leaf=true,
+        per_chain_adaptation=false,
+    )
+    device = batched_nuts(devglm_logistic_big, (X, n), cm; rng=MersenneTwister(7), backend=CPU(), kwargs...)
+    host = batched_nuts(devglm_logistic_big, (X, n), cm; rng=MersenneTwister(7), kwargs...)
+    @test all(isfinite, posterior_array(device))
+    @test maximum(abs, posterior_array(device) .- posterior_array(host)) < 1e-6
+
+    # the wide (DeviceGradN, P = 21) persistent tree compiles and produces finite draws
+    persistent = batched_nuts(
+        devglm_logistic_big, (X, n), cm;
+        num_chains=4, num_samples=40, num_warmup=40,
+        tree_strategy=:persistent, backend=CPU(), rng=MersenneTwister(9),
+    )
+    @test all(isfinite, posterior_array(persistent))
 end

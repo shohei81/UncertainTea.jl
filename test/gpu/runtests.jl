@@ -723,6 +723,61 @@ end
     @test divrate < 0.02
 end
 
+# issue #221: a D > 16 GLM on Metal Float32. The coefficient prior (iid diagonal
+# mvnormal) lowers to the runtime-length diagonal-normal loop step and the fused
+# GLM likelihood to the runtime-length step with the in-kernel ANALYTIC gradient,
+# lifting the D <= 16 compile-time-unroll caps. This checks all three device
+# kernels compile on Metal at D = 32 (value, scalar-dual masked gradient, and the
+# wide DeviceGradN{33} persistent gradient) and clear a Float32 gate.
+let mu32 = Expr(:tuple, fill(0.0, 32)...), sg32 = Expr(:tuple, fill(2.5, 32)...)
+    @eval @tea static function gpu_glm_big(X, n)
+        alpha ~ normal(0.0, 2.5)
+        beta ~ mvnormal($mu32, $sg32)
+        for i = 1:n
+            {:y => i} ~ bernoullilogit(alpha + sum(beta .* X[:, i]))
+        end
+        return alpha
+    end
+end
+
+@testset "device Metal D>16 GLM smoke (issue #221)" begin
+    if !Metal.functional()
+        @info "Metal GPU not functional; skipping D>16 GLM smoke test."
+        @test true
+        return
+    end
+    backend = Metal.MetalBackend()
+
+    rng = Random.MersenneTwister(221)
+    D, N = 32, 300
+    X = randn(rng, D, N)
+    bt = randn(rng, D) .* 0.4
+    probs = 1.0 ./ (1.0 .+ exp.(-(0.2 .+ vec(sum(bt .* X; dims=1)))))
+    y = Float64.(rand(rng, N) .< probs)
+    cons = choicemap(((:y => i, y[i]) for i = 1:N)...)
+    params = reshape(vcat([0.15], 0.1 .* randn(rng, D)), D + 1, 1)
+
+    # value + scalar-dual gradient compile on Metal Float32 and match CPU Float64
+    dev_v = device_batched_logjoint(gpu_glm_big, Float32.(params), (Float32.(X), N), cons; backend=backend, precision=Float32)
+    host_v = device_batched_logjoint(gpu_glm_big, params, (X, N), cons; backend=CPU(), precision=Float64)
+    @test isapprox(Float64(Array(dev_v)[1]), Array(host_v)[1]; rtol=1e-2, atol=1e-1)
+
+    _, dev_g =
+        device_batched_logjoint_gradient(gpu_glm_big, Float32.(params), (Float32.(X), N), cons; backend=backend, precision=Float32)
+    _, host_g = device_batched_logjoint_gradient(gpu_glm_big, params, (X, N), cons; backend=CPU(), precision=Float64)
+    @test maximum(abs.(Float64.(Array(dev_g)) .- Array(host_g))) < 1e-2
+
+    # the wide DeviceGradN{33} persistent gradient compiles and runs on Metal
+    res = batched_nuts(
+        gpu_glm_big, (X, N), cons;
+        num_chains=32, num_samples=200, num_warmup=200,
+        tree_strategy=:persistent, persistent_gradient=:wide, backend=backend,
+        rng=Random.MersenneTwister(7),
+    )
+    @test all(isfinite, posterior_array(res))
+    @test maximum(rhat(res)) < 1.05
+end
+
 # Broadcast-normal observation `{:y} ~ normal.(mu_expr, sigma)` on Metal Float32
 # (issue #134): docs/dsl.md's flagship GPU-lowering form, which the device path
 # previously rejected. This is the issue's own repro -- a linear regression scored

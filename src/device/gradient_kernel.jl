@@ -566,6 +566,120 @@ end
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
 end
 
+# Runtime-length fused GLM gradient with the in-kernel ANALYTIC form (issue #221).
+# Rather than seeding a dual per coefficient and differentiating the density
+# through D dual FMAs (the unrolled `{D}` method above), compute `eta` once by a
+# runtime value loop, form the scalar `derivative = d/d_eta log p = y -
+# logistic(eta)`, and fan it to the parameter derivatives: `d/d_coef[d] =
+# derivative * X[d]` (a one-hot at the coefficient's row) plus `derivative *
+# d_eta/d_intercept` through the intercept dual. This is the exact analytic form
+# the host backend uses (#150) and removes both the D-wide value unroll and the
+# per-coefficient dual arithmetic from the gradient kernel, so any D compiles.
+@inline function _device_grad_score_step(
+    step::DeviceBernoulliLogitGLMChoiceStepDyn,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    TD = eltype(slots)
+    T = _device_dual_basetype(TD)
+    intercept = convert(TD, _device_grad_eval(step.intercept, slots, pidx, b))
+    eta = intercept.value
+    @inbounds for i = Int32(1):step.coef_length
+        eta +=
+            T(params[step.coef_value_source+i-Int32(1), b]) * T(_obsval(observed, cursor + i - Int32(1), b))
+    end
+    cur = cursor + step.coef_length
+    yval = T(_obsval(observed, cur, b))
+    _device_grad_store_binding!(slots, step.binding_slot, _seed_obs(TD, yval), pidx, b)
+    support = (yval == zero(T)) | (yval == one(T))
+    derivative = ifelse(support, yval - _device_logistic(eta), zero(T))
+    logpdf = _device_bernoullilogit_logpdf(eta, yval)
+    return (_glm_analytic_result(TD, logpdf, derivative, intercept, step, observed, cursor, b, pidx), cur + Int32(1))
+end
+
+# Scalar walk: only the covariate at the differentiation target row `pidx` (if it
+# is one of the coefficient rows) adds to `d_eta/d_pidx`; the intercept dual
+# carries the rest.
+@inline function _glm_analytic_result(
+    ::Type{DeviceDual{T}},
+    logpdf::T,
+    derivative::T,
+    intercept::DeviceDual{T},
+    step,
+    observed,
+    cursor::Int32,
+    b,
+    pidx,
+) where {T}
+    d = Int32(pidx) - step.coef_value_source + Int32(1)
+    in_range = (d >= Int32(1)) & (d <= step.coef_length)
+    safe = ifelse(in_range, d, Int32(1))
+    x = T(_obsval(observed, cursor + safe - Int32(1), b))
+    deta = intercept.deriv + ifelse(in_range, x, zero(T))
+    return DeviceDual{T}(logpdf, derivative * deta)
+end
+
+# Wide walk: fan the covariate into each partial slot that is a coefficient row.
+# The masked read stays in-bounds for non-coefficient slots (safe index + zero
+# mask), so the P-wide tuple builds without a per-coefficient dual chain.
+@inline function _glm_analytic_result(
+    ::Type{DeviceGradN{N,T}},
+    logpdf::T,
+    derivative::T,
+    intercept::DeviceGradN{N,T},
+    step,
+    observed,
+    cursor::Int32,
+    b,
+    pidx,
+) where {N,T}
+    base = intercept.partials
+    partials = ntuple(Val(N)) do i
+        d = Int32(i) - step.coef_value_source + Int32(1)
+        in_range = (d >= Int32(1)) & (d <= step.coef_length)
+        safe = ifelse(in_range, d, Int32(1))
+        x = T(_obsval(observed, cursor + safe - Int32(1), b))
+        @inbounds (base[i] + ifelse(in_range, x, zero(T))) * derivative
+    end
+    return DeviceGradN{N,T}(logpdf, partials)
+end
+
+# Runtime-length iid diagonal-normal prior gradient (issue #221): a runtime loop
+# over the D latent rows, seeding each as it is read, so the dual channel widens
+# per row without a compile-time `Val(D)` unroll. `mu`/`sigma` flow through as
+# duals (constant for a literal iid prior), matching DeviceMvNormalChoiceStep.
+@inline function _device_grad_score_step(
+    step::DeviceDiagNormalChoiceStepDyn,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    pidx,
+    b,
+    cursor,
+)
+    TD = eltype(slots)
+    mu = _device_grad_eval(step.mu, slots, pidx, b)
+    sigma = _device_grad_eval(step.sigma, slots, pidx, b)
+    v1 = _seed_latent(TD, (@inbounds params[step.value_source, b]), step.value_source, pidx)
+    total = _device_normal_logpdf(promote(mu, sigma, v1)...)
+    @inbounds for i = Int32(2):step.dimension
+        row = step.value_source + i - Int32(1)
+        v = _seed_latent(TD, params[row, b], row, pidx)
+        total += _device_normal_logpdf(promote(mu, sigma, v)...)
+    end
+    return (total, cursor)
+end
+
 # Broadcast (vectorized) normal observation in duals (issue #134): the exact
 # gradient-kernel analog of the logjoint handler. mu/sigma scalar leaves read the
 # dual `slots` buffer (a scalar latent binding carries its seed from that latent's
