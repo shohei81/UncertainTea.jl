@@ -270,6 +270,28 @@ the device path for heavy-per-gradient, few-chains models. This is also the leg
 that exercises the #152/#153 device work: it did not finish within 35 minutes
 on the pre-#153 serial-scan device path and now completes in ~32 s of sampling.
 
+### mixture (2-component Gaussian, N=500) — all PASS
+
+| framework | chains | min bulk ESS/s | div rate |
+|---|---|---|---|
+| stan | 4 | 4,657 ± 420 | 0 |
+| numpyro-parallel | 4 | 3,155 ± 250 | 0 |
+| uncertaintea-cpu | 4 | 415 ± 11 | 0 |
+| uncertaintea-batched-cpu | 4 | 244 ± 4.9 | 0 |
+
+The discrete-latent leg (#224): a 2-component Gaussian mixture with unknown
+ordered means (`mu2 = mu1 + exp(log_gap)`) and shared scale, fixed 0.4/0.6
+weights. UncertainTea marginalizes the per-observation component indicator with
+the DSL's single-site `mixture` machinery (issue #13, equivalent to
+`marginalize=:enumerate`); Stan hand-writes the same marginal with `log_mix`;
+NumPyro uses `MixtureSameFamily`. All four gate-pass on the identical
+`(mu1, log_gap, s)` parameterization — the ordering constraint is what keeps the
+posteriors well-defined (a label-switched chain would miss the reference by many
+MCSEs). The honest performance note: UncertainTea is **slower** here (415 vs
+Stan's 4,657 ESS/s) — the per-observation mixture density is evaluated without
+the sufficient-statistics fusion the `gauss`/GLM paths enjoy. CPU-only: the
+marginalization is device-unsupported until #67.
+
 ### eight_schools_centered — all FAIL (funnel; expected)
 
 Every framework, Stan included, exceeds R-hat 1.01 with 1–3% divergences at
@@ -300,6 +322,7 @@ model stays in the suite as the honesty check.
 | `logistic` | GLM, N=500, D=8 | loop-addressed discrete observations |
 | `logistic_large` | GLM, N=8000, D=16 | heavy per-gradient GLM; host + device analytic path; chain-count scaling sweep |
 | `gauss` | mean/scale, N=1000 | device path; chain-count scaling sweep |
+| `mixture` | 2-comp Gaussian mixture, N=500 | discrete-latent marginalization (`mixture`/`marginalize=:enumerate`) vs Stan `log_mix`; ordered-means identifiability |
 
 Identical joint densities across frameworks; priors in
 `bench/crossppl/julia/models.jl` and `bench/crossppl/python/stan/*.stan`.
@@ -309,8 +332,13 @@ device analytic path (#135) and many-chains scaling without being dominated by
 device dispatch overhead. Its D is 16 (rather than a larger value) because the
 device coefficient-dimension cap is 16 (`DEVICE_MAX_VECTOR_DIMENSION`); N is
 raised to 8000 to keep the per-gradient work budget large while the model still
-lowers to the device. A discrete-latent model (`marginalize=:enumerate` vs
-Stan's hand-marginalization) and an `lkjcholesky` model are planned additions.
+lowers to the device. The `mixture` model (#224) is the discrete-latent leg: a
+2-component Gaussian mixture marginalized over the per-observation component
+indicator (the DSL's `mixture` machinery, equivalent to `marginalize=:enumerate`)
+and checked against Stan's hand-marginalized `log_mix` — all four frameworks
+gate-pass on the ordered-means (`mu2 = mu1 + exp(log_gap)`) identifiable
+parameterization. CPU-only (mixture/enumerate is device-unsupported until #67).
+An `lkjcholesky` correlation model is the remaining planned addition.
 
 ## Methodology notes
 

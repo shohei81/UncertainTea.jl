@@ -70,6 +70,26 @@ def build_model(model_name: str, data: dict):
 
         return model, ["mu", "s"]
 
+    if model_name == "mixture":
+        # issue #224: 2-component Gaussian mixture, ordered means, shared scale,
+        # fixed 0.4/0.6 weights, marginalized via MixtureSameFamily -- the same
+        # marginal density Stan hand-writes with log_mix and the DSL's `mixture`
+        # machinery computes. Same parameterization as the Julia/Stan twins.
+        y = jnp.asarray(data["y"])
+        weights = jnp.array([0.4, 0.6])
+
+        def model():
+            mu1 = numpyro.sample("mu1", dist.Normal(0.0, 3.0))
+            log_gap = numpyro.sample("log_gap", dist.Normal(0.0, 1.0))
+            s = numpyro.sample("s", dist.Gamma(2.0, 1.0))
+            mu2 = mu1 + jnp.exp(log_gap)
+            mixing = dist.Categorical(probs=weights)
+            components = dist.Normal(jnp.stack([mu1, mu2]), s)
+            with numpyro.plate("obs", y.shape[0]):
+                numpyro.sample("y", dist.MixtureSameFamily(mixing, components), obs=y)
+
+        return model, ["mu1", "log_gap", "s"]
+
     raise ValueError(f"unknown model {model_name}")
 
 
