@@ -1,6 +1,8 @@
 # Simulation-based calibration harness (issue #18). Fast seeded smoke runs
 # only -- release-grade validation lives in bench/sbc_validation.jl.
 
+using KernelAbstractions: CPU
+
 @tea static function sbc_conjugate_model()
     mu ~ normal(0.0, 1.0)
     {:y} ~ normal(mu, 1.0)
@@ -223,5 +225,48 @@ end
         @test all(result.ranks[1, :] .== 0) # the constant coordinate is pinned
         @test isnan(result.pvalues[1])
         @test !any(occursin("Omega[1]", w) for w in result.warnings)
+    end
+
+    @testset "sbc_batched_nuts_device_trees" begin
+        # issue #225: the masked and persistent device tree kernels are
+        # from-scratch NUTS re-implementations validated only by moment checks,
+        # which structurally cannot catch rank-calibration bias (the #93 subtree-
+        # merge variance-inflation bug class). Calibrate both on CPU() at Float64,
+        # sized like the ChEES SBC gate. All chains target the same conditioned
+        # posterior, so chain 1's ranks are a valid SBC statistic.
+        @tea static function sbc_bnuts_model()
+            mu ~ normal(0.0, 1.0)
+            {:y} ~ normal(mu, 1.0)
+            return mu
+        end
+        for strategy in (:masked, :persistent)
+            result = sbc(
+                sbc_bnuts_model;
+                num_simulations=200,
+                num_posterior_draws=63,
+                num_warmup=200,
+                thin=2,
+                sampler=:batched_nuts,
+                tree_strategy=strategy,
+                backend=CPU(),
+                precision=Float64,
+                num_chains=4,
+                rng=MersenneTwister(20260731),
+            )
+            @test size(result.ranks) == (1, 200)
+            @test all(0 .<= result.ranks .<= 63)
+            @test all(p -> p > 1e-3, result.pvalues)
+            @test !has_warnings(result)
+        end
+    end
+
+    @testset "sbc_rejects_unknown_sampler" begin
+        @test_throws ArgumentError sbc(
+            sbc_conjugate_model;
+            num_simulations=4,
+            num_posterior_draws=8,
+            num_warmup=10,
+            sampler=:not_a_sampler,
+        )
     end
 end

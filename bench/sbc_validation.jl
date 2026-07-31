@@ -9,6 +9,7 @@
 
 using UncertainTea
 using Random
+using KernelAbstractions: CPU
 
 @tea static function sbc_bench_conjugate()
     mu ~ normal(0.0, 1.0)
@@ -86,6 +87,30 @@ for (name, model, args) in SBC_BENCH_MODELS
         rng=rng,
     )
     println("== ", name)
+    show(stdout, MIME"text/plain"(), result)
+    println()
+end
+
+# issue #225: release-grade SBC of the device tree kernels, which are only
+# statistically (not bitwise) equivalent to the host path and get no other
+# rank-calibration gate. On CPU() at Float64 here; where a functional Metal GPU
+# exists, re-run with `backend=Metal.MetalBackend(), precision=Float32` for the
+# on-device SBC leg (the #154 "on-device SBC" follow-up).
+for strategy in (:masked, :persistent)
+    result = sbc(
+        sbc_bench_conjugate;
+        num_simulations=300,
+        num_posterior_draws=63,
+        num_warmup=200,
+        thin=2,
+        sampler=:batched_nuts,
+        tree_strategy=strategy,
+        backend=CPU(),
+        precision=Float64,
+        num_chains=4,
+        rng=rng,
+    )
+    println("== batched_nuts tree_strategy=", strategy, " (CPU / Float64)")
     show(stdout, MIME"text/plain"(), result)
     println()
 end
