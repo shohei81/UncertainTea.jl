@@ -362,6 +362,33 @@ end
     return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
 end
 
+# Runtime-length GLM linear predictor (issue #221): identical scoring to the
+# unrolled `{D}` method above, but the D covariate FMAs are a runtime device loop
+# over `step.coef_length` instead of a compile-time-unrolled `Val(D)` fold, so the
+# kernel body no longer scales with D and the D <= 16 unroll cap is lifted.
+@inline function _device_score_step(
+    step::DeviceBernoulliLogitGLMChoiceStepDyn,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    eta = _device_eval(step.intercept, slots, col)
+    @inbounds for i = Int32(1):step.coef_length
+        eta +=
+            params[step.coef_value_source+i-Int32(1), col] * _obsval(observed, cursor + i - Int32(1), col)
+    end
+    cur = cursor + step.coef_length
+    value = _obsval(observed, cur, col)
+    _device_store_binding!(slots, step.binding_slot, value, col)
+    e, v = promote(eta, value)
+    return (_device_bernoullilogit_logpdf(e, v), cur + Int32(1))
+end
+
 # Broadcast (vectorized) normal observation `{:y} ~ normal.(mu_expr, sigma)` --
 # the flagship GPU-lowering form (issue #134). A dense per-element fold over the
 # vector observation `y[1..M]`: read `M` from the shared trip-count buffer, then
@@ -468,6 +495,32 @@ end
     # binding deliberately NOT stored (vector bindings are unmaterialized; the
     # lowering audit rejects any downstream read)
     return (_device_mvnormal_logpdf_fold(mu, sigma, value), cur)
+end
+
+# Runtime-length iid diagonal-normal prior (issue #221): the D component logpdfs
+# are a runtime loop over `step.dimension` instead of the compile-time `Val(D)`
+# fold above, lifting the D <= 16 cap for the coefficient prior of a large GLM.
+# `mu`/`sigma` are one shared scalar expr each; the D latent values are consecutive
+# unconstrained rows from `value_source` (no observation rows consumed).
+@inline function _device_score_step(
+    step::DeviceDiagNormalChoiceStepDyn,
+    slots,
+    params,
+    observed,
+    observed_int,
+    tc,
+    ls,
+    col,
+    cursor,
+)
+    mu = _device_eval(step.mu, slots, col)
+    sigma = _device_eval(step.sigma, slots, col)
+    total = _device_normal_logpdf(promote(mu, sigma, @inbounds params[step.value_source, col])...)
+    @inbounds for i = Int32(2):step.dimension
+        v = params[step.value_source+i-Int32(1), col]
+        total += _device_normal_logpdf(promote(mu, sigma, v)...)
+    end
+    return (total, cursor)
 end
 
 @inline function _device_score_step(step::DeviceMvStudentTChoiceStep, slots, params, observed, observed_int, tc, ls, col, cursor)

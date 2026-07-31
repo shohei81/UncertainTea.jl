@@ -241,6 +241,37 @@ DeviceBernoulliLogitGLMChoiceStep{D}(intercept::I, coef_value_source, value_sour
         Int32(binding_slot),
     )
 
+# Runtime-length variant of the fused GLM step (issue #221). `coef_length` is a
+# runtime `Int32` FIELD rather than a `{D}` type parameter, so the linear
+# predictor is scored by a runtime device loop instead of a compile-time-unrolled
+# `Val(D)` fold. This is what lifts the D <= 16 coefficient cap for the GLM class
+# (the unroll-by-D shader-compile-budget hazard the cap guarded): D <= 16 keeps
+# the measured-fast unrolled `{D}` step, D > 16 uses this loop step. Its gradient
+# uses the in-kernel ANALYTIC form (`d/d_eta = y - logistic(eta)` fanning to the
+# intercept + covariate-scaled coefficient slots), so the gradient kernel also
+# avoids the per-coefficient dual arithmetic (and its D-wide unroll).
+struct DeviceBernoulliLogitGLMChoiceStepDyn{I<:AbstractDeviceExpr} <: AbstractDeviceChoiceStep
+    intercept::I
+    coef_value_source::Int32
+    coef_length::Int32
+    value_source::Int32
+    binding_slot::Int32
+end
+
+DeviceBernoulliLogitGLMChoiceStepDyn(
+    intercept::I,
+    coef_value_source,
+    coef_length,
+    value_source,
+    binding_slot,
+) where {I} = DeviceBernoulliLogitGLMChoiceStepDyn{I}(
+    intercept,
+    Int32(coef_value_source),
+    Int32(coef_length),
+    Int32(value_source),
+    Int32(binding_slot),
+)
+
 # Broadcast (vectorized) normal observation `{:y} ~ normal.(mu_expr, sigma)` --
 # docs/dsl.md's flagship GPU-lowering form (issue #134). A VECTOR observation
 # `y[1..M]` scored per element against `normal(mu_i, sigma)`, where `mu_i` is a
@@ -335,6 +366,23 @@ end
 struct DeviceMvNormalChoiceStep{M<:Tuple,S<:Tuple} <: AbstractDeviceChoiceStep
     mu::M
     sigma::S
+    value_source::Int32
+    binding_slot::Int32
+end
+
+# Runtime-length diagonal (iid) normal prior over a VectorIdentity latent vector
+# (issue #221). The D per-component normal logpdfs are a runtime device loop over
+# `dimension` instead of the compile-time `Val(D)` tuple fold in
+# DeviceMvNormalChoiceStep, so the kernel body no longer scales with D. Only the
+# IID case (every component shares one scalar `mu`/`sigma` expr) lowers here; it is
+# what lets a D > 16 GLM's coefficient prior lower (the fused GLM likelihood step
+# has its own runtime variant). `value_source` is the latent's unconstrained row
+# start; the binding slot is carried but never written (vector bindings are
+# unmaterialized, as in DeviceMvNormalChoiceStep).
+struct DeviceDiagNormalChoiceStepDyn{M<:AbstractDeviceExpr,S<:AbstractDeviceExpr} <: AbstractDeviceChoiceStep
+    mu::M
+    sigma::S
+    dimension::Int32
     value_source::Int32
     binding_slot::Int32
 end
@@ -1052,13 +1100,6 @@ function _lower_device_step!(
     in_loop,
 ) where {T}
     dimension = length(step.mu)
-    if dimension > DEVICE_MAX_VECTOR_DIMENSION
-        _device_issue!(
-            issues,
-            "device lowering caps vector dimensions at $DEVICE_MAX_VECTOR_DIMENSION (kernel compile-time budget), got an mvnormal of dimension $dimension",
-        )
-        return nothing
-    end
     if isnothing(step.parameter_slot)
         value_source = Int32(-1)
     else
@@ -1079,6 +1120,31 @@ function _lower_device_step!(
     mu = map(expr -> _lower_device_expr(expr, backend.generic_slots, T, issues, "mvnormal argument"), step.mu)
     sigma = map(expr -> _lower_device_expr(expr, backend.generic_slots, T, issues, "mvnormal argument"), step.sigma)
     (any(isnothing, mu) || any(isnothing, sigma)) && return nothing
+    if dimension > DEVICE_MAX_VECTOR_DIMENSION
+        # The compile-time `Val(D)` fold would blow the shader budget past D = 16.
+        # Lower the IID LATENT case -- every component shares one mu/sigma expr, e.g.
+        # a large GLM's coefficient prior -- to the runtime-length loop step (issue
+        # #221). A heterogeneous prior or an observation mvnormal stays capped.
+        if value_source > Int32(0) && allequal(mu) && allequal(sigma)
+            push!(
+                out,
+                DeviceDiagNormalChoiceStepDyn(
+                    first(mu),
+                    first(sigma),
+                    Int32(dimension),
+                    value_source,
+                    _device_slot32(step.binding_slot),
+                ),
+            )
+            return nothing
+        end
+        _device_issue!(
+            issues,
+            "device lowering caps vector dimensions at $DEVICE_MAX_VECTOR_DIMENSION (kernel compile-time budget), got an mvnormal of dimension $dimension" *
+            (value_source > Int32(0) ? " with non-iid components (only an iid latent prior lowers past the cap)" : ""),
+        )
+        return nothing
+    end
     push!(out, DeviceMvNormalChoiceStep(mu, sigma, value_source, _device_slot32(step.binding_slot)))
     return nothing
 end
@@ -1416,28 +1482,37 @@ function _lower_device_step!(
     end
     if step.eta isa BackendLinearPredictorExpr
         eta = step.eta
-        if eta.coef_length > DEVICE_MAX_VECTOR_DIMENSION
-            _device_issue!(
-                issues,
-                "device lowering caps the linear predictor coefficient dimension at $DEVICE_MAX_VECTOR_DIMENSION (kernel compile-time budget), got $(eta.coef_length)",
-            )
-            return nothing
-        end
         coef_source = _device_linear_predictor_coef_source(eta, layout, issues)
         isnothing(coef_source) && return nothing
         intercept =
             isnothing(eta.intercept) ? DeviceLiteralExpr(zero(T)) :
             _lower_device_expr(eta.intercept, backend.generic_slots, T, issues, "bernoullilogit linear predictor intercept")
         isnothing(intercept) && return nothing
-        push!(
-            out,
-            DeviceBernoulliLogitGLMChoiceStep{eta.coef_length}(
-                intercept,
-                coef_source,
-                Int32(-1),
-                _device_slot32(step.binding_slot),
-            ),
-        )
+        # D <= 16 keeps the compile-time-unrolled `{D}` step (measured fast); D > 16
+        # uses the runtime-length loop step with the analytic gradient, lifting the
+        # unroll-by-D compile-budget cap for the GLM class only (issue #221).
+        if eta.coef_length > DEVICE_MAX_VECTOR_DIMENSION
+            push!(
+                out,
+                DeviceBernoulliLogitGLMChoiceStepDyn(
+                    intercept,
+                    coef_source,
+                    eta.coef_length,
+                    Int32(-1),
+                    _device_slot32(step.binding_slot),
+                ),
+            )
+        else
+            push!(
+                out,
+                DeviceBernoulliLogitGLMChoiceStep{eta.coef_length}(
+                    intercept,
+                    coef_source,
+                    Int32(-1),
+                    _device_slot32(step.binding_slot),
+                ),
+            )
+        end
         return nothing
     end
     eta = _lower_device_expr(step.eta, backend.generic_slots, T, issues, "bernoullilogit eta")
@@ -1895,6 +1970,7 @@ end
 # read is honestly rejected instead of reading uninitialized scratch.
 _device_step_writes_binding(step::AbstractDevicePlanStep) = true
 _device_step_writes_binding(::DeviceMvNormalChoiceStep) = false
+_device_step_writes_binding(::DeviceDiagNormalChoiceStepDyn) = false
 _device_step_writes_binding(::DeviceDirichletChoiceStep) = false
 _device_step_writes_binding(::DeviceMvNormalDenseChoiceStep) = false
 _device_step_writes_binding(::DeviceMvStudentTChoiceStep) = false

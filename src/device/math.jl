@@ -200,6 +200,13 @@ end
     return ifelse(in_support, base, _device_neginf(T))
 end
 
+# Logistic (sigmoid) `1 / (1 + exp(-eta))`, the derivative of `log1p_exp`. Written
+# through `_device_log1p_exp` so it inherits that helper's overflow-free branch
+# (`logistic(eta) = exp(-log1p_exp(-eta))`), and used by the fused-GLM in-kernel
+# ANALYTIC gradient (`d/d_eta = y - logistic(eta)`, issue #221) instead of pushing
+# the per-coefficient dual arithmetic through the density.
+@inline _device_logistic(eta::T) where {T} = exp(-_device_log1p_exp(-eta))
+
 # Nonnegative exact-integer support check shared by the count families; mirrors the
 # CPU `_poisson_count` acceptance (staged integer counts are exact in Float32/64).
 @inline _device_count_ok(x::T, k::T) where {T} = (x >= zero(T)) & (x == k)
