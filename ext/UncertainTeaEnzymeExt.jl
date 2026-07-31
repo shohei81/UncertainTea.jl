@@ -17,4 +17,13 @@ function UncertainTea.reverse_mode_gradient(f, x::AbstractVector)
     return only(Enzyme.gradient(set_runtime_activity(Enzyme.Reverse), Enzyme.Const(f), x))
 end
 
+# Value AND gradient in a single reverse pass (ReverseWithPrimal), for the batched
+# per-column gradient path (issue #268, part A2): the sampler needs both the
+# logjoint and its gradient every leapfrog leaf, and one primal+cotangent pass is
+# cheaper than a separate value evaluation.
+function UncertainTea.reverse_mode_value_and_gradient(f, x::AbstractVector)
+    result = Enzyme.gradient(set_runtime_activity(Enzyme.ReverseWithPrimal), Enzyme.Const(f), x)
+    return result.val, only(result.derivs)
+end
+
 end # module

@@ -165,3 +165,7 @@ g = reverse_mode_gradient(model, theta, args, constraints)
 ```
 """
 function reverse_mode_gradient end
+
+# Value + gradient in one reverse pass, supplied by UncertainTeaEnzymeExt. Internal
+# to the batched per-column reverse-mode path (issue #268, part A2); not exported.
+function reverse_mode_value_and_gradient end

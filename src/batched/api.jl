@@ -309,7 +309,10 @@ function BatchedLogjointGradientCache(
     args=(),
     constraints=choicemap();
     reject_invalid_parameters::Bool=false,
+    adtype::Symbol=:auto,
 )
+    adtype in (:auto, :forward, :reverse) ||
+        throw(ArgumentError("adtype must be :auto, :forward, or :reverse, got $(adtype)"))
     batch_size = _validate_batched_unconstrained_params(model, params, constraints)
     batch_args = _validate_batched_args(model, args, batch_size)
     batch_constraints = _validate_batched_constraints(constraints, batch_size)
@@ -324,10 +327,13 @@ function BatchedLogjointGradientCache(
     if batch_size == 0
         return BatchedLogjointGradientCache(
             model, Any[], nothing, nothing, gradient_buffer, parameter_count, batch_size, nothing,
-            compact_params, compact_gradient, compact_logjoint, compact_index,
+            compact_params, compact_gradient, compact_logjoint, compact_index, nothing,
         )
     end
 
+    # Analytic backend tier is always best when available -- reverse mode never
+    # preempts it (even under adtype=:reverse, which only prefers reverse over the
+    # forward-mode tiers).
     backend_cache = _batched_backend_gradient_cache(
         model, gradient_buffer, params, batch_args, batch_constraints;
         reject_invalid_parameters=reject_invalid_parameters,
@@ -339,7 +345,20 @@ function BatchedLogjointGradientCache(
         )
         return BatchedLogjointGradientCache(
             model, Any[], backend_cache, nothing, gradient_buffer, parameter_count, batch_size, thread_plan,
-            compact_params, compact_gradient, compact_logjoint, compact_index,
+            compact_params, compact_gradient, compact_logjoint, compact_index, nothing,
+        )
+    end
+
+    # Reverse-mode tier (issue #268, A2): preempts the forward-mode tiers below
+    # when eligible + guarded. `nothing` when it does not apply, so the existing
+    # flat/column fallbacks stay in charge.
+    reverse_cache = _maybe_batched_reverse_gradient_cache(
+        model, params, args, constraints, parameter_count, adtype,
+    )
+    if !isnothing(reverse_cache)
+        return BatchedLogjointGradientCache(
+            model, Any[], nothing, nothing, gradient_buffer, parameter_count, batch_size, nothing,
+            compact_params, compact_gradient, compact_logjoint, compact_index, reverse_cache,
         )
     end
 
@@ -363,6 +382,7 @@ function BatchedLogjointGradientCache(
             compact_gradient,
             compact_logjoint,
             compact_index,
+            nothing,
         )
     end
 
@@ -397,7 +417,54 @@ function BatchedLogjointGradientCache(
         compact_gradient,
         compact_logjoint,
         compact_index,
+        nothing,
     )
+end
+
+# Build the batched per-column reverse-mode tier (issue #268, A2), or `nothing` to
+# leave the forward/analytic tiers in charge. The guard is deliberately
+# conservative -- reverse mode is used only when every precondition holds and a
+# trial gradient actually compiles -- so it can never make the gradient path fail
+# where forward mode would have worked (the user asked for automatic + stable):
+#
+#   * adtype selects it (:reverse forces it; :auto uses it above a size threshold;
+#     :forward never does);
+#   * the batch shares ONE `args`/`constraints` (multi-chain on the same posterior),
+#     so a single generated objective serves every column;
+#   * the model is on the type-stable generated-scorer path (else no
+#     Enzyme-differentiable objective exists);
+#   * Enzyme is loaded AND a trial value+gradient on column 1 compiles and is
+#     finite -- this both activates the extension method and rejects any model
+#     Enzyme cannot handle, BEFORE any sampling runs.
+#
+# Any failure returns `nothing`, and the caller falls back to the forward tiers.
+const _REVERSE_MODE_AUTO_MIN_PARAMS = 32
+
+function _maybe_batched_reverse_gradient_cache(model, params, args, constraints, parameter_count, adtype)
+    adtype === :forward && return nothing
+    # cheap gate: the extension method exists only while Enzyme is loaded, so
+    # without it (the common case) we skip straight to forward mode without
+    # building any objective or attempting a gradient.
+    isempty(methods(reverse_mode_value_and_gradient)) && return nothing
+    # only the shared-posterior case (a single args tuple + a single ChoiceMap)
+    # collapses to one reusable objective; per-column vectors fall back to forward.
+    (args isa Tuple && constraints isa ChoiceMap) || return nothing
+    if adtype === :auto && parameter_count < _REVERSE_MODE_AUTO_MIN_PARAMS
+        return nothing
+    end
+    seed = collect(view(params, :, 1))
+    objective = _generated_gradient_objective_or_nothing(model, seed, args, constraints)
+    isnothing(objective) && return nothing
+    # compile + finiteness guard: run one real value+gradient. A MethodError here
+    # means Enzyme is not loaded; any other error means Enzyme cannot compile this
+    # objective. Either way, fall back to forward mode rather than fail later.
+    try
+        value, gradient = Base.invokelatest(reverse_mode_value_and_gradient, objective, seed)
+        (isfinite(value) && all(isfinite, gradient)) || return nothing
+    catch
+        return nothing
+    end
+    return BatchedReverseGradientCache(objective, seed)
 end
 
 # A cached analytic backend gradient can hit a runtime capability gap the
@@ -475,6 +542,11 @@ function batched_logjoint_gradient_unconstrained!(
     size(params, 2) == cache.batch_size ||
         throw(DimensionMismatch("expected $(cache.batch_size) batch elements, got $(size(params, 2))"))
 
+    if !isnothing(cache.reverse_cache)
+        _batched_reverse_fill_value_and_gradient!(nothing, cache, params)
+        return cache.gradient_buffer
+    end
+
     if !isnothing(cache.backend_cache)
         totals = _batched_totals_buffer!(cache.backend_cache.workspace, cache.batch_size, eltype(cache.gradient_buffer))
         _batched_backend_gradient_or_columns!(totals, cache, params)
@@ -513,6 +585,10 @@ function _batched_logjoint_unconstrained_from_gradient_cache!(
 )
     length(destination) == cache.batch_size ||
         throw(DimensionMismatch("expected $(cache.batch_size) batched values, got $(length(destination))"))
+
+    if !isnothing(cache.reverse_cache)
+        return _batched_reverse_fill_value!(destination, cache, params)
+    end
 
     if !isnothing(cache.backend_cache)
         plan = cache.thread_plan
@@ -565,6 +641,11 @@ function _batched_logjoint_and_gradient_unconstrained!(
     size(params, 2) == cache.batch_size ||
         throw(DimensionMismatch("expected $(cache.batch_size) batch elements, got $(size(params, 2))"))
 
+    if !isnothing(cache.reverse_cache)
+        # one ReverseWithPrimal pass per column yields BOTH value and gradient
+        return _batched_reverse_fill_value_and_gradient!(destination, cache, params)
+    end
+
     if !isnothing(cache.backend_cache)
         _batched_backend_gradient_or_columns!(destination, cache, params)
         return destination, cache.gradient_buffer
@@ -573,6 +654,48 @@ function _batched_logjoint_and_gradient_unconstrained!(
     batched_logjoint_gradient_unconstrained!(cache, params)
     _batched_logjoint_unconstrained_from_gradient_cache!(destination, cache, params)
     return destination, cache.gradient_buffer
+end
+
+# --- batched per-column reverse-mode fill (issue #268, A2) -------------------
+#
+# All three reduce to looping the shared generated objective over columns with an
+# Enzyme reverse pass. Each column is independent (multi-chain, same posterior),
+# so this mirrors the forward column tier -- just O(1) in the parameter count
+# instead of O(P). A per-column try/catch maps an invalid-region Enzyme failure to
+# a non-finite logjoint / NaN gradient, exactly what the samplers already gate on,
+# so a chain wandering off never crashes the run.
+
+# value + gradient (destination === nothing writes only the gradient buffer).
+function _batched_reverse_fill_value_and_gradient!(destination, cache::BatchedLogjointGradientCache, params)
+    rc = cache.reverse_cache
+    objective = rc.objective
+    for batch_index = 1:cache.batch_size
+        copyto!(rc.theta, view(params, :, batch_index))
+        try
+            value, gradient = Base.invokelatest(reverse_mode_value_and_gradient, objective, rc.theta)
+            copyto!(view(cache.gradient_buffer, :, batch_index), gradient)
+            destination === nothing || (destination[batch_index] = value)
+        catch
+            fill!(view(cache.gradient_buffer, :, batch_index), NaN)
+            destination === nothing || (destination[batch_index] = -Inf)
+        end
+    end
+    return destination, cache.gradient_buffer
+end
+
+# value only (the sampler asks for the logjoint without the gradient).
+function _batched_reverse_fill_value!(destination, cache::BatchedLogjointGradientCache, params)
+    rc = cache.reverse_cache
+    objective = rc.objective
+    for batch_index = 1:cache.batch_size
+        copyto!(rc.theta, view(params, :, batch_index))
+        destination[batch_index] = try
+            Base.invokelatest(objective, rc.theta)
+        catch
+            -Inf
+        end
+    end
+    return destination
 end
 
 # --- lane compaction (issue #160) -------------------------------------------
