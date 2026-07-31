@@ -86,6 +86,7 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | numpyro-parallel | 4 | 1000 | float64 | PASS | 4,265 ± 4.4e+02 | 3,465 | 0.533 | 0.608 | 1.22 | 0.00017 |
 | stan | 4 | 1000 | float64 | PASS | 112,647 ± 16,135 | 92,259 | 0.0193 | 0.0143 | 0.0273 | 0.00025 |
 | uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 4,896 ± 3.7e+02 | 3,858 | 0.397 | 0.653 | 4.72 | 0.00058 |
+| uncertaintea-chees | 4 | 1000 | Float64 | PASS | 3,332 ± 2,194 | 3,357 | 1.21 | 1.64 | 4.09 | 0.0013 |
 | uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 37,560 ± 5,798 | 28,998 | 0.0497 | 0.0631 | 1.61 | 0.00092 |
 
 ## gauss
@@ -103,9 +104,24 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | uncertaintea-batched-cpu | 4096 | 500 | Float64 | PASS | 58,697 ± 0 | 64,436 | 17.1 | 7.9 | 26.4 | 0 |
 | uncertaintea-batched-cpu-ka | 64 | 500 | Float64 | PASS | 6,277 ± 3.1e+02 | 6,509 | 2.64 | 1.77 | 7.69 | 0 |
 | uncertaintea-batched-cpu-ka | 512 | 500 | Float64 | PASS | 6,532 ± 61 | 6,955 | 19.9 | 17.4 | 42.8 | 0 |
+| uncertaintea-batched-cpu-persistent | 4 | 1000 | Float64 | PASS | 12,024 ± 1,230 | 12,699 | 0.167 | 0.159 | 3.33 | 0 |
 | uncertaintea-batched-metal | 64 | 500 | Float32 | PASS | 1,261 ± 11 | 1,297 | 13 | 7.08 | 34.5 | 0 |
 | uncertaintea-batched-metal | 512 | 500 | Float32 | PASS | 6,195 ± 76 | 6,676 | 20.8 | 10.6 | 46.7 | 0 |
+| uncertaintea-batched-metal-persistent | 64 | 500 | Float32 | PASS | 3,098 ± 1.8e+02 | 3,078 | 5.43 | 2.5 | 20.6 | 0 |
+| uncertaintea-batched-metal-persistent | 512 | 500 | Float32 | PASS | 17,979 ± 6.2e+02 | 19,188 | 7.2 | 3.67 | 22.6 | 0 |
+| uncertaintea-batched-metal-persistent | 4096 | 500 | Float32 | PASS | 87,051 ± 0 | 95,999 | 11.5 | 7.53 | 30.9 | 0 |
+| uncertaintea-batched-metal-persistent | 16384 | 500 | Float32 | PASS | 178,141 ± 0 | 196,806 | 22.5 | 14.8 | 49.1 | 0 |
+| uncertaintea-chees | 4 | 1000 | Float64 | PASS | 459,463 ± 193,949 | 412,495 | 0.00543 | 0.00473 | 1.45 | 0 |
+| uncertaintea-chees | 64 | 500 | Float64 | PASS | 284,446 ± 126,061 | 401,503 | 0.0478 | 0.0147 | 1.63 | 0 |
+| uncertaintea-chees | 512 | 500 | Float64 | FAIL | 266,417 ± 125,918 | 315,916 | 0.291 | 0.113 | 2.01 | 0.00065 |
+| uncertaintea-chees | 4096 | 500 | Float64 | FAIL | 153,651 ± 0 | 268,871 | 2.17 | 0.962 | 4.76 | 0 |
+| uncertaintea-chees | 16384 | 500 | Float64 | PASS | 162,899 ± 0 | 280,172 | 11.3 | 4.81 | 15.7 | 0 |
 | uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 546,365 ± 99,595 | 574,571 | 0.00369 | 0.00618 | 0.812 | 0 |
+
+Correctness failures (timings above are reported for context but MUST NOT be quoted):
+- uncertaintea-chees__chains512: mu: rhat=1.0116
+- uncertaintea-chees__chains512: s: rhat=1.0111
+- uncertaintea-chees__chains4096: mu: rhat=1.0121
 
 ## logistic
 
@@ -116,6 +132,8 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 11,067 ± 1,113 | 7,981 | 0.364 | 0.439 | 3.67 | 0 |
 | uncertaintea-batched-metal | 64 | 500 | Float32 | PASS | 2,411 ± 1.2e+02 | 1,735 | 14.5 | 8.91 | 38.6 | 0 |
 | uncertaintea-batched-metal | 512 | 500 | Float32 | PASS | 9,648 ± 1.8e+02 | 6,717 | 30 | 17.8 | 61.1 | 0 |
+| uncertaintea-batched-metal-persistent | 64 | 500 | Float32 | PASS | 7,455 ± 4.8e+02 | 5,112 | 4.9 | 3.38 | 22.2 | 0 |
+| uncertaintea-batched-metal-persistent | 512 | 500 | Float32 | PASS | 35,204 ± 3e+02 | 24,827 | 8.11 | 6.42 | 29 | 0 |
 | uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 8,869 ± 4.3e+02 | 5,859 | 0.47 | 0.491 | 1.95 | 0 |
 
 ## logistic_large
@@ -126,4 +144,5 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | stan | 4 | 1000 | float64 | PASS | 5,538 ± 5.3e+02 | 1,703 | 1.52 | 1.43 | 4.07 | 0 |
 | uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 1,531 ± 79 | 526 | 5.03 | 7.52 | 14.2 | 0 |
 | uncertaintea-batched-metal | 64 | 500 | Float32 | PASS | 2,277 ± 5.7e+02 | 765 | 32.5 | 29.3 | 68.3 | 0 |
+| uncertaintea-batched-metal-persistent | 64 | 500 | Float32 | PASS | 712 ± 61 | 245 | 97.3 | 132 | 270 | 0 |
 | uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 170 ± 12 | 53 | 48.2 | 48.3 | 75.1 | 0 |
