@@ -41,6 +41,37 @@ end
         @test_throws ArgumentError UncertainTea.logpdf(gp, gp_y[1:(gp_n-1)])
     end
 
+    @testset "ARD (per-dimension lengthscale)" begin
+        ard_rng = MersenneTwister(2731)
+        ard_d, ard_n = 4, 25
+        ard_X = randn(ard_rng, ard_d, ard_n)
+        ard_y = randn(ard_rng, ard_n)
+
+        # an ARD vector of equal lengthscales reproduces the isotropic scalar kernel
+        ard_iso = gaussianprocess(ard_X, 0.8, 1.2, 0.3)
+        ard_equal = gaussianprocess(ard_X, fill(0.8, ard_d), 1.2, 0.3)
+        @test UncertainTea.logpdf(ard_equal, ard_y) ≈ UncertainTea.logpdf(ard_iso, ard_y) rtol = 1e-12
+
+        # a genuine ARD kernel matches the hand-computed N(0, K) density
+        ard_l = [0.5, 1.0, 2.0, 4.0]
+        ard_v, ard_noise = 1.3, 0.25
+        ard_K = [
+            ard_v^2 * exp(-0.5 * sum((ard_X[:, i] .- ard_X[:, j]) .^ 2 ./ ard_l .^ 2)) +
+            (ard_noise^2 + 1e-8) * (i == j) for i = 1:ard_n, j = 1:ard_n
+        ]
+        ard_ref = -0.5 * ard_y' * (ard_K \ ard_y) - 0.5 * logdet(ard_K) - 0.5 * ard_n * log(2pi)
+        ard_gp = gaussianprocess(ard_X, ard_l, ard_v, ard_noise)
+        @test UncertainTea.logpdf(ard_gp, ard_y) ≈ ard_ref rtol = 1e-10
+
+        # an ARD lengthscale of the wrong dimension is rejected
+        @test_throws ArgumentError gaussianprocess(ard_X, [1.0, 2.0], ard_v, ard_noise)
+
+        # rand still draws a finite length-N sample under an ARD kernel
+        ard_sample = rand(MersenneTwister(1), ard_gp)
+        @test length(ard_sample) == ard_n
+        @test all(isfinite, ard_sample)
+    end
+
     @testset "rand draws a finite length-N prior sample" begin
         gp = gaussianprocess(gp_X, 1.0, 1.0, 0.3)
         sample = rand(MersenneTwister(1), gp)
