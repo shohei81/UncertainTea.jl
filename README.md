@@ -1,6 +1,6 @@
 # UncertainTea
 
-[![CI](https://github.com/shohei81/uncertaintea/actions/workflows/ci.yml/badge.svg)](https://github.com/shohei81/uncertaintea/actions/workflows/ci.yml)
+[![CI](https://github.com/shohei81/UncertainTea.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/shohei81/UncertainTea.jl/actions/workflows/ci.yml)
 
 UncertainTea is an experimental Julia probabilistic programming package with a
 Gen-like frontend and a static execution model designed for GPU-friendly
@@ -52,7 +52,7 @@ UncertainTea currently targets Julia 1.10+.
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/shohei81/uncertaintea.git")
+Pkg.add(url="https://github.com/shohei81/UncertainTea.jl.git")
 ```
 
 For local development:

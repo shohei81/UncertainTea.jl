@@ -9,45 +9,45 @@ the design documents below remain the authoritative deep-dives, and live under
 
 ## Architecture and DSL
 
-- [architecture.md](https://github.com/shohei81/uncertaintea/blob/main/docs/architecture.md)
+- [architecture.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/architecture.md)
   — the recommended architecture and layering strategy.
-- [dsl.md](https://github.com/shohei81/uncertaintea/blob/main/docs/dsl.md)
+- [dsl.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/dsl.md)
   — the minimal DSL proposal, close to official Gen syntax.
-- [constraint-driven-conditioning.md](https://github.com/shohei81/uncertaintea/blob/main/docs/constraint-driven-conditioning.md)
+- [constraint-driven-conditioning.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/constraint-driven-conditioning.md)
   — how observations vs. latents are classified from the conditioning signature.
 
 ## Batched and device execution
 
-- [batched-inference.md](https://github.com/shohei81/uncertaintea/blob/main/docs/batched-inference.md)
+- [batched-inference.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/batched-inference.md)
   — the phased design for batched evaluators and GPU-oriented execution.
-- [device-backend.md](https://github.com/shohei81/uncertaintea/blob/main/docs/device-backend.md)
+- [device-backend.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/device-backend.md)
   — device-resident batched logjoint via KernelAbstractions.
-- [vector-backend-lowering.md](https://github.com/shohei81/uncertaintea/blob/main/docs/vector-backend-lowering.md)
+- [vector-backend-lowering.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/vector-backend-lowering.md)
   — bringing vector-valued latent families into the device subset.
-- [device-vector-latents.md](https://github.com/shohei81/uncertaintea/blob/main/docs/device-vector-latents.md)
+- [device-vector-latents.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/device-vector-latents.md)
   — device-resident vector latents.
 
 ## Samplers
 
-- [gpu-native-nuts.md](https://github.com/shohei81/uncertaintea/blob/main/docs/gpu-native-nuts.md)
+- [gpu-native-nuts.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/gpu-native-nuts.md)
   — design constraints for iterative, GPU-oriented NUTS.
-- [persistent-nuts.md](https://github.com/shohei81/uncertaintea/blob/main/docs/persistent-nuts.md)
+- [persistent-nuts.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/persistent-nuts.md)
   — the persistent per-chain tree kernel (true one-launch GPU-native NUTS).
-- [chees-hmc.md](https://github.com/shohei81/uncertaintea/blob/main/docs/chees-hmc.md)
+- [chees-hmc.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/chees-hmc.md)
   — ChEES-HMC, the cross-chain trajectory-length adaptive sampler.
-- [mh-within-gibbs.md](https://github.com/shohei81/uncertaintea/blob/main/docs/mh-within-gibbs.md)
+- [mh-within-gibbs.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/mh-within-gibbs.md)
   — Metropolis-within-Gibbs for discrete structure.
-- [discrete-enumeration.md](https://github.com/shohei81/uncertaintea/blob/main/docs/discrete-enumeration.md)
+- [discrete-enumeration.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/discrete-enumeration.md)
   — discrete enumeration / marginalization.
-- [noncentered-reparam.md](https://github.com/shohei81/uncertaintea/blob/main/docs/noncentered-reparam.md)
+- [noncentered-reparam.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/noncentered-reparam.md)
   — automatic non-centered reparameterization with address preservation.
 
 ## Benchmarks and research
 
-- [benchmarks.md](https://github.com/shohei81/uncertaintea/blob/main/docs/benchmarks.md)
+- [benchmarks.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/benchmarks.md)
   — cross-PPL correctness + performance results (NumPyro/Stan) and methodology;
   harness in `bench/crossppl/`.
-- [research.md](https://github.com/shohei81/uncertaintea/blob/main/docs/research.md)
+- [research.md](https://github.com/shohei81/UncertainTea.jl/blob/main/docs/research.md)
   — ecosystem research behind a GPU-native Julia PPL.
 
 !!! info "Follow-up"

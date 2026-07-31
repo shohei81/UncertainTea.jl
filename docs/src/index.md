@@ -38,7 +38,7 @@ UncertainTea targets Julia 1.10+.
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/shohei81/uncertaintea.git")
+Pkg.add(url="https://github.com/shohei81/UncertainTea.jl.git")
 ```
 
 For local development:

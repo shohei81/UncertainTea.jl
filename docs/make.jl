@@ -29,7 +29,7 @@ makedocs(;
     authors="shohei81",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://shohei81.github.io/uncertaintea",
+        canonical="https://shohei81.github.io/UncertainTea.jl",
         edit_link="main",
         assets=String[],
     ),
@@ -53,7 +53,7 @@ makedocs(;
 # grants `contents: write`, which lets deploydocs push the rendered site to the
 # gh-pages branch. Runs only inside GitHub Actions; a no-op locally.
 deploydocs(;
-    repo="github.com/shohei81/uncertaintea.git",
+    repo="github.com/shohei81/UncertainTea.jl.git",
     devbranch="main",
     push_preview=false,
 )
