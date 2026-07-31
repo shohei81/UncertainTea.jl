@@ -438,7 +438,16 @@ end
 #     Enzyme cannot handle, BEFORE any sampling runs.
 #
 # Any failure returns `nothing`, and the caller falls back to the forward tiers.
-const _REVERSE_MODE_AUTO_MIN_PARAMS = 32
+#
+# Threshold (issue #277). Measured `batched_nuts` (4 chains, 300+300) on non-analytic
+# coupled models: once warm, reverse mode beats forward from ~P=8 (1.3x) and the
+# speedup grows monotonically (P=16 ~4x, P=24 ~5x, P=32 ~9.5x). Including the
+# one-time per-objective Enzyme compile (~2s), a SINGLE short run breaks even around
+# P=24-28. 24 captures the strong medium-model wins (aligning with the ~20-parameter
+# rule of thumb PPLs like Turing use), while the sub-threshold band stays on forward
+# mode where the absolute run cost is small and the compile would not amortize; any
+# repeated or longer run past the threshold amortizes the compile many times over.
+const _REVERSE_MODE_AUTO_MIN_PARAMS = 24
 
 function _maybe_batched_reverse_gradient_cache(model, params, args, constraints, parameter_count, adtype)
     adtype === :forward && return nothing

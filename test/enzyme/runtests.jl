@@ -164,6 +164,34 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         @test UT.BatchedLogjointGradientCache(batched_small, p_s, (), cm_s; adtype=:auto).reverse_cache === nothing
         @test UT.BatchedLogjointGradientCache(batched_small, p_s, (), cm_s; adtype=:reverse).reverse_cache !== nothing
 
+        # threshold boundary (issue #277): :auto engages reverse at exactly 24
+        # parameters and stays forward just below it.
+        @tea static function coupled_at_threshold()
+            x ~ iid(normal(0.0, 1.0), 24)
+            for i = 1:23
+                {:y => i} ~ normal(tanh(x[i]) + 0.5 * x[i+1], 0.3)
+            end
+            return x
+        end
+        @tea static function coupled_below_threshold()
+            x ~ iid(normal(0.0, 1.0), 20)
+            for i = 1:19
+                {:y => i} ~ normal(tanh(x[i]) + 0.5 * x[i+1], 0.3)
+            end
+            return x
+        end
+        cm_24 = UT.choicemap([(:y => i, 0.05 * i) for i = 1:23])
+        cm_20 = UT.choicemap([(:y => i, 0.05 * i) for i = 1:19])
+        @test UT.BatchedLogjointGradientCache(coupled_at_threshold, randn(MersenneTwister(4), 24, 3), (), cm_24; adtype=:auto).reverse_cache !==
+              nothing
+        @test UT.BatchedLogjointGradientCache(
+            coupled_below_threshold,
+            randn(MersenneTwister(5), 20, 3),
+            (),
+            cm_20;
+            adtype=:auto,
+        ).reverse_cache === nothing
+
         @test_throws ArgumentError UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:bogus)
     end
 
@@ -210,16 +238,18 @@ using Enzyme   # activates UncertainTeaEnzymeExt
     @testset "adtype on advi/svgd/smc engages reverse (issue #275)" begin
         cm = batched_big_constraints(1)
 
-        # ADVI/SVGD gradient descent is deterministic and the reverse gradient is
-        # numerically identical to forward, so with the same seed the results are
-        # bitwise identical -- a strong check that reverse actually engaged.
+        # ADVI/SVGD gradient descent is deterministic and the reverse gradient
+        # matches forward to ~1e-15, so with the same seed the results agree to
+        # very high precision -- a strong check that reverse actually engaged.
+        # (Not bitwise: the ~1e-15 gradient difference accumulates over the Adam
+        # steps, so compare with a tight tolerance rather than `==`.)
         af = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:forward, rng=MersenneTwister(5))
         ar = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:reverse, rng=MersenneTwister(5))
-        @test af.location == ar.location
+        @test af.location ≈ ar.location rtol = 1e-8
 
         sf = batched_svgd(batched_big, (), cm; num_particles=16, num_iterations=80, adtype=:forward, rng=MersenneTwister(6))
         sr = batched_svgd(batched_big, (), cm; num_particles=16, num_iterations=80, adtype=:reverse, rng=MersenneTwister(6))
-        @test sf.constrained_particles == sr.constrained_particles
+        @test sf.constrained_particles ≈ sr.constrained_particles rtol = 1e-8
 
         # SMC with a NUTS move kernel: reverse runs and produces the same tempering
         # schedule length as forward (a linear-gaussian model that converges).
