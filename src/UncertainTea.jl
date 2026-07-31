@@ -56,7 +56,7 @@ export cauchy, halfnormal, halfcauchy, uniform, logistic, gumbel
 export pareto, frechet, rayleigh, inversegaussian
 export truncatednormal, truncatedstudentt
 export mixture
-export mvnormaldense, gaussianprocess, hmm
+export mvnormaldense, gaussianprocess, gp_cholesky, hmm
 export mvstudentt, mvstudenttdense
 export wishart, inversewishart
 export lkjcholesky, scale_cholesky
