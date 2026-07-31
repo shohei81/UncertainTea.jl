@@ -1874,3 +1874,46 @@ function logjoint_gradient_unconstrained(
     ForwardDiff.gradient!(gradient, objective, seed, config)
     return gradient
 end
+
+# Reverse-mode gradient of a model's unconstrained logjoint (issue #268, part A).
+#
+# The forward-mode `logjoint_gradient_unconstrained` above is `O(P)` in the
+# parameter count; on high-dimensional non-analytic models a reverse-mode pass is
+# `O(1)`. The type-stable GENERATED scorer (`_GenGradientObjective`, the same
+# objective the forward path differentiates) is Enzyme-differentiable, so the
+# reverse-mode gradient is exactly the forward-mode gradient computed the cheaper
+# way — no separate evaluator. The interpreter fallback objective is NOT
+# type-stable enough for Enzyme, so a model that falls off the generated-scorer
+# path is rejected with a clear message rather than silently taking a slow path.
+#
+# The actual Enzyme call lives in `reverse_mode_gradient(f, x)`, supplied by
+# UncertainTeaEnzymeExt (loaded via `using Enzyme`); it is reached through
+# `invokelatest` because the generated scorer is emitted at runtime (the
+# forward path crosses the same world-age boundary). Without Enzyme loaded the
+# inner call raises a MethodError — the intended "load Enzyme" signal.
+function reverse_mode_gradient(
+    model::TeaModel,
+    params::AbstractVector,
+    args::Tuple=(),
+    constraints::ChoiceMap=choicemap(),
+)
+    seed = collect(params)
+    resolved = _resolve_signature_plan(model, constraints)
+    stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
+    scorer = _generated_scorer(resolved, false)
+    obs_stats = isnothing(scorer) ? nothing : _gen_obs_and_stats_for_stage(resolved, stage)
+    if isnothing(scorer) || isnothing(obs_stats)
+        throw(
+            ArgumentError(
+                "reverse_mode_gradient(model, ...) currently supports only models on the " *
+                "type-stable generated-scorer path; this model falls back to the interpreter. " *
+                "Use logjoint_gradient_unconstrained (forward-mode) instead.",
+            ),
+        )
+    end
+    obs, stats = obs_stats
+    objective = _gen_gradient_objective(
+        scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs; stats=stats,
+    )
+    return Base.invokelatest(reverse_mode_gradient, objective, seed)
+end
