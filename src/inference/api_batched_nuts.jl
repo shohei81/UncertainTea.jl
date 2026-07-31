@@ -46,10 +46,21 @@ function batched_nuts(
     precision=nothing,
     persistent_gradient::Symbol=:auto,
     device_sync_per_leaf::Bool=false,
+    adtype::Symbol=:auto,
     rng::AbstractRNG=Random.default_rng(),
 )
     tree_strategy in (:hybrid, :masked, :persistent) ||
         throw(ArgumentError("batched_nuts tree_strategy must be :hybrid, :masked, or :persistent, got $(repr(tree_strategy))"))
+    # Host reverse-mode AD gradient selection (issue #268, A2). `:auto` uses
+    # reverse mode when it is safe and beneficial (Enzyme loaded, the model is on
+    # the generated-scorer path, the batch shares one posterior, the parameter
+    # count clears the threshold, and a trial gradient compiles) and forward mode
+    # otherwise; `:forward`/`:reverse` override. Reverse mode is host-only, so it
+    # does not apply to the device (`backend`) path.
+    adtype in (:auto, :forward, :reverse) ||
+        throw(ArgumentError("batched_nuts adtype must be :auto, :forward, or :reverse, got $(repr(adtype))"))
+    !(adtype === :reverse && backend !== nothing) ||
+        throw(ArgumentError("batched_nuts adtype=:reverse is a host-only path and cannot be combined with a device `backend`"))
     # `:persistent` (issue #154 increment 2) is a device-only strategy: the whole tree
     # is built inside a device kernel, so it has no host fallback and REQUIRES a backend.
     !(tree_strategy === :persistent && backend === nothing) ||
@@ -146,7 +157,7 @@ function batched_nuts(
         num_chains;
         init=init,
     )
-    workspace = BatchedNUTSWorkspace(model, position, batch_args, batch_constraints, max_tree_depth)
+    workspace = BatchedNUTSWorkspace(model, position, batch_args, batch_constraints, max_tree_depth; adtype=adtype)
     current_logjoint = Vector{Float64}(undef, num_chains)
     current_gradient = workspace.current_gradient
     # Retry non-finite starting points instead of throwing outright (issue #162):

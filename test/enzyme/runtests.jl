@@ -104,4 +104,90 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         cm = UT.choicemap((:y, 0.7))
         @test_throws ArgumentError reverse_mode_gradient(scalar_obs, [0.3], (), cm)
     end
+
+    # --- batched per-column reverse-mode tier (issue #268, part A2) -----------
+
+    @tea static function batched_big()
+        x ~ iid(normal(0.0, 1.0), 40)
+        for i = 1:39
+            {:y => i} ~ normal(tanh(x[i]) + 0.5 * x[i+1], 0.3)
+        end
+        return x
+    end
+
+    function batched_big_constraints(seed)
+        rng = MersenneTwister(seed)
+        xt = randn(rng, 40)
+        return UT.choicemap([(:y => i, tanh(xt[i]) + 0.5 * xt[i+1] + 0.3 * randn(rng)) for i = 1:39])
+    end
+
+    @testset "batched reverse cache: adtype selection + threshold" begin
+        cm = batched_big_constraints(1)
+        params = randn(MersenneTwister(2), 40, 5)
+
+        # :forward never engages reverse
+        cf = UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:forward)
+        @test cf.reverse_cache === nothing
+        # :auto engages reverse (40 >= threshold, Enzyme loaded, shared constraints)
+        ca = UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:auto)
+        @test ca.reverse_cache !== nothing
+        # :reverse forces it
+        cr = UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:reverse)
+        @test cr.reverse_cache !== nothing
+
+        # a below-threshold model stays forward under :auto but is forced under :reverse
+        @tea static function batched_small()
+            x ~ iid(normal(0.0, 1.0), 8)
+            for i = 1:7
+                {:y => i} ~ normal(tanh(x[i]) + 0.5 * x[i+1], 0.3)
+            end
+            return x
+        end
+        cm_s = UT.choicemap([(:y => i, 0.1 * i) for i = 1:7])
+        p_s = randn(MersenneTwister(3), 8, 3)
+        @test UT.BatchedLogjointGradientCache(batched_small, p_s, (), cm_s; adtype=:auto).reverse_cache === nothing
+        @test UT.BatchedLogjointGradientCache(batched_small, p_s, (), cm_s; adtype=:reverse).reverse_cache !== nothing
+
+        @test_throws ArgumentError UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:bogus)
+    end
+
+    @testset "batched reverse gradient + value match forward exactly" begin
+        cm = batched_big_constraints(1)
+        params = randn(MersenneTwister(2), 40, 5)
+
+        fref = copy(
+            UT.batched_logjoint_gradient_unconstrained!(
+                UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:forward), params,
+            ),
+        )
+        vref = UT.batched_logjoint_unconstrained(batched_big, params, (), cm)
+
+        cr = UT.BatchedLogjointGradientCache(batched_big, params, (), cm; adtype=:reverse)
+        grev = copy(UT.batched_logjoint_gradient_unconstrained!(cr, params))
+        @test grev ≈ fref rtol = 1e-8
+
+        dest = zeros(5)
+        d, g = UT._batched_logjoint_and_gradient_unconstrained!(dest, cr, params)
+        @test g ≈ fref rtol = 1e-8
+        @test d ≈ vref rtol = 1e-8
+    end
+
+    @testset "batched_nuts adtype=:reverse matches :forward distributionally" begin
+        cm = batched_big_constraints(1)
+        chf = batched_nuts(
+            batched_big, (), cm; num_chains=6, num_samples=400, num_warmup=400,
+            adtype=:forward, rng=MersenneTwister(42),
+        )
+        chr = batched_nuts(
+            batched_big, (), cm; num_chains=6, num_samples=400, num_warmup=400,
+            adtype=:reverse, rng=MersenneTwister(99),
+        )
+        af = UT.posterior_array(chf)
+        ar = UT.posterior_array(chr)
+        mf = vec(sum(af; dims=(1, 2))) ./ (size(af, 1) * size(af, 2))
+        mr = vec(sum(ar; dims=(1, 2))) ./ (size(ar, 1) * size(ar, 2))
+        # different seeds -> pure MC error; the invariant distribution is identical
+        # (chaotic leapfrog divergence rules out a bitwise sample match).
+        @test maximum(abs.(mf .- mr)) < 0.15
+    end
 end

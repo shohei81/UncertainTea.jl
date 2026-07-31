@@ -685,7 +685,8 @@ function BatchedNUTSWorkspace(
     position::AbstractMatrix,
     args=(),
     constraints=choicemap(),
-    max_tree_depth::Int=10,
+    max_tree_depth::Int=10;
+    adtype::Symbol=:auto,
 )
     num_params, num_chains = size(position)
     checkpoint_columns = max(max_tree_depth + 1, 1)
@@ -695,9 +696,10 @@ function BatchedNUTSWorkspace(
     # matching BatchedHMCWorkspace; the syntactic default layout would mis-size
     # the constrained-sample buffer under a bound-observation signature.
     constrained_num_params = parametervaluecount(_batched_signature_layout(model, batch_constraints))
-    # sampler-owned evaluation: Stan-style reject semantics (issue #157)
+    # sampler-owned evaluation: Stan-style reject semantics (issue #157). `adtype`
+    # selects the host gradient backend (issue #268, A2).
     gradient_cache = BatchedLogjointGradientCache(
-        model, position, batch_args, batch_constraints; reject_invalid_parameters=true,
+        model, position, batch_args, batch_constraints; reject_invalid_parameters=true, adtype=adtype,
     )
     tree_current_position = Matrix{Float64}(undef, num_params, num_chains)
     tree_next_position = Matrix{Float64}(undef, num_params, num_chains)

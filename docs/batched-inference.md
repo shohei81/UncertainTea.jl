@@ -99,11 +99,40 @@ g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])   # pure objective
 g = reverse_mode_gradient(model, theta, args, constraints)  # whole model
 ```
 
-Wiring per-column reverse-mode into the *batched* sampler gradient path is the
-remaining step (each batch column is a single chain, so it can reuse the same
-generated-scorer objective); that integration is tracked in #268. The batched
-per-column *interpreter* objective is not Enzyme-differentiable, which is why the
-single-chain generated-scorer path is the reverse-mode entry point.
+Reverse-mode is also wired into the **batched sampler gradient path** as a
+per-column tier (issue #268, part A2). Every batch column is a single chain over
+the same posterior, so one generated-scorer objective is reused across the whole
+batch, differentiated by an Enzyme `ReverseWithPrimal` pass per column (value and
+gradient in one pass). It is selected through an `adtype` argument on the samplers
+(and on `BatchedLogjointGradientCache`):
+
+- `adtype=:auto` (default) — **guarded automatic**: uses reverse mode only when it
+  is safe *and* beneficial (Enzyme loaded, the model is on the generated-scorer
+  path, the batch shares one `args`/`constraints`, the parameter count clears a
+  threshold, and a trial gradient compiles to a finite result), and forward mode
+  otherwise. Any of those failing — including Enzyme not being loaded — falls back
+  to the existing forward/analytic tiers, so behavior is unchanged for users who
+  never load Enzyme.
+- `adtype=:forward` — always forward-mode/analytic.
+- `adtype=:reverse` — force reverse mode (host-only; incompatible with a device
+  `backend`). If it cannot be built it still falls back to forward rather than
+  failing the run.
+
+The analytic (fused-family) tier is never preempted — reverse only replaces the
+*forward-mode* fallback. End-to-end this turns the non-analytic high-`P` cost from
+`O(P²)` into `O(P)` in actual sampling (measured **24.8× faster** `batched_nuts` on
+a `P=60` non-analytic model, 4 chains, 200+200), with a posterior statistically
+identical to forward mode.
+
+```julia
+using UncertainTea, Enzyme
+chain = batched_nuts(model, args, constraints; num_chains=4, num_samples=1000,
+                     num_warmup=1000, adtype=:auto)   # reverse when it helps, forward otherwise
+```
+
+The batched per-column *interpreter* objective (the pre-A2 fallback) is not
+Enzyme-differentiable, which is why the reverse tier is built on the type-stable
+generated scorer instead.
 
 Accepted batching modes:
 

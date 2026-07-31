@@ -716,6 +716,25 @@ function _gen_gradient_objective(
     )
 end
 
+# Build the type-stable generated gradient objective for a model, or `nothing`
+# when the model is not on the generated-scorer path (scalar/broadcast/non-Float64
+# observations, marginalize sites, or a body over `_GEN_MAX_STEPS`). Shared by the
+# reverse-mode entry points (issue #268): both `reverse_mode_gradient(model, ...)`
+# and the batched per-column reverse path need the same Enzyme-differentiable
+# objective the forward `logjoint_gradient_unconstrained` builds.
+function _generated_gradient_objective_or_nothing(model, seed, args, constraints)
+    resolved = _resolve_signature_plan(model, constraints)
+    stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
+    scorer = _generated_scorer(resolved, false)
+    isnothing(scorer) && return nothing
+    obs_stats = _gen_obs_and_stats_for_stage(resolved, stage)
+    isnothing(obs_stats) && return nothing
+    obs, stats = obs_stats
+    return _gen_gradient_objective(
+        scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs; stats=stats,
+    )
+end
+
 # Re-stage the dense obs vectors when the constraints mutated since the last
 # build; `true` on success (obs current), `false` when the mutated constraints
 # can no longer be densified (the caller must fall back to the interpreter).

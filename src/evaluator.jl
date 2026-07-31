@@ -1898,11 +1898,8 @@ function reverse_mode_gradient(
     constraints::ChoiceMap=choicemap(),
 )
     seed = collect(params)
-    resolved = _resolve_signature_plan(model, constraints)
-    stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
-    scorer = _generated_scorer(resolved, false)
-    obs_stats = isnothing(scorer) ? nothing : _gen_obs_and_stats_for_stage(resolved, stage)
-    if isnothing(scorer) || isnothing(obs_stats)
+    objective = _generated_gradient_objective_or_nothing(model, seed, args, constraints)
+    if isnothing(objective)
         throw(
             ArgumentError(
                 "reverse_mode_gradient(model, ...) currently supports only models on the " *
@@ -1911,9 +1908,5 @@ function reverse_mode_gradient(
             ),
         )
     end
-    obs, stats = obs_stats
-    objective = _gen_gradient_objective(
-        scorer, model, resolved, _complete_model_args(model, args), constraints, seed, obs; stats=stats,
-    )
     return Base.invokelatest(reverse_mode_gradient, objective, seed)
 end

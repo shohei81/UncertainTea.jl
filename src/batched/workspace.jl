@@ -131,7 +131,23 @@ struct BatchedGradientThreadPlan{C}
     reject_invalid_parameters::Bool
 end
 
-struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix,T}
+# Batched per-column reverse-mode gradient tier (issue #268, part A2). Holds ONE
+# shared type-stable generated objective (`_GenGradientObjective`) -- the same one
+# `logjoint_gradient_unconstrained` differentiates -- reused across every batch
+# column, since multi-chain sampling scores the same posterior at different
+# positions. The Enzyme reverse pass over this objective is `O(1)` in the
+# parameter count instead of the forward column tier's `O(P)`. Only built when the
+# model is on the generated-scorer path AND the batch shares one `args`/
+# `constraints` AND Enzyme is loaded AND a trial gradient compiles (see the cache
+# constructor's guard); otherwise the forward tiers stay in charge.
+struct BatchedReverseGradientCache{O}
+    objective::O
+    # reused contiguous per-column parameter copy (Enzyme wants a dense Array; a
+    # strided column view would allocate/convert per call)
+    theta::Vector{Float64}
+end
+
+struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix,T,R}
     model::TeaModel
     column_caches::C
     backend_cache::B
@@ -157,6 +173,11 @@ struct BatchedLogjointGradientCache{C,B,F,G<:AbstractMatrix,T}
     compact_gradient::G
     compact_logjoint::Vector{Float64}
     compact_index::Vector{Int}
+    # per-column reverse-mode tier (issue #268, part A2), or `nothing` when the
+    # forward/analytic tiers are in charge. Set only after the constructor's
+    # eligibility + compile guard passes, so a non-`nothing` value means reverse
+    # mode is known to work for this cache.
+    reverse_cache::R
 end
 
 # `reject_invalid_parameters=true` puts the workspace's compiled-plan walk in
