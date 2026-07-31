@@ -286,8 +286,13 @@ function batched_svgd(
     callback_every::Int=10,
     backend=nothing,
     precision=nothing,
+    adtype::Symbol=:auto,
     rng::AbstractRNG=Random.default_rng(),
 )
+    adtype in (:auto, :forward, :reverse) ||
+        throw(ArgumentError("batched_svgd adtype must be :auto, :forward, or :reverse, got $(repr(adtype))"))
+    !(adtype === :reverse && backend !== nothing) ||
+        throw(ArgumentError("batched_svgd adtype=:reverse is a host-only path and cannot be combined with a device `backend`"))
     layout = _conditioned_parameter_layout(model, constraints)
     parameter_total = parametercount(layout)
     constrained_total = parametervaluecount(layout)
@@ -330,7 +335,7 @@ function batched_svgd(
     # unconstrained log-density gradient into `gradient_buffer`.
     gradient_buffer = Matrix{Float64}(undef, parameter_total, num_particles)
     if backend === nothing
-        cache = BatchedLogjointGradientCache(model, particles, shared_args, constraints)
+        cache = BatchedLogjointGradientCache(model, particles, shared_args, constraints; adtype=adtype)
         gradient_backend = _advi_gradient_backend(cache)
         gradient_provider! = positions -> begin
             batched_logjoint_gradient_unconstrained!(cache, positions)

@@ -160,10 +160,11 @@ function TemperedNUTSMoveWorkspace(
     particles::AbstractMatrix,
     args=(),
     constraints=choicemap(),
-    max_tree_depth::Int=1,
+    max_tree_depth::Int=1;
+    adtype::Symbol=:auto,
 )
     parameter_total, num_particles = size(particles)
-    cache = BatchedLogjointGradientCache(model, particles, args, constraints)
+    cache = BatchedLogjointGradientCache(model, particles, args, constraints; adtype=adtype)
     return TemperedNUTSMoveWorkspace(
         parameter_total,
         num_particles,

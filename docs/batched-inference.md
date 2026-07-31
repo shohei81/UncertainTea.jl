@@ -103,8 +103,9 @@ Reverse-mode is also wired into the **batched sampler gradient path** as a
 per-column tier (issue #268, part A2). Every batch column is a single chain over
 the same posterior, so one generated-scorer objective is reused across the whole
 batch, differentiated by an Enzyme `ReverseWithPrimal` pass per column (value and
-gradient in one pass). It is selected through an `adtype` argument on the samplers
-(and on `BatchedLogjointGradientCache`):
+gradient in one pass). It is selected through an `adtype` argument on the gradient-based samplers —
+`batched_nuts`, `batched_advi`, `batched_svgd`, and `batched_smc` (the NUTS move
+kernel) — and on `BatchedLogjointGradientCache`:
 
 - `adtype=:auto` (default) — **guarded automatic**: uses reverse mode only when it
   is safe *and* beneficial (Enzyme loaded, the model is on the generated-scorer

@@ -844,8 +844,13 @@ function batched_advi(
     callback_every::Int=10,
     backend=nothing,
     precision=nothing,
+    adtype::Symbol=:auto,
     rng::AbstractRNG=Random.default_rng(),
 )
+    adtype in (:auto, :forward, :reverse) ||
+        throw(ArgumentError("batched_advi adtype must be :auto, :forward, or :reverse, got $(repr(adtype))"))
+    !(adtype === :reverse && backend !== nothing) ||
+        throw(ArgumentError("batched_advi adtype=:reverse is a host-only path and cannot be combined with a device `backend`"))
     guide in (:meanfield, :fullrank, :lowrank, :flow) || throw(
         ArgumentError(
             "batched_advi guide must be :meanfield, :fullrank, :lowrank, or :flow, got $guide",
@@ -940,6 +945,7 @@ function batched_advi(
             gradient_clip=Float64(gradient_clip),
             callback=callback,
             callback_every=callback_every,
+            adtype=adtype,
             rng=rng,
         )
     end
@@ -951,7 +957,7 @@ function batched_advi(
     # first genuine draw happens inside the loop below, so a same-seed device run
     # (which has no pre-loop draw) sees an identical RNG stream (issue #108).
     particles .= location
-    cache = BatchedLogjointGradientCache(model, particles, args, constraints)
+    cache = BatchedLogjointGradientCache(model, particles, args, constraints; adtype=adtype)
     gradient_backend = _advi_gradient_backend(cache)
 
     # Structured-guide state: a zero factor makes both guides start at the
@@ -1222,6 +1228,7 @@ function _run_flow_advi(
     gradient_clip::Float64,
     callback,
     callback_every::Int,
+    adtype::Symbol=:auto,
     rng::AbstractRNG,
 )
     dim = length(location)
@@ -1238,7 +1245,7 @@ function _run_flow_advi(
 
     # Shape the gradient cache without consuming the RNG (see the Gaussian path).
     particles .= location
-    cache = BatchedLogjointGradientCache(model, particles, args, constraints)
+    cache = BatchedLogjointGradientCache(model, particles, args, constraints; adtype=adtype)
     gradient_backend = _advi_gradient_backend(cache)
 
     gradient = zero(params)

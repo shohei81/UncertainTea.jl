@@ -110,8 +110,11 @@ function batched_smc(
     resampling::Symbol=:systematic,
     callback=nothing,
     callback_every::Int=10,
+    adtype::Symbol=:auto,
     rng::AbstractRNG=Random.default_rng(),
 )
+    adtype in (:auto, :forward, :reverse) ||
+        throw(ArgumentError("batched_smc adtype must be :auto, :forward, or :reverse, got $(repr(adtype))"))
     resampling in (:systematic, :stratified, :residual, :multinomial) ||
         throw(ArgumentError("batched_smc resampling must be :systematic, :stratified, :residual, or :multinomial"))
     # Signature-aware sizing (#95 PR-7): particle rows, proposal, tempering move
@@ -167,7 +170,7 @@ function batched_smc(
     ancestor_history = Vector{Vector{Int}}()
     nuts_move_workspace =
         move_kernel === :nuts && move_steps > 0 ?
-        TemperedNUTSMoveWorkspace(model, particles, args, constraints, move_max_tree_depth) :
+        TemperedNUTSMoveWorkspace(model, particles, args, constraints, move_max_tree_depth; adtype=adtype) :
         nothing
 
     for stage_index = 1:max_stages

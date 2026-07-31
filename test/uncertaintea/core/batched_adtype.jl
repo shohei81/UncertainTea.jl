@@ -47,4 +47,33 @@ end
             @test UncertainTea.batched_logjoint_gradient_unconstrained!(cache, adtype_params) ≈ forward rtol = 1e-10
         end
     end
+
+    @testset "advi/svgd/smc accept and validate adtype (issue #275)" begin
+        # a small model, no Enzyme -> every adtype falls back to forward and runs.
+        @tea static function adtype_small()
+            mu ~ normal(0.0, 1.0)
+            {:y} ~ normal(mu, 1.0)
+            return mu
+        end
+        small_cm = choicemap((:y, 0.5))
+
+        for adtype in (:auto, :forward, :reverse)
+            r = batched_advi(adtype_small, (), small_cm; num_particles=8, num_steps=20, adtype=adtype, rng=MersenneTwister(1))
+            @test all(isfinite, r.location)
+            s = batched_svgd(adtype_small, (), small_cm; num_particles=8, num_iterations=15, adtype=adtype, rng=MersenneTwister(2))
+            @test all(isfinite, s.constrained_particles)
+        end
+
+        @test_throws ArgumentError batched_advi(adtype_small, (), small_cm; num_particles=4, num_steps=2, adtype=:bogus)
+        @test_throws ArgumentError batched_svgd(adtype_small, (), small_cm; num_particles=4, num_iterations=2, adtype=:bogus)
+        @test_throws ArgumentError batched_smc(adtype_small, (), small_cm; num_particles=4, adtype=:bogus)
+
+        # reverse is host-only: rejected with a device backend
+        @test_throws ArgumentError batched_advi(
+            adtype_small, (), small_cm; num_particles=4, num_steps=2, adtype=:reverse, backend=CPU(),
+        )
+        @test_throws ArgumentError batched_svgd(
+            adtype_small, (), small_cm; num_particles=4, num_iterations=2, adtype=:reverse, backend=CPU(),
+        )
+    end
 end
