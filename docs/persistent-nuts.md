@@ -1,8 +1,13 @@
 # Persistent per-chain tree kernel — true GPU-native NUTS (issue #154)
 
-Authoritative design spec for the #154 epic. Increment 1 (on-device counter-based
-RNG) is implemented; increments 2–3 are planned here so the whole epic has one
-place to point at.
+Authoritative design spec for the #154 epic. Increments 1–4 have shipped: the
+on-device counter-based RNG (increment 1), the persistent per-chain tree kernel
+(increment 2, `batched_nuts(...; tree_strategy=:persistent, backend=...)`), the
+full sweep + summary refresh (increment 3, folded into
+[benchmarks.md](benchmarks.md) via issue #223), and the wide in-kernel
+`DeviceGradN` gradient (increment 4, extended to D > 16 GLMs by issue #221). The
+threadgroup-per-chain intra-chain-parallel variant remains deliberately deferred
+(issue #219); everything else described below is implemented.
 
 ## Goal
 

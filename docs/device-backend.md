@@ -93,10 +93,21 @@ one full-width batched gradient call -- the exact shape the device gradient kern
 consumes. Per-chain tree bookkeeping (log weights, U-turn state, proposal
 selection, directions) stays in small host arrays. The path is CPU-validated
 (statistically equivalent to the default `:hybrid` strategy; deterministic under a
-seed) and benchmarked in `bench/nuts_masked_bench.jl`; wiring its inner leapfrog
-loop onto the device backend is the next step.
+seed). Its inner leapfrog loop is now wired onto the device backend: the
+mask-based device NUTS (`batched_nuts(...; tree_strategy=:masked, backend=...)`,
+`src/device/nuts_kernels.jl`) runs the trajectory device-resident and was then
+optimized across issues #151-#153 (leaf micro-kernel fusion, pre-drawn round RNG,
+device-side accept/select, the observation-tiled gradient) and #160 (lane
+compaction on finished chains).
 
-## What follows
+## What followed
 
-Device-resident NUTS integration (dynamic trajectory lengths) and on-device warmup
-adaptation build on these inner loops; they are out of scope for this phase.
+Device-resident NUTS integration shipped. Beyond the mask-based path,
+`batched_nuts(...; tree_strategy=:persistent, backend=...)`
+(`src/device/persistent_nuts.jl`, issue #154) builds each chain's ENTIRE
+dynamic-length tree in a single kernel launch per iteration with an on-device
+Philox RNG and an in-kernel dual-walk gradient (scalar or the wide `DeviceGradN`
+walk, #221). On-device warmup adaptation also landed: ChEES-HMC
+(`batched_chees`, issue #161) adapts the trajectory length from cross-chain
+statistics reduced on-device (issue #220). See
+[persistent-nuts.md](persistent-nuts.md) and [chees-hmc.md](chees-hmc.md).
