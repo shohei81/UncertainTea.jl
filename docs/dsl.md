@@ -412,8 +412,12 @@ Requirements:
   with strictly positive diagonal and covariance `L * L'`. Only the lower
   triangle of `scale_tril` is read — any upper-triangular content is ignored —
   so a full runtime matrix (a model argument or deterministic binding) works
-  without wrapping. It is CPU-reference only (honestly reported unsupported by
-  `backend_report`; the batched path uses the ForwardDiff fallback). As a
+  without wrapping. It is backend-native (`BackendMvNormalDenseChoicePlanStep`
+  with hand-derived batched analytic gradients, #57) and device-lowered
+  (`DeviceMvNormalDenseChoiceStep`, whose forward-substitution unroll caps the
+  device dimension at 8) when `scale_tril` is a model argument or a captured
+  matrix; an inline literal factor is honestly reported unsupported by
+  `backend_report` and takes the ForwardDiff fallback. As a
   **latent** (parameter slot sampled by HMC/NUTS) the mean must have a
   statically known length (vector literal/tuple), mirroring the diagonal
   `mvnormal` rule; with a non-static mean it is observation-only (no slot).
@@ -436,8 +440,10 @@ Requirements:
   `eta` may be any expression. Latents flow through `CholeskyCorrTransform`
   (Stan's canonical partial correlation parameterization, `d*(d-1)/2`
   unconstrained coordinates), so HMC/NUTS explores exactly the below-diagonal
-  free coordinates. The family is CPU-reference only (honestly reported
-  unsupported by `backend_report`; batched calls use the ForwardDiff fallback).
+  free coordinates. The family is backend-native
+  (`BackendLKJCholeskyChoicePlanStep` with hand-derived batched analytic
+  gradients, #57) and device-lowered (`DeviceLKJCholeskyChoiceStep`), scoring the
+  packed factor through the `CholeskyCorrTransform` on both paths.
   The `scale_cholesky(scales, packed_corr_chol)` helper un-packs the factor and
   scales row `i` by `scales[i]`, producing the dense lower-triangular
   `scale_tril` for `mvnormaldense`; it is a plain function usable as a

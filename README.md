@@ -33,8 +33,14 @@ UncertainTea `0.1.0` is an experimental release.
 - CPU reference evaluation with `generate`, `assess`, `logjoint`,
   unconstrained transforms, and batched logjoint/gradient APIs
 - Inference methods including `hmc`, `nuts`, `hmc_chains`, `nuts_chains`,
-  `batched_hmc`, `batched_nuts`, `batched_advi`,
-  `batched_importance_sampling`, `batched_sir`, and `batched_smc`
+  `batched_hmc`, `batched_nuts`, `batched_chees` (ChEES-HMC), `batched_meads`
+  (MEADS), `gibbs`, `batched_advi`, `batched_svgd`,
+  `batched_importance_sampling`, `batched_sir`, `batched_smc`, and
+  `nested_sampling`
+- Warm-start and point estimation: `pathfinder`, `map_estimate`,
+  `laplace_approximation`
+- Diagnostics and model comparison: `sbc` (simulation-based calibration),
+  `waic`, `psis_loo` / `loo`, and posterior-predictive `predict`
 - Experimental GPU-oriented lowering and device execution: support checks via
   `backend_report` and `backend_execution_plan`, plus a KernelAbstractions
   device backend (`device_batched_logjoint`, `device_batched_logjoint_gradient`,
@@ -103,10 +109,17 @@ unrestricted dynamic traces. The main path is:
 - dense parameter layouts
 - CPU reference first, GPU backends second
 
-The current built-in distribution set includes `normal`, `lognormal`,
-`laplace`, `exponential`, `gamma`, `inversegamma`, `weibull`, `beta`,
-`dirichlet`, diagonal `mvnormal`, `bernoulli`, `binomial`, `geometric`,
-`negativebinomial`, `poisson`, `studentt`, and `categorical`.
+The current built-in distribution set includes the continuous scalar families
+`normal`, `lognormal`, `laplace`, `exponential`, `gamma`, `inversegamma`,
+`weibull`, `beta`, `studentt`, `cauchy`, `halfnormal`, `halfcauchy`, `uniform`,
+`logistic`, `gumbel`, `pareto`, `frechet`, `rayleigh`, and `inversegaussian`;
+their `truncatednormal` / `truncatedstudentt` truncations; the discrete families
+`bernoulli`, `bernoullilogit`, `binomial`, `betabinomial`, `geometric`,
+`negativebinomial`, `poisson`, `categorical`, `discreteuniform`, and
+`multinomial`; the vector/structured families `dirichlet`, diagonal `mvnormal`,
+dense `mvnormaldense`, `mvstudentt` / `mvstudenttdense`, `lkjcholesky` (with the
+`scale_cholesky` helper), and finite `mixture`s; plus `iid` vectors and
+user-defined families via `register_distribution` (`AbstractTeaDistribution`).
 
 ## Documentation
 

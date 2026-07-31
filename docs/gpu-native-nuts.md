@@ -159,11 +159,25 @@ The current CPU NUTS path is intentionally narrow:
 - existing summary, R-hat, ESS, and diagnostics reuse
 
 It is a reference implementation for correctness and API shape.
-It is not yet the GPU implementation.
 
-## Planned GPU Subset
+The GPU-native implementation has since shipped in two forms, both reached
+through `batched_nuts(...; backend=...)`:
 
-The first GPU-native NUTS target should assume:
+- **Mask-based device NUTS** (`tree_strategy=:masked`, `src/device/nuts_kernels.jl`,
+  issues #151-#153, lane compaction #160): the iterative-doubling trajectory runs
+  device-resident with the observation-tiled gradient.
+- **Persistent per-chain tree** (`tree_strategy=:persistent`,
+  `src/device/persistent_nuts.jl`, issue #154): each chain's entire dynamic-length
+  tree is built in one kernel launch per iteration with an on-device Philox RNG
+  and an in-kernel gradient walk. See [persistent-nuts.md](persistent-nuts.md).
+
+The subset below describes the assumptions the first target was designed around;
+the shipped paths meet them (continuous latents, static backend-lowered plans,
+shared diagonal mass, fixed `max_tree_depth`).
+
+## GPU Subset (as shipped)
+
+The GPU-native NUTS paths assume:
 
 - continuous latent choices only
 - fixed parameter dimension

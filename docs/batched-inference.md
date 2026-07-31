@@ -52,6 +52,11 @@ The initial API should be:
 - `batched_smc(model, args, constraints; ...)`
 - `batched_hmc(model, args, constraints; ...)`
 - `batched_nuts(model, args, constraints; ...)`
+- `batched_chees(model, args, constraints; ...)` — ChEES-HMC, fixed-length
+  jittered HMC whose trajectory length is adapted from cross-chain statistics
+  (issue #161); see [chees-hmc.md](chees-hmc.md)
+- `batched_meads(model, args, constraints; ...)` — MEADS, the generalized-HMC
+  ensemble adaptation of step size, damping, and mass (issue #161)
 
 For repeated gradient evaluations on a fixed batch shape, phase 1 also supports
 an explicit cache:
@@ -72,7 +77,11 @@ The current reference inference layer now includes:
   toward the mode with per-iterate Gaussian approximations from the inverse-
   Hessian estimate, ELBO selection, and optional multi-path importance
   resampling. A `PathfinderResult` passes directly as `initial_params` to
-  `hmc`/`nuts`/`nuts_chains`/`batched_hmc`/`batched_nuts`
+  `hmc`/`nuts`/`nuts_chains`/`batched_hmc`/`batched_nuts`; the sampler both
+  starts each chain from a Pathfinder draw AND seeds the warmup initial
+  inverse-mass metric from the Pathfinder covariance diagonal (issue #162), so
+  adaptation begins from the approximate posterior scale rather than the
+  identity
 - `batched_advi`, which fits a Gaussian in unconstrained space and reuses
   `BatchedLogjointGradientCache`. `guide=:meanfield` (default, also the
   device-supported variant) uses a diagonal covariance; `guide=:fullrank`
