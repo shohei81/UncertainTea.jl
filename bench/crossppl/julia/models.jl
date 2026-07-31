@@ -84,3 +84,21 @@ end
     end
     return mu
 end
+
+# Discrete-latent finite mixture (issue #224): a 2-component Gaussian mixture with
+# unknown, ORDERED component means and a shared scale, marginalized over the
+# per-observation component indicator via the single-site `mixture` machinery
+# (issue #13's acceptance oracle -- the same marginal density Stan hand-writes
+# with `log_mix`/`log_sum_exp`). The ordering `mu2 = mu1 + exp(log_gap)` makes the
+# model identifiable so the cross-PPL gate compares well-defined posteriors
+# instead of label-switched ones. CPU-only (enumerate/mixture is device-
+# unsupported until #67).
+@tea static function bench_mixture(n)
+    mu1 ~ normal(0.0, 3.0)
+    log_gap ~ normal(0.0, 1.0)
+    s ~ gamma(2.0, 1.0)
+    for i = 1:n
+        {:y => i} ~ mixture((0.4, 0.6), normal(mu1, s), normal(mu1 + exp(log_gap), s))
+    end
+    return mu1
+end

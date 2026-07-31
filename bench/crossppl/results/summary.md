@@ -97,7 +97,7 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | numpyro-vectorized | 64 | 500 | float32 | PASS | 23,024 ± 1,888 | 19,774 | 1.05 | 0.918 | 2.43 | 0 |
 | numpyro-vectorized | 512 | 500 | float32 | PASS | 45,922 ± 2,797 | 39,558 | 4.37 | 2.82 | 7.21 | 0 |
 | numpyro-vectorized | 4096 | 500 | float32 | PASS | 10,078 ± 0 | 8,810 | 156 | 70.1 | 176 | 0 |
-| stan | 4 | 1000 | float64 | PASS | 278,037 ± 9.3e+02 | 190,540 | 0.0127 | 0.01 | 0.562 | 0 |
+| stan | 4 | 1000 | float64 | PASS | 285,172 ± 10,273 | 195,007 | 0.0123 | 0.00933 | 0.079 | 0 |
 | uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 52,795 ± 24,342 | 56,940 | 0.0552 | 0.0329 | 2.52 | 0 |
 | uncertaintea-batched-cpu | 64 | 500 | Float64 | PASS | 101,537 ± 2,101 | 105,114 | 0.165 | 0.0819 | 2.73 | 0 |
 | uncertaintea-batched-cpu | 512 | 500 | Float64 | PASS | 60,481 ± 22,963 | 64,827 | 2.67 | 1.38 | 4.62 | 0 |
@@ -146,3 +146,12 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 | uncertaintea-batched-metal | 64 | 500 | Float32 | PASS | 2,277 ± 5.7e+02 | 765 | 32.5 | 29.3 | 68.3 | 0 |
 | uncertaintea-batched-metal-persistent | 64 | 500 | Float32 | PASS | 712 ± 61 | 245 | 97.3 | 132 | 270 | 0 |
 | uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 170 ± 12 | 53 | 48.2 | 48.3 | 75.1 | 0 |
+
+## mixture
+
+| framework | chains | draws/chain | precision | correct | min bulk ESS/s | min tail ESS/s | sampling s | warmup s | TTFX/compile s | div rate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| numpyro-parallel | 4 | 1000 | float64 | PASS | 3,155 ± 2.5e+02 | 3,741 | 0.553 | 0.67 | 1.34 | 0 |
+| stan | 4 | 1000 | float64 | PASS | 4,657 ± 4.2e+02 | 4,723 | 0.446 | 0.42 | 0.0818 | 0 |
+| uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 244 ± 4.9 | 276 | 5.77 | 7.75 | 17.1 | 0 |
+| uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 415 ± 11 | 508 | 3.16 | 3.17 | 6.56 | 0 |

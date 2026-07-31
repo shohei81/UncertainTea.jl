@@ -78,10 +78,34 @@ function gauss_data(rng)
     )
 end
 
+# issue #224: 2-component Gaussian mixture with ORDERED means (mu1 < mu2) drawn
+# from a fixed-weight (0.4/0.6) mixture, shared scale. The identifiable
+# parameterization (mu2 = mu1 + exp(log_gap)) matches the Julia/Stan/NumPyro
+# models exactly so the correctness gate compares well-defined posteriors.
+function mixture_data(rng)
+    n = 500
+    mu1, mu2, s, w1 = -1.5, 2.0, 0.7, 0.4
+    ys = Vector{Float64}(undef, n)
+    for i = 1:n
+        ys[i] = (rand(rng) < w1 ? mu1 : mu2) + s * randn(rng)
+    end
+    return Dict(
+        "model" => "mixture",
+        "seed" => SEED,
+        "n" => n,
+        "true_mu1" => mu1,
+        "true_mu2" => mu2,
+        "true_s" => s,
+        "true_w1" => w1,
+        "y" => ys,
+    )
+end
+
 rng = MersenneTwister(SEED)
 dir = joinpath(@__DIR__, "data")
 write_json(joinpath(dir, "logistic.json"), logistic_data(rng))
 write_json(joinpath(dir, "gauss.json"), gauss_data(rng))
-# Independent RNG so adding this dataset leaves logistic.json / gauss.json
+# Independent RNG so adding these datasets leaves logistic.json / gauss.json
 # byte-identical (they share `rng`, whose draw sequence must not shift).
 write_json(joinpath(dir, "logistic_large.json"), logistic_large_data(MersenneTwister(SEED + 1)))
+write_json(joinpath(dir, "mixture.json"), mixture_data(MersenneTwister(SEED + 2)))

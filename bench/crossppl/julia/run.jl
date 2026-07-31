@@ -104,6 +104,11 @@ function setup_model(model_name)
         n = data.n
         cons = choicemap(((:y => i, Float64(data.y[i])) for i = 1:n)...)
         return (bench_gauss, (n,), cons)
+    elseif model_name == "mixture"
+        data = load_json("mixture.json")
+        n = data.n
+        cons = choicemap(((:y => i, Float64(data.y[i])) for i = 1:n)...)
+        return (bench_mixture, (n,), cons)
     else
         error("unknown model $(model_name)")
     end

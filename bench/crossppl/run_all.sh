@@ -41,7 +41,7 @@ SCALE_SEED=200
 GAUSS_PINNED_INIT="0.5,0.18232155679395463"
 scale_reps() { if [[ "$1" -ge 4096 ]]; then echo 1; else echo 3; fi; }
 
-MODELS=(eight_schools_centered eight_schools_noncentered logistic logistic_large gauss)
+MODELS=(eight_schools_centered eight_schools_noncentered logistic logistic_large gauss mixture)
 
 if [[ "${CROSSPPL_IN_CONTAINER:-0}" == "1" ]]; then
     PY=(uv run --project /opt/bench-python --no-sync python)

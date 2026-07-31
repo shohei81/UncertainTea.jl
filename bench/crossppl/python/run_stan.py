@@ -32,6 +32,7 @@ PARAMS = {
     "logistic": ["alpha"] + [f"beta[{i}]" for i in range(1, 9)],
     "logistic_large": ["alpha"] + [f"beta[{i}]" for i in range(1, 17)],
     "gauss": ["mu", "s"],
+    "mixture": ["mu1", "log_gap", "s"],
 }
 
 
@@ -50,7 +51,7 @@ def stan_data(model_name: str, data: dict) -> dict:
         return {"J": data["J"], "y": data["y"], "sigma": data["sigma"]}
     if model_name in ("logistic", "logistic_large"):
         return {"N": data["n"], "D": data["d"], "X": data["X"], "y": data["y"]}
-    if model_name == "gauss":
+    if model_name in ("gauss", "mixture"):
         return {"N": data["n"], "y": data["y"]}
     raise ValueError(f"unknown model {model_name}")
 
