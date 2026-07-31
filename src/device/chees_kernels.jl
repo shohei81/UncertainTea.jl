@@ -16,26 +16,27 @@
 #      trajectory is already residency-looped with a SINGLE `synchronize` at its end,
 #      so the "one sync per iteration" property is preserved regardless of `L_iter`.
 #
-#   2. Cross-chain ChEES trajectory-length adaptation, WARMUP ONLY. After the device
-#      trajectory each warmup iteration we download the PROPOSAL position
-#      (`ws.inner.params_device`, P x C) and the ENDPOINT momentum
-#      (`ws.working_momentum`, P x C) to the host and run the SAME
-#      `_chees_trajectory_update!` the CPU path runs (reused verbatim, not forked).
-#      The `initials` are the pre-transition current positions, which the host
-#      `position` mirror still holds at the top of the iteration (it is only
-#      overwritten by the end-of-iteration accepted-position download), so we
-#      snapshot them there. The step size dual-averages to the HARMONIC mean of the
-#      chains' accept probabilities (`_chees_harmonic_mean_accept`, as the CPU ChEES
-#      path does, not the arithmetic mean device HMC uses) and the SHARED diagonal
-#      mass adapts exactly as device HMC's shared mode.
+#   2. Cross-chain ChEES trajectory-length adaptation, WARMUP ONLY. The estimator
+#      needs, from the P x C proposal position + endpoint momentum, only the
+#      acceptance-weighted proposal MEAN (per-parameter reduction over chains) and
+#      per-chain whitened endpoint moments -- both reduced ON-DEVICE (issue #220,
+#      `_device_chees_proposal_mean!` / `_device_chees_endpoint_terms!`), downloading
+#      only O(P)+O(C) instead of two P x C matrices. The `initials` mean + whitened
+#      start term are done host-side from the `position` mirror (always resident, no
+#      transfer). The reduced scalars feed the SAME scalar state machine the CPU path
+#      runs (`_chees_apply_trajectory_gradient!`, reused verbatim, not forked). The
+#      step size dual-averages to the HARMONIC mean of the chains' accept
+#      probabilities (`_chees_harmonic_mean_accept`) and the SHARED diagonal mass
+#      adapts exactly as device HMC's shared mode.
 #
 # SYNC / TRANSFER POINTS (per iteration, num_chains = C, num_params = P):
-#   uploads : inverse_mass (P), momentum (P x C), accept_mask (C UInt8)
+#   uploads : inverse_mass (P), momentum (P x C), accept_mask (C UInt8), and during
+#             ChEES warmup the accept-prob + divergence masks (C each)
 #   downloads (always): valid (C), current/proposed Hamiltonian (C each), accepted
 #             position (P x C), current_logjoint (C)
 #   downloads (warmup iters only, for host adaptation + step-size re-search):
 #             current_gradient (P x C) AND, when adapting the trajectory length, the
-#             proposal position + endpoint momentum (P x C each) for the ChEES update
+#             two per-chain ChEES moment vectors (C each) -- NO P x C ChEES download
 #   downloads (sampling iters): NONE beyond the always-list -- there is NO ChEES
 #             adaptation download once warmup ends, so sampling stays a pure device
 #             loop with one sync per iteration, exactly like device HMC.
@@ -50,6 +51,60 @@
 # equivalent to the CPU path, exactly like `batched_hmc(...; backend=...)`. On the
 # CPU() reference backend at Float64 the device and host ChEES recover the same
 # posterior and converge `T` to the same sensible value.
+
+# issue #220: on-device ChEES cross-chain reduction kernels. The trajectory-length
+# estimator needs, from the P x C proposal position + endpoint momentum, only the
+# acceptance-weighted proposal MEAN (a per-parameter reduction over chains) and
+# three per-chain whitened scalars -- both reducible on-device to O(P)+O(C), so the
+# warmup iteration no longer downloads two P x C matrices. A chain is excluded iff
+# it diverged; on the device path a non-finite proposal already forces a non-finite
+# Hamiltonian (hence divergence), and the initials are the previous accepted
+# position (always finite), so the divergence mask reproduces the CPU estimator's
+# separate finiteness guards, giving a bitwise-identical reduction at Float64.
+
+# Pass 1: acceptance-weighted, divergence-masked proposal mean, per parameter
+# (`prop_mean[p] = sum_c !div ? accept[c]*proposal[p,c] : 0 * inv_weight_sum`).
+@kernel function _device_chees_proposal_mean!(
+    prop_mean, @Const(proposals), @Const(accept), @Const(divmask), inv_weight_sum, num_chains::Int,
+)
+    p = @index(Global)
+    s = zero(eltype(prop_mean))
+    for c = 1:num_chains
+        if @inbounds(divmask[c]) == 0x00
+            s += @inbounds(accept[c]) * @inbounds(proposals[p, c])
+        end
+    end
+    @inbounds prop_mean[p] = s * inv_weight_sum
+end
+
+# Pass 2: per-chain whitened endpoint moments -- squared endpoint distance and the
+# endpoint/velocity inner product (the estimator's start term is done host-side
+# from the always-resident `position` mirror). Diverged chains contribute zero.
+@kernel function _device_chees_endpoint_terms!(
+    sq_end, endpoint_vel, @Const(proposals), @Const(momentum), @Const(prop_mean),
+    @Const(inverse_mass), @Const(divmask), num_params::Int,
+)
+    c = @index(Global)
+    z = zero(eltype(sq_end))
+    if @inbounds(divmask[c]) != 0x00
+        @inbounds sq_end[c] = z
+        @inbounds endpoint_vel[c] = z
+    else
+        se = z
+        ev = z
+        for p = 1:num_params
+            sigma = @inbounds inverse_mass[p]
+            inv_sqrt = one(sigma) / sqrt(sigma)
+            we = (@inbounds(proposals[p, c]) - @inbounds(prop_mean[p])) * inv_sqrt
+            wv = @inbounds(momentum[p, c]) * sigma * inv_sqrt
+            se += we * we
+            ev += we * (wv)
+        end
+        @inbounds sq_end[c] = se
+        @inbounds endpoint_vel[c] = ev
+    end
+end
+
 function _run_device_batched_chees(
     model::TeaModel,
     args,
@@ -261,16 +316,29 @@ function _run_device_batched_chees(
     # the trajectory update (warmup present AND adaptation on); otherwise zero-sized,
     # so the sampling-only / adaptation-off paths never download the proposal state.
     do_trajectory_adaptation = num_warmup > 0 && adapt_trajectory_length
-    proposal_download =
-        do_trajectory_adaptation ? Matrix{T}(undef, num_params, num_chains) : Matrix{T}(undef, 0, 0)
-    momentum_download =
-        do_trajectory_adaptation ? Matrix{T}(undef, num_params, num_chains) : Matrix{T}(undef, 0, 0)
+    # `chees_initials` (the pre-trajectory position) stays host-resident -- it is the
+    # `position` mirror, so its mean + whitened start term are computed host-side with
+    # no transfer. The proposal position + endpoint momentum stay DEVICE-resident and
+    # are reduced on-device (issue #220), so only O(P)+O(C) crosses the bus.
     chees_initials =
         do_trajectory_adaptation ? Matrix{Float64}(undef, num_params, num_chains) : Matrix{Float64}(undef, 0, 0)
-    chees_proposals =
-        do_trajectory_adaptation ? Matrix{Float64}(undef, num_params, num_chains) : Matrix{Float64}(undef, 0, 0)
-    chees_momenta =
-        do_trajectory_adaptation ? Matrix{Float64}(undef, num_params, num_chains) : Matrix{Float64}(undef, 0, 0)
+    zmat_t() = Matrix{T}(undef, 0, 0)
+    alloc_dev(dims...) =
+        do_trajectory_adaptation ? KernelAbstractions.allocate(backend, T, dims...) :
+        KernelAbstractions.allocate(backend, T, ntuple(_ -> 0, length(dims))...)
+    chees_accept_dev = alloc_dev(num_chains)                       # C   uploaded accept probs
+    chees_divmask_dev =
+        do_trajectory_adaptation ? KernelAbstractions.allocate(backend, UInt8, num_chains) :
+        KernelAbstractions.allocate(backend, UInt8, 0)             # C   1 iff diverged
+    chees_prop_mean_dev = alloc_dev(num_params)                    # P   pass-1 output
+    chees_sq_end_dev = alloc_dev(num_chains)                       # C   pass-2 output
+    chees_ev_dev = alloc_dev(num_chains)                           # C   pass-2 output
+    chees_accept_upload = do_trajectory_adaptation ? Vector{T}(undef, num_chains) : Vector{T}(undef, 0)
+    chees_divmask_upload =
+        do_trajectory_adaptation ? Vector{UInt8}(undef, num_chains) : Vector{UInt8}(undef, 0)
+    chees_sq_end_host = do_trajectory_adaptation ? Vector{T}(undef, num_chains) : Vector{T}(undef, 0)
+    chees_ev_host = do_trajectory_adaptation ? Vector{T}(undef, num_chains) : Vector{T}(undef, 0)
+    chees_initials_mean = do_trajectory_adaptation ? Vector{Float64}(undef, num_params) : Vector{Float64}(undef, 0)
 
     accept_prob = Vector{Float64}(undef, num_chains)
     accepted_step = falses(num_chains)
@@ -321,25 +389,11 @@ function _run_device_batched_chees(
         )
         KernelAbstractions.synchronize(ws.backend)
 
-        # ChEES warmup-only download: the PROPOSAL position and the ENDPOINT momentum
-        # (both P x C) feed the cross-chain trajectory-length update. This is the ONLY
-        # per-iteration transfer beyond device HMC's, and it happens ONLY during
-        # warmup -- after warmup this block never runs, so sampling stays a pure device
-        # loop. The device final half-kick negates the endpoint momentum, matching the
-        # CPU `_batched_leapfrog!` `_negate_column!`, so the ChEES gradient's whitened
-        # velocity term agrees with the host path.
-        if iteration <= num_warmup && adapt_trajectory_length
-            copyto!(proposal_download, ws.inner.params_device)
-            copyto!(momentum_download, ws.working_momentum)
-            @inbounds for chain_index = 1:num_chains
-                for parameter_index = 1:num_params
-                    chees_proposals[parameter_index, chain_index] =
-                        Float64(proposal_download[parameter_index, chain_index])
-                    chees_momenta[parameter_index, chain_index] =
-                        Float64(momentum_download[parameter_index, chain_index])
-                end
-            end
-        end
+        # issue #220: the proposal position + endpoint momentum stay device-resident;
+        # the ChEES cross-chain reduction runs on-device below (after accept/divergence
+        # are known), so this iteration no longer downloads two P x C matrices. The
+        # device final half-kick negates the endpoint momentum, matching the CPU
+        # `_batched_leapfrog!` `_negate_column!`, so the whitened velocity term agrees.
 
         copyto!(host_valid, ws.valid)
         copyto!(host_current_ham, ws.current_hamiltonian)
@@ -386,6 +440,72 @@ function _run_device_batched_chees(
 
         cumulative_divergences += count(divergent_step)
 
+        # issue #220: on-device ChEES cross-chain reduction. Accept/divergence are now
+        # known and the proposal position (`ws.inner.params_device`) + endpoint momentum
+        # (`ws.working_momentum`) are still device-resident (untouched by the accept
+        # column copy), so reduce them on-device BEFORE `warmup_update!` can re-search
+        # and overwrite them. Only the two per-chain moment C-vectors come back; the
+        # scalar state machine runs after `warmup_update!` with the final step size.
+        chees_gradient_numerator = 0.0
+        chees_acceptance_denominator = 0.0
+        if iteration <= num_warmup && adapt_trajectory_length
+            weight_sum = 0.0
+            @inbounds for chain_index = 1:num_chains
+                if divergent_step[chain_index]
+                    chees_divmask_upload[chain_index] = 0x01
+                    chees_accept_upload[chain_index] = zero(T)
+                else
+                    chees_divmask_upload[chain_index] = 0x00
+                    chees_accept_upload[chain_index] = T(accept_prob[chain_index])
+                    weight_sum += accept_prob[chain_index]
+                end
+            end
+            copyto!(chees_accept_dev, chees_accept_upload)
+            copyto!(chees_divmask_dev, chees_divmask_upload)
+            inv_weight_sum = T(1.0 / (weight_sum + _CHEES_EPS))
+            _device_chees_proposal_mean!(ws.backend)(
+                chees_prop_mean_dev, ws.inner.params_device, chees_accept_dev, chees_divmask_dev,
+                inv_weight_sum, num_chains; ndrange=num_params,
+            )
+            _device_chees_endpoint_terms!(ws.backend)(
+                chees_sq_end_dev, chees_ev_dev, ws.inner.params_device, ws.working_momentum,
+                chees_prop_mean_dev, ws.inverse_mass, chees_divmask_dev, num_params; ndrange=num_chains,
+            )
+            KernelAbstractions.synchronize(ws.backend)
+            copyto!(chees_sq_end_host, chees_sq_end_dev)
+            copyto!(chees_ev_host, chees_ev_dev)
+            # Host: initials mean + whitened start term from the (always-resident,
+            # always-finite) `position` mirror, then fold into the estimator's
+            # numerator/denominator, matching the CPU `_chees_trajectory_update!` order.
+            fill!(chees_initials_mean, 0.0)
+            @inbounds for chain_index = 1:num_chains
+                for parameter_index = 1:num_params
+                    chees_initials_mean[parameter_index] += chees_initials[parameter_index, chain_index]
+                end
+            end
+            inv_count = 1.0 / num_chains
+            @inbounds for parameter_index = 1:num_params
+                chees_initials_mean[parameter_index] *= inv_count
+            end
+            @inbounds for chain_index = 1:num_chains
+                divergent_step[chain_index] && continue
+                p_accept = accept_prob[chain_index]
+                chees_acceptance_denominator += p_accept + _CHEES_EPS
+                squared_start = 0.0
+                for parameter_index = 1:num_params
+                    sigma = inverse_mass_matrix[parameter_index]
+                    inv_sqrt = 1.0 / sqrt(sigma)
+                    whitened_start =
+                        (chees_initials[parameter_index, chain_index] - chees_initials_mean[parameter_index]) * inv_sqrt
+                    squared_start += whitened_start * whitened_start
+                end
+                chees_gradient_numerator +=
+                    p_accept *
+                    (Float64(chees_sq_end_host[chain_index]) - squared_start) *
+                    Float64(chees_ev_host[chain_index])
+            end
+        end
+
         # Download the (accepted) position + logjoint for host bookkeeping. During
         # warmup also grab the gradient so the step-size re-search sees fresh state.
         copyto!(position_download, ws.position)
@@ -429,14 +549,13 @@ function _run_device_batched_chees(
             # verbatim. Uses the (possibly just re-searched) `driver.step_size` for the
             # [ε, max·ε] clip, matching BlackJAX's use of `new_step_size` there.
             if adapt_trajectory_length
-                _chees_trajectory_update!(
+                # The cross-chain reduction (numerator/denominator) was done on-device
+                # above; here run only the scalar ChEES state machine with the
+                # (possibly just re-searched) `driver.step_size` (issue #220).
+                _chees_apply_trajectory_gradient!(
                     trajectory_state,
-                    chees_initials,
-                    chees_proposals,
-                    chees_momenta,
-                    accept_prob,
-                    divergent_step,
-                    inverse_mass_matrix,
+                    chees_gradient_numerator,
+                    chees_acceptance_denominator,
                     jitter_value,
                     driver.step_size,
                 )

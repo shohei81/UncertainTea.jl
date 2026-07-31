@@ -222,6 +222,25 @@ function _chees_trajectory_update!(
         gradient_numerator += p_accept * (squared_endpoint - squared_start) * endpoint_velocity
     end
 
+    return _chees_apply_trajectory_gradient!(
+        traj, gradient_numerator, acceptance_denominator, jitter_value, step_size_for_clip,
+    )
+end
+
+# The scalar ChEES state machine: turn the reduced cross-chain estimator terms
+# (`gradient_numerator` = sum_c p_accept*(||dxp||^2 - ||dx||^2)*<dxp,vp>,
+# `acceptance_denominator` = sum_c (p_accept + eps)) into the next trajectory
+# length via the Adam ascent, log-T clip, and moving average. Shared verbatim by
+# the CPU estimator above and the device path (issue #220), which produces the
+# SAME two scalars from on-device reductions instead of P x C host matrices, so
+# the Adam/log-T/clip/moving-average logic is never forked.
+function _chees_apply_trajectory_gradient!(
+    traj::_ChEESTrajectoryState,
+    gradient_numerator::Float64,
+    acceptance_denominator::Float64,
+    jitter_value::Float64,
+    step_size_for_clip::Float64,
+)
     trajectory_gradient =
         acceptance_denominator > 0.0 ?
         jitter_value * traj.trajectory_length * gradient_numerator / acceptance_denominator : 0.0
