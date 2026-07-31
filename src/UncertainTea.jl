@@ -41,6 +41,7 @@ export acceptancerate,
     divergencerate, massadaptationwindows, treedepths, integrationsteps, nchains, numsamples, numstages, rhat, ess, summarize
 export check_diagnostics, has_warnings
 export posterior_array, parameter_names, to_arviz_dict, to_mcmcchains
+export reverse_mode_gradient
 export pointwise_loglikelihood, observation_addresses, waic, psis_loo, loo, WAICResult, LOOResult
 export sbc, SBCResult
 export map_estimate, laplace_approximation, MAPResult, LaplaceResult
