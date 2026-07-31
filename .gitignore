@@ -22,4 +22,5 @@
 .vscode/
 .idea/
 /test/gpu/Manifest.toml
+/bench/reverse_mode/Manifest.toml
 .juliaup/
