@@ -14,14 +14,21 @@ Rows marked FAIL keep their timings visible for context only.
 
 ## Provenance (current)
 
-- **Date:** 2026-07-29. Full re-measure of every leg (single-chain,
-  host `batched-cpu`, KernelAbstractions-CPU, and Metal device) from a clean
-  regenerated `results/summary.md`. The new `logistic_large` model (#193) is
-  in the sweep. Supersedes the 2026-07-28 pass; the 2026-07-23 first-cut
-  baseline is preserved at the bottom of this file.
+- **Date:** 2026-07-31. Adds the two device samplers the #154/#161 epics
+  shipped to the canonical numbers (issue #223): the **persistent per-chain
+  NUTS tree** (`batched-metal-persistent`, gauss + `logistic`/`logistic_large`)
+  and **ChEES-HMC** (`chees`, gauss + `eight_schools_noncentered`), each on the
+  same chain grid, plus the persistent gauss sweep **extended to 16384 chains**
+  (the previously untested Metal watchdog point). All other legs carry the
+  2026-07-29 numbers; that pass's persistent-free tables move to the history
+  section below, and the 2026-07-23 first-cut baseline is preserved at the
+  bottom of this file.
 - **Hardware:** Apple M4 (10 cores, 32 GB), Metal 4; macOS 26.5.1. All
   frameworks measured natively on this one machine.
-- **Software:** Julia 1.12.2, UncertainTea @ `4df60b0` (main). The
+- **Software:** Julia 1.12.2, UncertainTea @ `41ec33a` (main). Relative to the
+  2026-07-29 pass this adds the persistent-kernel epic (#154, incl. the wide
+  in-kernel `DeviceGradN` gradient) and the ChEES/MEADS adaptation (#161) with
+  its on-device cross-chain reduction (#220). The
   optimization stack now included, relative to the 2026-07-23 baseline:
   chain-thread parallelism (#136), the batched observed-loop fast path (#140/
   #141) and iid sufficient-statistics fusion (#146), allocation-free batched
@@ -38,11 +45,15 @@ Rows marked FAIL keep their timings visible for context only.
   NumPyro 0.19 / JAX 0.9 (pinned in `bench/crossppl/python/uv.lock`),
   CmdStan 2.36.0, Python 3.12. Host batched legs measured at `-t auto`
   (4 performance cores).
-- **Sampler settings:** NUTS everywhere, `target_accept=0.8`,
+- **Sampler settings:** NUTS everywhere except the `chees` leg (ChEES-HMC at
+  its documented `target_accept=0.651`); NUTS uses `target_accept=0.8`,
   `max_tree_depth=10`, diagonal metric, framework-default warmup schedules.
   Correctness pass: 4 chains × 1000 warmup + 1000 draws × 3 repetitions
   (± is std over repetitions). Scaling sweep: 200 warmup + 500 draws at
-  64–4096 chains (3 reps ≤512, 1 rep at 4096).
+  64–16384 chains (3 reps ≤512, 1 rep at ≥4096). The `batched-metal-persistent`
+  and `chees` gauss sweeps run the full 64/512/4096/16384 grid; the
+  `batched-cpu-persistent` leg is the CPU()-Float64 correctness-gate reference
+  for the Float32 Metal persistent rows.
 - **Metric:** min-over-parameters bulk ESS per second of pure sampling time.
   Warmup and compile/TTFX are excluded and reported in their own columns.
 
@@ -74,15 +85,31 @@ Rows marked FAIL keep their timings visible for context only.
    engineering is a large step change: `logistic_large` at 64 chains did not
    finish within 35 minutes on the pre-#153 serial-scan path and now completes
    in ~32 s of sampling; #152 cut per-draw device synchronizations from
-   ~45–67 per draw to ~4 per NUTS round. Being honest about where the device
-   sits today: on the current benchmark models the host `batched-cpu` backend
-   is still faster than Metal. The device pays a per-draw dispatch floor,
-   these models do not saturate the GPU, and the device coefficient-vector
-   dimension is capped at 16 (`DEVICE_MAX_VECTOR_DIMENSION`). Metal is
-   competitive with `batched-cpu` only on the larger `logistic_large` (Metal
-   64 chains 2,277 vs `batched-cpu` 4 chains 1,531). Frame the device path as
-   correct-by-default and much improved, not yet the fastest backend at these
-   sizes.
+   ~45–67 per draw to ~4 per NUTS round. This finding concerns the `:masked`
+   device path; the newer `:persistent` path (finding 5) is the one that now
+   overtakes the host backend on the many-chains `gauss` sweep. On the `:masked`
+   rows the host `batched-cpu` backend is still faster, the device pays a
+   per-draw dispatch floor, and these models do not saturate the GPU. Frame the
+   `:masked` device path as correct-by-default and much improved.
+5. **The persistent per-chain NUTS tree (#154) is the fastest device path and
+   the first to overtake `batched-cpu` on the many-chains `gauss` sweep, scaling
+   cleanly to 16384 chains.** `batched-metal-persistent` gauss measures
+   3,098 / 17,979 / 87,051 / 178,141 bulk ESS/s at 64 / 512 / 4096 / 16384
+   chains — ~2.5–3× the `:masked` `batched-metal` rows (1,261 / 6,195) and, at
+   ≥4096 chains, past the host `batched-cpu` numbers (58,697 at 4096). The
+   16384-chain point was the previously untested Metal watchdog boundary
+   (docs/persistent-nuts.md risk (c)): it **passed the gate, ran in 22.5 s of
+   sampling, and did not trip the watchdog or produce a single divergence**. On
+   `logistic` the persistent path is 7,455 / 35,204 ESS/s at 64/512 (≈3–3.6× the
+   `:masked` 2,411 / 9,648). The honest exception is `logistic_large`
+   (N=8000): persistent is **slower** there — 712 ESS/s vs the `:masked` 2,277
+   at 64 chains — because its lane-per-chain in-kernel gradient scans all 8000
+   observations serially per leaf, exactly the obs-parallelism gap the
+   (deferred) threadgroup-per-chain tree (#219) targets; the `:masked` path
+   already has the #153 observation-tiled gradient. ChEES-HMC (#161) samples the
+   `gauss` and `eight_schools_noncentered` legs at its `target_accept=0.651`;
+   two `gauss` scaling points (512, 4096) land just over the R-hat gate at 500
+   draws and are reported FAIL (timings not to be quoted).
 4. **A new `logistic_large` model (#193, D=16, N=8000) is in the sweep** as
    the device / large-model probe: a genuinely heavy per-gradient GLM that
    exercises the device analytic path (#135) without being dominated by device
@@ -91,13 +118,17 @@ Rows marked FAIL keep their timings visible for context only.
    model still lowers to the device.
 
 Open issues from the audit still shaping these numbers: #151 (host-gradient on
-the device masked path — deprioritized), #154 (persistent-kernel device epic),
-#160 (lane compaction on finished chains), #161 (ChEES/MEADS adaptation), and
-#16 (CUDA backend). Now closed and reflected above: #135 (device GLM
-lowering), #149/#150 (host GLM analytic lowering), #137 (per-chain step-size
-adaptation), #143 (batched-gradient threading), #158 (pooled-mass unification
-+ vectorized warmup step search), #138/#188 (single-chain suffstats fusion and
-value-path observation cache), and #152/#153 (device masked-NUTS engineering).
+the device masked path — deprioritized), #160 (lane compaction on finished
+chains), #219 (threadgroup-per-chain persistent tree — the obs-parallelism gap
+behind the `logistic_large` persistent row), and #16 (CUDA backend). Now closed
+and reflected above: #135 (device GLM lowering), #149/#150 (host GLM analytic
+lowering), #137 (per-chain step-size adaptation), #143 (batched-gradient
+threading), #158 (pooled-mass unification + vectorized warmup step search),
+#138/#188 (single-chain suffstats fusion and value-path observation cache),
+#152/#153 (device masked-NUTS engineering), #154 (persistent-kernel device epic,
+incl. the wide in-kernel gradient #221), #161 (ChEES/MEADS adaptation) with its
+on-device cross-chain reduction (#220), and #223 (folding the persistent/ChEES
+rows into this document).
 
 ## Single-chain correctness pass (4 chains × 1000 warmup + 1000 draws)
 
@@ -137,6 +168,31 @@ single-chain `uncertaintea-cpu` (170).
 | uncertaintea-batched-cpu-ka | 512 | f64 | PASS | 6,532 ± 61 | 19.9 | 17.4 | 0 |
 | uncertaintea-batched-metal | 64 | f32 | PASS | 1,261 ± 11 | 13.0 | 7.08 | 0 |
 | uncertaintea-batched-metal | 512 | f32 | PASS | 6,195 ± 76 | 20.8 | 10.6 | 0 |
+| uncertaintea-batched-metal-persistent | 64 | f32 | PASS | 3,098 ± 180 | 5.43 | 2.50 | 0 |
+| uncertaintea-batched-metal-persistent | 512 | f32 | PASS | 17,979 ± 620 | 7.20 | 3.67 | 0 |
+| uncertaintea-batched-metal-persistent | 4096 | f32 | PASS | **87,051** | 11.5 | 7.53 | 0 |
+| uncertaintea-batched-metal-persistent | 16384 | f32 | PASS | **178,141** | 22.5 | 14.8 | 0 |
+| uncertaintea-batched-cpu-persistent (gate) | 4 | f64 | PASS | 12,024 ± 1,230 | 0.167 | 0.159 | 0 |
+
+The `batched-metal-persistent` rows (issue #154) are the fastest device path:
+~2.5–3× the `:masked` `batched-metal` rows and, at ≥4096 chains, past
+`batched-cpu` (58,697 at 4096) — the persistent per-chain tree is one device
+launch per NUTS iteration, so it scales cleanly through 16384 chains without
+tripping the Metal watchdog (0 divergences). The `batched-cpu-persistent` row is
+the CPU()-Float64 correctness-gate reference for the Float32 Metal rows.
+
+ChEES-HMC (`chees`, issue #161; NUTS-reference rows come from the correctness
+pass) at `target_accept=0.651`, gauss sweep on the host Float64 path:
+
+| framework | chains | precision | correct | min bulk ESS/s | sampling s | warmup s | div |
+|---|---|---|---|---|---|---|---|
+| uncertaintea-chees | 64 | f64 | PASS | 284,446 ± 126,061 | 0.048 | 0.015 | 0 |
+| uncertaintea-chees | 512 | f64 | FAIL | 266,417 ± 125,918 | 0.291 | 0.113 | 0.00065 |
+| uncertaintea-chees | 4096 | f64 | FAIL | 153,651 | 2.17 | 0.962 | 0 |
+| uncertaintea-chees | 16384 | f64 | PASS | 162,899 | 11.3 | 4.81 | 0 |
+
+The 512/4096 rows land just over the R-hat < 1.01 gate at 500 draws (R-hat
+≈ 1.011–1.012) and are FAIL — their timings are context only, not quotable.
 
 All device rows are default-configuration (prior-draw init, per-chain
 adaptation the device default) and gate-passing — no `-pinned-init`
@@ -156,12 +212,15 @@ not saturate the GPU.
 | uncertaintea-cpu | 37,560 ± 5,798 | 0.050 | 0.0009 |
 | uncertaintea-batched-cpu | 4,896 ± 370 | 0.40 | 0.0006 |
 | numpyro-parallel | 4,265 ± 440 | 0.53 | 0.0002 |
+| uncertaintea-chees | 3,332 ± 2,194 | 1.21 | 0.0013 |
 
 Single-chain `uncertaintea-cpu` (37,560) is higher than NumPyro-parallel and
 within ~3× of Stan on this hierarchical model. The batched path's 4-chain
 number is lower because per-chain adaptation (the default) spends more warmup
 per chain at tiny chain counts — the batched path is built for the many-chains
-regime, not 4 chains.
+regime, not 4 chains. The `chees` row (ChEES-HMC, issue #161) samples this
+funnel robustly at `target_accept=0.651` (fixed after #202); it is the
+heavy-tailed leg for the cross-chain trajectory-length adaptation.
 
 ### logistic (N=500, D=8) — all PASS
 
@@ -171,6 +230,8 @@ regime, not 4 chains.
 | uncertaintea-batched-cpu | 4 | 11,067 ± 1,113 | 0 |
 | numpyro-parallel | 4 | 10,386 ± 700 | 0 |
 | uncertaintea-cpu | 4 | 8,869 ± 430 | 0 |
+| uncertaintea-batched-metal-persistent | 512 | 35,204 ± 300 | 0 |
+| uncertaintea-batched-metal-persistent | 64 | 7,455 ± 480 | 0 |
 | uncertaintea-batched-metal | 512 | 9,648 ± 180 | 0 |
 | uncertaintea-batched-metal | 64 | 2,411 ± 120 | 0 |
 
@@ -179,8 +240,10 @@ regime, not 4 chains.
 (10,386); Stan leads (61,078). The Julia model uses
 `bernoullilogit(alpha + sum(beta .* X[:, i]))`, matching the Stan
 (`bernoulli_logit`) and NumPyro (`Bernoulli(logits=...)`) joint densities. The
-Metal rows are default-configuration and gate-passing (0 divergence); at 512
-chains Metal reaches 9,648.
+device rows are default-configuration and gate-passing (0 divergence). The
+persistent path (#154), with its wide in-kernel `DeviceGradN` gradient, is
+~3–3.6× the `:masked` `batched-metal` rows here (35,204 / 7,455 vs 9,648 /
+2,411 at 512 / 64).
 
 ### logistic_large (N=8000, D=16) — all PASS
 
@@ -189,16 +252,23 @@ chains Metal reaches 9,648.
 | numpyro-parallel | 4 | 6,755 ± 560 | 0 |
 | stan | 4 | 5,538 ± 530 | 0 |
 | uncertaintea-batched-metal | 64 | 2,277 ± 570 | 0 |
+| uncertaintea-batched-metal | 64 | 2,277 ± 570 | 0 |
 | uncertaintea-batched-cpu | 4 | 1,531 ± 79 | 0 |
+| uncertaintea-batched-metal-persistent | 64 | 712 ± 61 | 0 |
 | uncertaintea-cpu | 4 | 170 ± 12 | 0 |
 
 The large GLM is the device / large-model probe (#193). On the heavy
 per-gradient work the host `batched-cpu` path (1,531 at 4 chains) is well ahead
-of single-chain `uncertaintea-cpu` (170), and Metal at 64 chains (2,277) is
-competitive with `batched-cpu` here — the one model in the suite where the
-device is close to the host backend. This is also the leg that exercises the
-#152/#153 device work: it did not finish within 35 minutes on the pre-#153
-serial-scan device path and now completes in ~32 s of sampling.
+of single-chain `uncertaintea-cpu` (170), and the `:masked` Metal path at 64
+chains (2,277) is competitive with `batched-cpu` here — it rides the #153
+observation-tiled device gradient. The `:persistent` path is the **honest
+exception to finding 5**: it is *slower* here (712 at 64 chains, ~97 s of
+sampling) because its lane-per-chain in-kernel gradient scans all 8000
+observations serially per leaf. Bringing obs-parallelism to the persistent tree
+is the deferred threadgroup-per-chain work (#219); until then `:masked` remains
+the device path for heavy-per-gradient, few-chains models. This is also the leg
+that exercises the #152/#153 device work: it did not finish within 35 minutes
+on the pre-#153 serial-scan device path and now completes in ~32 s of sampling.
 
 ### eight_schools_centered — all FAIL (funnel; expected)
 
