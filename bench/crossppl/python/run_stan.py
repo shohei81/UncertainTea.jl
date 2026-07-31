@@ -33,6 +33,8 @@ PARAMS = {
     "logistic_large": ["alpha"] + [f"beta[{i}]" for i in range(1, 17)],
     "gauss": ["mu", "s"],
     "mixture": ["mu1", "log_gap", "s"],
+    # Omega[1] == 1 is a structural constant (zero variance) the gate skips.
+    "lkj": ["Omega[1]", "Omega[2]", "Omega[3]", "tau[1]", "tau[2]"],
 }
 
 
@@ -52,6 +54,8 @@ def stan_data(model_name: str, data: dict) -> dict:
     if model_name in ("logistic", "logistic_large"):
         return {"N": data["n"], "D": data["d"], "X": data["X"], "y": data["y"]}
     if model_name in ("gauss", "mixture"):
+        return {"N": data["n"], "y": data["y"]}
+    if model_name == "lkj":
         return {"N": data["n"], "y": data["y"]}
     raise ValueError(f"unknown model {model_name}")
 

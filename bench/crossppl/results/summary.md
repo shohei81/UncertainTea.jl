@@ -123,6 +123,15 @@ Correctness failures (timings above are reported for context but MUST NOT be quo
 - uncertaintea-chees__chains512: s: rhat=1.0111
 - uncertaintea-chees__chains4096: mu: rhat=1.0121
 
+## lkj
+
+| framework | chains | draws/chain | precision | correct | min bulk ESS/s | min tail ESS/s | sampling s | warmup s | TTFX/compile s | div rate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| numpyro-parallel | 4 | 1000 | float64 | PASS | 4,058 ± 6.9e+02 | 4,408 | 0.549 | 0.777 | 1.42 | 0 |
+| stan | 4 | 1000 | float64 | PASS | 2,070 ± 2.1e+02 | 2,421 | 1.01 | 0.91 | 0.0723 | 0 |
+| uncertaintea-batched-cpu | 4 | 1000 | Float64 | PASS | 373 ± 25 | 455 | 5.13 | 6.67 | 14.5 | 0 |
+| uncertaintea-cpu | 4 | 1000 | Float64 | PASS | 1,173 ± 42 | 1,593 | 1.42 | 1.58 | 3.96 | 0 |
+
 ## logistic
 
 | framework | chains | draws/chain | precision | correct | min bulk ESS/s | min tail ESS/s | sampling s | warmup s | TTFX/compile s | div rate |

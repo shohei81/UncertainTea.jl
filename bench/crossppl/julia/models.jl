@@ -102,3 +102,21 @@ end
     end
     return mu1
 end
+
+# lkjcholesky correlation model (issue #224): a d=2 multivariate normal with an
+# LKJ Cholesky correlation prior and per-dimension log-normal scales. Exercises
+# the CholeskyCorrTransform + packed logpdf (#49/#57) against Stan's
+# `lkj_corr_cholesky` + `multi_normal_cholesky` and NumPyro's `LKJCholesky`. The
+# latent `Omega` is the packed lower-triangular correlation factor (column-major:
+# [L11, L21, L22]); the free correlation is `Omega[2]`. d is kept at 2 so the
+# device dense/cholesky caps are not a constraint. CPU-reference-only (the LKJ
+# family is device-unsupported).
+@tea static function bench_lkj(zeros2, n)
+    Omega ~ lkjcholesky(2, 2.0)
+    tau ~ iid(lognormal(0.0, 0.5), 2)
+    Ltril = scale_cholesky(tau, Omega)
+    for i = 1:n
+        {:y => i} ~ mvnormaldense(zeros2, Ltril)
+    end
+    return Omega
+end

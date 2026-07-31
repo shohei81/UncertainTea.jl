@@ -101,6 +101,26 @@ function mixture_data(rng)
     )
 end
 
+# issue #224: d=2 correlated Gaussian data. Covariance = D * Corr * D with
+# correlation rho and per-dimension scales tau; drawn via its Cholesky factor
+# diag(tau) * L_corr so the model's `scale_cholesky(tau, Omega)` recovers it.
+function lkj_data(rng)
+    n = 400
+    rho, tau1, tau2 = 0.6, 1.0, 1.5
+    lcorr = [1.0 0.0; rho sqrt(1 - rho^2)]           # correlation Cholesky
+    scale = [tau1 0.0; tau2*rho tau2*sqrt(1 - rho^2)] # diag(tau) * lcorr
+    ys = [collect(scale * randn(rng, 2)) for _ = 1:n]
+    return Dict(
+        "model" => "lkj",
+        "seed" => SEED,
+        "n" => n,
+        "d" => 2,
+        "true_rho" => rho,
+        "true_tau" => [tau1, tau2],
+        "y" => ys,
+    )
+end
+
 rng = MersenneTwister(SEED)
 dir = joinpath(@__DIR__, "data")
 write_json(joinpath(dir, "logistic.json"), logistic_data(rng))
@@ -109,3 +129,4 @@ write_json(joinpath(dir, "gauss.json"), gauss_data(rng))
 # byte-identical (they share `rng`, whose draw sequence must not shift).
 write_json(joinpath(dir, "logistic_large.json"), logistic_large_data(MersenneTwister(SEED + 1)))
 write_json(joinpath(dir, "mixture.json"), mixture_data(MersenneTwister(SEED + 2)))
+write_json(joinpath(dir, "lkj.json"), lkj_data(MersenneTwister(SEED + 3)))
