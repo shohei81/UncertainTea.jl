@@ -114,3 +114,27 @@ for strategy in (:masked, :persistent)
     show(stdout, MIME"text/plain"(), result)
     println()
 end
+
+# issue #222: batched execution -- the ENTIRE study is one sampler run, all
+# replications as chains (num_chains = num_simulations). The device leg makes the
+# whole SBC study a single device dispatch; where a functional Metal GPU exists,
+# re-run with `backend=Metal.MetalBackend(), precision=Float32`.
+for (label, kwargs) in (
+    ("host NUTS", (;)),
+    ("device masked (CPU/Float64)", (; tree_strategy=:masked, backend=CPU(), precision=Float64)),
+    ("device persistent (CPU/Float64)", (; tree_strategy=:persistent, backend=CPU(), precision=Float64)),
+)
+    result = sbc(
+        sbc_bench_conjugate;
+        num_simulations=300,
+        num_posterior_draws=63,
+        num_warmup=200,
+        thin=2,
+        execution=:batched,
+        rng=rng,
+        kwargs...,
+    )
+    println("== execution=:batched, ", label)
+    show(stdout, MIME"text/plain"(), result)
+    println()
+end
