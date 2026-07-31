@@ -37,7 +37,11 @@ makedocs(;
         "Home" => "index.md",
         "Getting Started" => "getting-started.md",
         "Inference Overview" => "inference.md",
-        "Examples" => ["Eight Schools (Non-centered)" => "generated/eight_schools.md"],
+        "Examples" => [
+            "Eight Schools (Non-centered)" => "generated/eight_schools.md",
+            "Logistic Regression (GLM)" => "generated/logistic_regression.md",
+            "ChEES-HMC (adaptive)" => "generated/chees_hmc.md",
+        ],
         "API Reference" => "api.md",
         "Design Notes" => "design-notes.md",
     ],
