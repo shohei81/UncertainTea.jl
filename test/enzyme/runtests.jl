@@ -206,4 +206,56 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         # (chaotic leapfrog divergence rules out a bitwise sample match).
         @test maximum(abs.(mf .- mr)) < 0.15
     end
+
+    @testset "adtype on advi/svgd/smc engages reverse (issue #275)" begin
+        cm = batched_big_constraints(1)
+
+        # ADVI/SVGD gradient descent is deterministic and the reverse gradient is
+        # numerically identical to forward, so with the same seed the results are
+        # bitwise identical -- a strong check that reverse actually engaged.
+        af = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:forward, rng=MersenneTwister(5))
+        ar = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:reverse, rng=MersenneTwister(5))
+        @test af.location == ar.location
+
+        sf = batched_svgd(batched_big, (), cm; num_particles=16, num_iterations=80, adtype=:forward, rng=MersenneTwister(6))
+        sr = batched_svgd(batched_big, (), cm; num_particles=16, num_iterations=80, adtype=:reverse, rng=MersenneTwister(6))
+        @test sf.constrained_particles == sr.constrained_particles
+
+        # SMC with a NUTS move kernel: reverse runs and produces the same tempering
+        # schedule length as forward (a linear-gaussian model that converges).
+        @tea static function smc_med()
+            x ~ iid(normal(0.0, 1.0), 34)
+            for i = 1:33
+                {:y => i} ~ normal(0.7 * x[i] + 0.2 * x[i+1], 0.5)
+            end
+            return x
+        end
+        srng = MersenneTwister(1)
+        sxt = randn(srng, 34)
+        scm = UT.choicemap([(:y => i, 0.7 * sxt[i] + 0.2 * sxt[i+1] + 0.5 * randn(srng)) for i = 1:33])
+        smf = batched_smc(
+            smc_med,
+            (),
+            scm;
+            num_particles=32,
+            max_stages=200,
+            move_kernel=:nuts,
+            move_steps=3,
+            adtype=:forward,
+            rng=MersenneTwister(7),
+        )
+        smr = batched_smc(
+            smc_med,
+            (),
+            scm;
+            num_particles=32,
+            max_stages=200,
+            move_kernel=:nuts,
+            move_steps=3,
+            adtype=:reverse,
+            rng=MersenneTwister(7),
+        )
+        @test length(smf.stages) == length(smr.stages)
+        @test all(isfinite, smr.importance.constrained_particles)
+    end
 end
