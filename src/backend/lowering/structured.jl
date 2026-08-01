@@ -49,6 +49,64 @@ struct BackendBroadcastNormalChoicePlanStep{M<:AbstractBackendExpr,S<:AbstractBa
     parameter_slot::Union{Nothing,Int}
 end
 
+# Family-generic backend-native broadcast scalar observation (issue #287): the
+# same dense per-element scoring shape as the broadcast normal step, but carrying
+# the family as a type parameter and the lowered constructor arguments as a
+# tuple. Scoring and the batched analytic gradient dispatch on `Val(F)` into the
+# single-source scalar kernels/partials (issue #285), so adding a broadcast
+# family costs two glue methods (distributions/structured.jl), an entry in
+# _BROADCAST_BACKEND_FAMILY_ARITY below, and the frontend allowlist -- no new
+# step machinery. Observation-only; not device-lowered.
+struct BackendBroadcastScalarChoicePlanStep{F,A<:Tuple,AD<:BackendAddressSpec} <: BackendChoicePlanStep
+    binding_slot::Union{Nothing,Int}
+    address::AD
+    arguments::A
+    parameter_slot::Union{Nothing,Int}
+end
+
+_broadcast_scalar_family(::BackendBroadcastScalarChoicePlanStep{F}) where {F} = F
+
+# family => constructor arity for the backend-lowered broadcast families
+const _BROADCAST_BACKEND_FAMILY_ARITY = Dict{Symbol,Int}(
+    :poisson => 1,
+    :bernoulli => 1,
+    :bernoullilogit => 1,
+    :exponential => 1,
+    :studentt => 3,
+)
+
+function _backend_lower_broadcast_scalar_choice_step(
+    @nospecialize(model::TeaModel),
+    layout::EnvironmentLayout,
+    step::ChoicePlanStep,
+    issues::Vector{String},
+)
+    family = step.rhs.family
+    arity = get(_BROADCAST_BACKEND_FAMILY_ARITY, family, nothing)
+    isnothing(arity) && begin
+        _backend_issue!(issues, "broadcast observations do not support the `$(family)` family in backend lowering")
+        return nothing
+    end
+    length(step.rhs.arguments) == arity || begin
+        _backend_issue!(issues, "broadcast $(family) expects exactly $(arity) backend argument(s)")
+        return nothing
+    end
+    isnothing(step.parameter_slot) || begin
+        _backend_issue!(issues, "broadcast $(family) latents are not supported in backend lowering")
+        return nothing
+    end
+    address = _backend_lower_address(model, layout, step.address, issues)
+    lowered = map(
+        arg -> _backend_lower_broadcast_arg(model, layout, arg, issues, "broadcast $(family) argument"),
+        step.rhs.arguments,
+    )
+    (isnothing(address) || any(isnothing, lowered)) && return nothing
+    arguments = tuple(lowered...)
+    return BackendBroadcastScalarChoicePlanStep{family,typeof(arguments),typeof(address)}(
+        step.binding_slot, address, arguments, step.parameter_slot,
+    )
+end
+
 # Backend-native finite marginalized mixture of normal components. `weights` is a
 # tuple of numeric argument expressions (a latent simplex flows in as slot
 # expressions); `mus`/`sigmas` are per-component tuples of numeric expressions.
@@ -142,6 +200,21 @@ function _backend_lower_broadcast_arg(
             return nothing
         end
         arguments = map(arg -> _backend_lower_broadcast_arg(model, layout, arg, issues, context), expr.args[2:end])
+        any(isnothing, arguments) && return nothing
+        return BackendPrimitiveExpr(op, tuple(arguments...))
+    end
+    # dotted FUNCTION call `f.(args...)` (issue #287), e.g. `exp.(a .+ b .* x)`:
+    # per-element evaluation makes it the scalar primitive applied elementwise,
+    # exactly like the dotted operators above.
+    if expr isa Expr && expr.head == :. && length(expr.args) == 2 &&
+       expr.args[1] isa Symbol && expr.args[2] isa Expr && expr.args[2].head == :tuple
+        op = _backend_broadcast_op(expr.args[1])
+        if isnothing(op)
+            _backend_issue!(issues, "unsupported broadcast argument dot-call `$(expr.args[1]).(...)` in $context")
+            return nothing
+        end
+        arguments =
+            map(arg -> _backend_lower_broadcast_arg(model, layout, arg, issues, context), expr.args[2].args)
         any(isnothing, arguments) && return nothing
         return BackendPrimitiveExpr(op, tuple(arguments...))
     end
@@ -670,6 +743,20 @@ function _collect_backend_slot_kinds!(
     # receive their numeric marking from their own defining steps, while vector model
     # arguments must stay generic (stored as whole vectors), so they default to the
     # generic environment storage. The broadcast evaluators read either kind.
+    isnothing(step.binding_slot) || _mark_backend_generic_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
+    return nothing
+end
+
+function _collect_backend_slot_kinds!(
+    step::BackendBroadcastScalarChoicePlanStep,
+    numeric_slots::BitVector,
+    index_slots::BitVector,
+    generic_slots::BitVector,
+)
+    _mark_backend_choice_address_slots!(step.address, numeric_slots, index_slots, generic_slots)
+    # argument slots intentionally unmarked, exactly as for broadcast normal:
+    # scalar latents get numeric marks from their defining steps; vector model
+    # arguments stay generic. The broadcast evaluators read either kind.
     isnothing(step.binding_slot) || _mark_backend_generic_slot!(numeric_slots, index_slots, generic_slots, step.binding_slot)
     return nothing
 end

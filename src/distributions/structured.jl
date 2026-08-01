@@ -230,6 +230,122 @@ function _broadcast_normal_check_length(mu, sigma, n::Int)
     return nothing
 end
 
+# --- generic broadcast scalar observations (issue #287) ----------------------
+#
+# `BroadcastScalarDist{F}` is the family-generic runtime counterpart of the
+# dot-call observation `{:y} ~ family.(args...)` for every broadcast family
+# other than `normal` (which keeps its dedicated `BroadcastNormalDist` /
+# backend-native machinery unchanged). One generic type + two 1-line glue
+# methods per family — mapping onto the single-source scalar kernels and
+# partials from issue #285 — replace the per-family plumbing a new broadcast
+# family used to need. Observation-only: latents are rejected at lowering.
+struct BroadcastScalarDist{F,A<:Tuple} <: AbstractTeaDistribution
+    arguments::A
+end
+
+BroadcastScalarDist{F}(args...) where {F} = BroadcastScalarDist{F,typeof(args)}(args)
+
+# Per-element log density, delegating to the single-source scalar kernels
+# (src/distributions/scalar_kernels.jl). The argument order is the DSL
+# constructor order; `y` is the observed element.
+@inline _broadcast_element_logpdf(::Val{:poisson}, y, lambda) = _backend_poisson_logpdf(lambda, y)
+@inline _broadcast_element_logpdf(::Val{:bernoulli}, y, p) = _backend_bernoulli_logpdf(p, y)
+@inline _broadcast_element_logpdf(::Val{:bernoullilogit}, y, eta) = _backend_bernoullilogit_logpdf(eta, y)
+@inline _broadcast_element_logpdf(::Val{:exponential}, y, rate) = _backend_exponential_logpdf(rate, y)
+@inline _broadcast_element_logpdf(::Val{:studentt}, y, nu, mu, sigma) =
+    _backend_studentt_logpdf(nu, mu, sigma, y)
+
+# Per-element analytic partials with respect to the ARGUMENTS (the observed `y`
+# is data), in constructor-argument order, or `nothing` to skip the gradient
+# contribution (off-support element), mirroring the scalar accumulate guards.
+@inline function _broadcast_element_partials(::Val{:poisson}, y, lambda)
+    count = _poisson_count(y)
+    isnothing(count) && return nothing
+    return (_poisson_logpdf_partials(lambda, count),)
+end
+@inline _broadcast_element_partials(::Val{:bernoulli}, y, p) = (_bernoulli_logpdf_partials(p, y),)
+@inline function _broadcast_element_partials(::Val{:bernoullilogit}, y, eta)
+    support = _bernoulli_value(y)
+    isnothing(support) && return nothing
+    return (_bernoullilogit_logpdf_partials(eta, support),)
+end
+@inline function _broadcast_element_partials(::Val{:exponential}, y, rate)
+    y >= 0 || return nothing
+    dvalue, drate = _exponential_logpdf_partials(rate, y)
+    return (drate,)
+end
+@inline function _broadcast_element_partials(::Val{:studentt}, y, nu, mu, sigma)
+    dvalue, dnu, dmu, dsigma = _studentt_logpdf_partials(nu, mu, sigma, y)
+    return (dnu, dmu, dsigma)
+end
+
+# Per-element base distribution for `rand` (prior/predictive draws).
+@inline _broadcast_element_dist(::Val{:poisson}, lambda) = poisson(lambda)
+@inline _broadcast_element_dist(::Val{:bernoulli}, p) = bernoulli(p)
+@inline _broadcast_element_dist(::Val{:bernoullilogit}, eta) = bernoullilogit(eta)
+@inline _broadcast_element_dist(::Val{:exponential}, rate) = exponential(rate)
+@inline _broadcast_element_dist(::Val{:studentt}, nu, mu, sigma) = studentt(nu, mu, sigma)
+
+function _broadcast_scalar_length(arguments::Tuple)
+    n = nothing
+    for arg in arguments
+        arg_length = _broadcast_arg_length(arg)
+        isnothing(arg_length) && continue
+        if isnothing(n)
+            n = arg_length
+        else
+            n == arg_length || throw(
+                DimensionMismatch(
+                    "broadcast observation requires vector arguments of equal length, got $(n) and $(arg_length)",
+                ),
+            )
+        end
+    end
+    return n
+end
+
+function _broadcast_scalar_check_length(arguments::Tuple, n::Int)
+    for arg in arguments
+        arg_length = _broadcast_arg_length(arg)
+        isnothing(arg_length) && continue
+        arg_length == n || throw(DimensionMismatch(
+            "broadcast observation argument length $(arg_length) does not match value length $n",
+        ))
+    end
+    return nothing
+end
+
+function logpdf(dist::BroadcastScalarDist{F}, x) where {F}
+    values = x isa Tuple ? collect(x) : x
+    values isa AbstractVector ||
+        throw(ArgumentError("broadcast observation logpdf expects a vector or tuple value"))
+    n = length(values)
+    n >= 1 || throw(ArgumentError("broadcast observation requires a non-empty value"))
+    _broadcast_scalar_check_length(dist.arguments, n)
+    accumulator = _broadcast_element_logpdf(
+        Val(F), float(values[1]),
+        map(arg -> _broadcast_arg_getindex(arg, 1), dist.arguments)...,
+    )
+    for index = 2:n
+        accumulator += _broadcast_element_logpdf(
+            Val(F), float(values[index]),
+            map(arg -> _broadcast_arg_getindex(arg, index), dist.arguments)...,
+        )
+    end
+    return accumulator
+end
+
+function Random.rand(rng::AbstractRNG, dist::BroadcastScalarDist{F}) where {F}
+    n = _broadcast_scalar_length(dist.arguments)
+    isnothing(n) && throw(ArgumentError(
+        "broadcast observation rand requires at least one vector argument to determine the length",
+    ))
+    return [
+        rand(rng, _broadcast_element_dist(Val(F), map(arg -> _broadcast_arg_getindex(arg, index), dist.arguments)...))
+        for index = 1:n
+    ]
+end
+
 function iid(base::AbstractTeaDistribution, n::Integer)
     n >= 1 || throw(ArgumentError("iid requires n >= 1"))
     return IIDDist(base, Int(n))
