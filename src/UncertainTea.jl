@@ -66,6 +66,7 @@ export mvnormaldense, gaussianprocess, sparsegaussianprocess, gp_cholesky, hmm
 export rbf_kernel, matern32_kernel, matern52_kernel, periodic_kernel, kernel_sum, kernel_product
 export orderedlogistic
 export zeroinflatedpoisson, zeroinflatednegativebinomial
+export vonmises
 export mvstudentt, mvstudenttdense
 export wishart, inversewishart
 export lkjcholesky, scale_cholesky

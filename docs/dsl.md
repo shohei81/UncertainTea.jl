@@ -578,6 +578,14 @@ Requirements:
   (1−p)·P_count(0)` and `P(y = k) = (1−p)·P_count(k)`, scored via a stable
   logaddexp on the zero branch. All parameters may be latent-flowing (`p`
   typically through a logistic link). CPU-reference only.
+- `vonmises(mu, kappa)` is the von Mises distribution for circular data (wind
+  directions, phases, time-of-day): mean direction `mu` (radians) and
+  concentration `kappa > 0` (`kappa → 0` approaches the circular uniform; large
+  `kappa` approaches `normal(mu, 1/√kappa)`). `log I₀(kappa)` uses an
+  AD-generic series/asymptotic pair, so latent `mu`/`kappa` flow through
+  ForwardDiff/Enzyme without Bessel derivative rules. Observations score on any
+  real angle (2π-periodic); a latent `mu` samples unconstrained (no
+  circular/wrapped transform yet), so wrap it for reporting. CPU-reference only.
 - `hmm(init, transition, means, sigma)` is a hidden Markov model with Gaussian
   emissions. `init` is the length-`K` initial-state distribution and `transition`
   the `K×K` row-stochastic transition matrix (fixed dynamics, supplied as model
