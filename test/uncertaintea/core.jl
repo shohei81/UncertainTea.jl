@@ -28,6 +28,7 @@ core_test_files = [
     ("dist_inversegamma_weibull_binomial.jl", "dist"),
     ("dist_laplace_geometric_negbinom.jl", "dist"),
     ("dist_scalar_priors.jl", "dist"),
+    ("scalar_kernel_partials.jl", "dist"),
     ("dist_positive_heavytail.jl", "dist"),
     ("dist_dirichlet.jl", "dist"),
     ("dist_mvnormal_diag.jl", "dist"),

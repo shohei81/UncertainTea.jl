@@ -670,133 +670,27 @@ function _std_t_log_cdf(z::ForwardDiff.Dual{T}, nu::Real) where {T}
     return ForwardDiff.Dual{T}(value, derivative * ForwardDiff.partials(z))
 end
 
-function logpdf(dist::NormalDist, x)
-    xx, mu, sigma = promote(x, dist.mu, dist.sigma)
-    z = (xx - mu) / sigma
-    return -log(sigma) - log(2 * pi) / 2 - z * z / 2
-end
+# The scalar CPU-reference logpdfs delegate to the single-source kernels in
+# distributions/scalar_kernels.jl (issue #285). The kernels are the exact same
+# formulas plus parameter-validation NaN branches, which are unreachable here
+# because every constructor validates its parameters.
+logpdf(dist::NormalDist, x) = _backend_normal_logpdf(dist.mu, dist.sigma, x)
+logpdf(dist::LaplaceDist, x) = _backend_laplace_logpdf(dist.mu, dist.scale, x)
+logpdf(dist::ExponentialDist, x) = _backend_exponential_logpdf(dist.rate, x)
+logpdf(dist::GammaDist, x) = _backend_gamma_logpdf(dist.shape, dist.rate, x)
+logpdf(dist::InverseGammaDist, x) = _backend_inversegamma_logpdf(dist.shape, dist.scale, x)
+logpdf(dist::WeibullDist, x) = _backend_weibull_logpdf(dist.shape, dist.scale, x)
+logpdf(dist::BetaDist, x) = _backend_beta_logpdf(dist.alpha, dist.beta, x)
+logpdf(dist::LogNormalDist, x) = _backend_lognormal_logpdf(dist.mu, dist.sigma, x)
+logpdf(dist::StudentTDist, x) = _backend_studentt_logpdf(dist.nu, dist.mu, dist.sigma, x)
+logpdf(dist::CauchyDist, x) = _backend_cauchy_logpdf(dist.mu, dist.sigma, x)
+logpdf(dist::HalfNormalDist, x) = _backend_halfnormal_logpdf(dist.sigma, x)
+logpdf(dist::HalfCauchyDist, x) = _backend_halfcauchy_logpdf(dist.scale, x)
+logpdf(dist::UniformDist, x) = _backend_uniform_logpdf(dist.lower, dist.upper, x)
+logpdf(dist::LogisticDist, x) = _backend_logistic_logpdf(dist.mu, dist.scale, x)
+logpdf(dist::GumbelDist, x) = _backend_gumbel_logpdf(dist.mu, dist.scale, x)
+logpdf(dist::ParetoDist, x) = _backend_pareto_logpdf(dist.xm, dist.alpha, x)
+logpdf(dist::FrechetDist, x) = _backend_frechet_logpdf(dist.shape, dist.scale, x)
+logpdf(dist::RayleighDist, x) = _backend_rayleigh_logpdf(dist.scale, x)
 
-function logpdf(dist::LaplaceDist, x)
-    xx, mu, scale = promote(x, dist.mu, dist.scale)
-    return -log(2 * scale) - abs(xx - mu) / scale
-end
-
-function logpdf(dist::ExponentialDist, x)
-    xx, rate = promote(x, dist.rate)
-    xx >= zero(xx) || return oftype(xx, -Inf)
-    return log(rate) - rate * xx
-end
-
-function logpdf(dist::GammaDist, x)
-    xx, shape, rate = promote(x, dist.shape, dist.rate)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return shape * log(rate) - loggamma(shape) + (shape - one(shape)) * log(xx) - rate * xx
-end
-
-function logpdf(dist::InverseGammaDist, x)
-    xx, shape, scale = promote(x, dist.shape, dist.scale)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return shape * log(scale) - loggamma(shape) - (shape + one(shape)) * log(xx) - scale / xx
-end
-
-function logpdf(dist::WeibullDist, x)
-    xx, shape, scale = promote(x, dist.shape, dist.scale)
-    xx < zero(xx) && return oftype(xx, -Inf)
-    if xx == zero(xx)
-        if shape < one(shape)
-            return oftype(xx, Inf)
-        elseif shape == one(shape)
-            return -log(scale)
-        end
-        return oftype(xx, -Inf)
-    end
-    log_ratio = log(xx) - log(scale)
-    return log(shape) + (shape - one(shape)) * log(xx) - shape * log(scale) - exp(shape * log_ratio)
-end
-
-function logpdf(dist::BetaDist, x)
-    xx, alpha, beta_parameter = promote(x, dist.alpha, dist.beta)
-    zero(xx) < xx < one(xx) || return oftype(xx, -Inf)
-    return loggamma(alpha + beta_parameter) - loggamma(alpha) - loggamma(beta_parameter) +
-           (alpha - one(alpha)) * log(xx) +
-           (beta_parameter - one(beta_parameter)) * log1p(-xx)
-end
-
-function logpdf(dist::LogNormalDist, x)
-    xx, mu, sigma = promote(x, dist.mu, dist.sigma)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return logpdf(normal(mu, sigma), log(xx)) - log(xx)
-end
-
-function logpdf(dist::StudentTDist, x)
-    xx, nu, mu, sigma = promote(x, dist.nu, dist.mu, dist.sigma)
-    z = (xx - mu) / sigma
-    return _studentt_log_constant(nu) - log(sigma) -
-           (nu + one(nu)) * log1p((z * z) / nu) / 2
-end
-
-function logpdf(dist::CauchyDist, x)
-    xx, mu, sigma = promote(x, dist.mu, dist.sigma)
-    z = (xx - mu) / sigma
-    return -log(oftype(xx, pi)) - log(sigma) - log1p(z * z)
-end
-
-function logpdf(dist::HalfNormalDist, x)
-    xx, sigma = promote(x, dist.sigma)
-    xx >= zero(xx) || return oftype(xx, -Inf)
-    z = xx / sigma
-    return log(oftype(xx, 2)) - log(sigma) - log(2 * oftype(xx, pi)) / 2 - z * z / 2
-end
-
-function logpdf(dist::HalfCauchyDist, x)
-    xx, scale = promote(x, dist.scale)
-    xx >= zero(xx) || return oftype(xx, -Inf)
-    z = xx / scale
-    return log(oftype(xx, 2)) - log(oftype(xx, pi)) - log(scale) - log1p(z * z)
-end
-
-function logpdf(dist::UniformDist, x)
-    xx, lower, upper = promote(x, dist.lower, dist.upper)
-    lower <= xx <= upper || return oftype(xx, -Inf)
-    return -log(upper - lower)
-end
-
-function logpdf(dist::LogisticDist, x)
-    xx, mu, scale = promote(x, dist.mu, dist.scale)
-    z = (xx - mu) / scale
-    az = abs(z)
-    return -log(scale) - az - 2 * log1p(exp(-az))
-end
-
-function logpdf(dist::GumbelDist, x)
-    xx, mu, scale = promote(x, dist.mu, dist.scale)
-    z = (xx - mu) / scale
-    return -log(scale) - z - exp(-z)
-end
-
-function logpdf(dist::ParetoDist, x)
-    xx, xm, alpha = promote(x, dist.xm, dist.alpha)
-    xx >= xm || return oftype(xx, -Inf)
-    return log(alpha) + alpha * log(xm) - (alpha + one(alpha)) * log(xx)
-end
-
-function logpdf(dist::FrechetDist, x)
-    xx, shape, scale = promote(x, dist.shape, dist.scale)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    logz = log(xx) - log(scale)
-    return log(shape) - log(scale) - (one(shape) + shape) * logz - exp(-shape * logz)
-end
-
-function logpdf(dist::RayleighDist, x)
-    xx, scale = promote(x, dist.scale)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return log(xx) - 2 * log(scale) - xx * xx / (2 * scale * scale)
-end
-
-function logpdf(dist::InverseGaussianDist, x)
-    xx, mu, lambda = promote(x, dist.mu, dist.lambda)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    d = xx - mu
-    return log(lambda) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
-           lambda * d * d / (2 * mu * mu * xx)
-end
+logpdf(dist::InverseGaussianDist, x) = _backend_inversegaussian_logpdf(dist.mu, dist.lambda, x)

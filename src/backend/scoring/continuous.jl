@@ -11,43 +11,9 @@
 # in src/distributions/continuous.jl. A NaN guard is also required before the
 # loggamma/digamma calls below, which raise DomainError on non-positive reals.
 
-function _backend_normal_logpdf(mu, sigma, x)
-    xx, mu_, sigma_ = promote(x, mu, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    z = (xx - mu_) / sigma_
-    return -log(sigma_) - log(2 * pi) / 2 - z * z / 2
-end
-
-function _backend_lognormal_logpdf(mu, sigma, x)
-    xx, mu_, sigma_ = promote(x, mu, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return _backend_normal_logpdf(mu_, sigma_, log(xx)) - log(xx)
-end
-
-function _backend_exponential_logpdf(rate, x)
-    xx, rate_ = promote(x, rate)
-    rate_ > zero(rate_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return oftype(xx, -Inf)
-    return log(rate_) - rate_ * xx
-end
-
-function _backend_gamma_logpdf(shape, rate, x)
-    xx, shape_, rate_ = promote(x, shape, rate)
-    shape_ > zero(shape_) || return oftype(xx, NaN)
-    rate_ > zero(rate_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return shape_ * log(rate_) - loggamma(shape_) + (shape_ - one(shape_)) * log(xx) - rate_ * xx
-end
-
-function _backend_studentt_logpdf(nu, mu, sigma, x)
-    xx, nu_, mu_, sigma_ = promote(x, nu, mu, sigma)
-    nu_ > zero(nu_) || return oftype(xx, NaN)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    z = (xx - mu_) / sigma_
-    return _studentt_log_constant(nu_) - log(sigma_) -
-           (nu_ + one(nu_)) * log1p((z * z) / nu_) / 2
-end
+# The scalar logpdf kernels (_backend_<family>_logpdf) live in
+# src/distributions/scalar_kernels.jl (issue #285): one declaration serves the
+# CPU-reference logpdf methods, this scoring path, and the batched gradients.
 
 function _backend_choice_value(parameter_slot::Union{Nothing,Int}, params::AbstractVector, constraints::ChoiceMap, address)
     if !isnothing(parameter_slot)
@@ -560,50 +526,6 @@ function _score_backend_observed_loop_choice!(
     end
     return totals
 end
-function _backend_laplace_logpdf(mu, scale, x)
-    xx, mu_, scale_ = promote(x, mu, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    return -log(2 * scale_) - abs(xx - mu_) / scale_
-end
-
-function _backend_inversegamma_logpdf(shape, scale, x)
-    xx, shape_, scale_ = promote(x, shape, scale)
-    shape_ > zero(shape_) || return oftype(xx, NaN)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return shape_ * log(scale_) - loggamma(shape_) -
-           (shape_ + one(shape_)) * log(xx) -
-           scale_ / xx
-end
-
-function _backend_weibull_logpdf(shape, scale, x)
-    xx, shape_, scale_ = promote(x, shape, scale)
-    shape_ > zero(shape_) || return oftype(xx, NaN)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx < zero(xx) && return oftype(xx, -Inf)
-    if xx == zero(xx)
-        if shape_ < one(shape_)
-            return oftype(xx, Inf)
-        elseif shape_ == one(shape_)
-            return -log(scale_)
-        end
-        return oftype(xx, -Inf)
-    end
-    log_ratio = log(xx) - log(scale_)
-    return log(shape_) + (shape_ - one(shape_)) * log(xx) -
-           shape_ * log(scale_) - exp(shape_ * log_ratio)
-end
-
-function _backend_beta_logpdf(alpha, beta_parameter, x)
-    xx, alpha_, beta_ = promote(x, alpha, beta_parameter)
-    alpha_ > zero(alpha_) || return oftype(xx, NaN)
-    beta_ > zero(beta_) || return oftype(xx, NaN)
-    zero(xx) < xx < one(xx) || return oftype(xx, -Inf)
-    return loggamma(alpha_ + beta_) - loggamma(alpha_) - loggamma(beta_) +
-           (alpha_ - one(alpha_)) * log(xx) +
-           (beta_ - one(beta_)) * log1p(-xx)
-end
-
 function _score_backend_step!(
     step::BackendLaplaceChoicePlanStep,
     env::PlanEnvironment,
@@ -888,51 +810,6 @@ end
 # ---- scalar prior families (issue #229): cauchy, halfnormal, halfcauchy, uniform, logistic, gumbel ----
 # Scale/positivity parameters score NaN (not throw) out of support, matching the
 # exception-free contract documented at the top of this file.
-
-function _backend_cauchy_logpdf(mu, sigma, x)
-    xx, mu_, sigma_ = promote(x, mu, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    z = (xx - mu_) / sigma_
-    return -log(oftype(xx, pi)) - log(sigma_) - log1p(z * z)
-end
-
-function _backend_halfnormal_logpdf(sigma, x)
-    xx, sigma_ = promote(x, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return oftype(xx, -Inf)
-    z = xx / sigma_
-    return log(oftype(xx, 2)) - log(sigma_) - log(2 * oftype(xx, pi)) / 2 - z * z / 2
-end
-
-function _backend_halfcauchy_logpdf(scale, x)
-    xx, scale_ = promote(x, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return oftype(xx, -Inf)
-    z = xx / scale_
-    return log(oftype(xx, 2)) - log(oftype(xx, pi)) - log(scale_) - log1p(z * z)
-end
-
-function _backend_uniform_logpdf(lower, upper, x)
-    xx, lower_, upper_ = promote(x, lower, upper)
-    upper_ > lower_ || return oftype(xx, NaN)
-    lower_ <= xx <= upper_ || return oftype(xx, -Inf)
-    return -log(upper_ - lower_)
-end
-
-function _backend_logistic_logpdf(mu, scale, x)
-    xx, mu_, scale_ = promote(x, mu, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    z = (xx - mu_) / scale_
-    az = abs(z)
-    return -log(scale_) - az - 2 * log1p(exp(-az))
-end
-
-function _backend_gumbel_logpdf(mu, scale, x)
-    xx, mu_, scale_ = promote(x, mu, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    z = (xx - mu_) / scale_
-    return -log(scale_) - z - exp(-z)
-end
 
 # --- scalar (non-batched) scoring ---
 function _score_backend_step!(
@@ -1286,37 +1163,6 @@ end
 # ---- positive-support / heavy-tail families (issue #230): pareto, frechet, rayleigh, inversegaussian ----
 # Scale/positivity/shape parameters score NaN (not throw) out of support, matching
 # the exception-free contract documented at the top of this file.
-
-function _backend_pareto_logpdf(xm, alpha, x)
-    xx, xm_, alpha_ = promote(x, xm, alpha)
-    (xm_ > zero(xm_) && alpha_ > zero(alpha_)) || return oftype(xx, NaN)
-    xx >= xm_ || return oftype(xx, -Inf)
-    return log(alpha_) + alpha_ * log(xm_) - (alpha_ + one(alpha_)) * log(xx)
-end
-
-function _backend_frechet_logpdf(shape, scale, x)
-    xx, shape_, scale_ = promote(x, shape, scale)
-    (shape_ > zero(shape_) && scale_ > zero(scale_)) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    logz = log(xx) - log(scale_)
-    return log(shape_) - log(scale_) - (one(shape_) + shape_) * logz - exp(-shape_ * logz)
-end
-
-function _backend_rayleigh_logpdf(scale, x)
-    xx, scale_ = promote(x, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    return log(xx) - 2 * log(scale_) - xx * xx / (2 * scale_ * scale_)
-end
-
-function _backend_inversegaussian_logpdf(mu, lambda, x)
-    xx, mu_, lambda_ = promote(x, mu, lambda)
-    (mu_ > zero(mu_) && lambda_ > zero(lambda_)) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
-    d = xx - mu_
-    return log(lambda_) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
-           lambda_ * d * d / (2 * mu_ * mu_ * xx)
-end
 
 # --- scalar (non-batched) scoring ---
 function _score_backend_step!(

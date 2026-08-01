@@ -15,11 +15,7 @@ function _accumulate_normal_gradient!(
         mu = mu_values[batch_index]
         sigma = sigma_values[batch_index]
         totals[batch_index] += _backend_normal_logpdf(mu, sigma, value)
-        z = (value - mu) / sigma
-        inv_sigma = 1 / sigma
-        dvalue = -z * inv_sigma
-        dmu = z * inv_sigma
-        dsigma = (z * z - 1) * inv_sigma
+        dvalue, dmu, dsigma = _normal_logpdf_partials(mu, sigma, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -48,12 +44,7 @@ function _accumulate_lognormal_gradient!(
         if !(value > 0)
             continue
         end
-        log_value = log(value)
-        z = (log_value - mu) / sigma
-        inv_sigma = 1 / sigma
-        dvalue = (-(z * inv_sigma) - 1) / value
-        dmu = z * inv_sigma
-        dsigma = (z * z - 1) * inv_sigma
+        dvalue, dmu, dsigma = _lognormal_logpdf_partials(mu, sigma, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -79,8 +70,7 @@ function _accumulate_exponential_gradient!(
         if !(value >= 0)
             continue
         end
-        dvalue = -rate
-        drate = 1 / rate - value
+        dvalue, drate = _exponential_logpdf_partials(rate, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -108,9 +98,7 @@ function _accumulate_gamma_gradient!(
         if !(value > 0)
             continue
         end
-        dvalue = (shape - 1) / value - rate
-        dshape = log(rate) - digamma(shape) + log(value)
-        drate = shape / rate - value
+        dvalue, dshape, drate = _gamma_logpdf_partials(shape, rate, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -139,9 +127,7 @@ function _accumulate_inversegamma_gradient!(
         if !(value > 0)
             continue
         end
-        dvalue = -(shape + 1) / value + scale / (value * value)
-        dshape = log(scale) - digamma(shape) - log(value)
-        dscale = shape / scale - 1 / value
+        dvalue, dshape, dscale = _inversegamma_logpdf_partials(shape, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -181,11 +167,7 @@ function _accumulate_weibull_gradient!(
             end
             continue
         end
-        log_ratio = log(value) - log(scale)
-        ratio_power = exp(shape * log_ratio)
-        dvalue = (shape - 1 - shape * ratio_power) / value
-        dshape = 1 / shape + log_ratio - ratio_power * log_ratio
-        dscale = shape * (ratio_power - 1) / scale
+        dvalue, dshape, dscale = _weibull_logpdf_partials(shape, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -214,9 +196,7 @@ function _accumulate_beta_gradient!(
         if !(0 < value < 1)
             continue
         end
-        dvalue = (alpha - 1) / value - (beta_parameter - 1) / (1 - value)
-        dalpha = digamma(alpha + beta_parameter) - digamma(alpha) + log(value)
-        dbeta = digamma(alpha + beta_parameter) - digamma(beta_parameter) + log1p(-value)
+        dvalue, dalpha, dbeta = _beta_logpdf_partials(alpha, beta_parameter, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -245,17 +225,7 @@ function _accumulate_studentt_gradient!(
         mu = mu_values[batch_index]
         sigma = sigma_values[batch_index]
         totals[batch_index] += _backend_studentt_logpdf(nu, mu, sigma, value)
-        z = (value - mu) / sigma
-        denominator = nu + z * z
-        dvalue = -((nu + 1) * z) / (sigma * denominator)
-        dmu = -dvalue
-        dsigma = nu * (z * z - one(T)) / (sigma * denominator)
-        # the digamma-difference part goes through the Float64-widened helper
-        # (issue #53): at Float32 the ~1/nu difference of ~log(nu)-sized
-        # digammas would disagree with the widened value being differentiated
-        dnu =
-            _studentt_log_constant_dnu(nu) +
-            T(0.5) * (-log1p((z * z) / nu) + ((nu + 1) * z * z) / (nu * denominator))
+        dvalue, dnu, dmu, dsigma = _studentt_logpdf_partials(nu, mu, sigma, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -608,11 +578,7 @@ function _accumulate_laplace_gradient!(
         mu = mu_values[batch_index]
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_laplace_logpdf(mu, scale, value)
-        delta = value - mu
-        sign_delta = delta > 0 ? one(T) : (delta < 0 ? -one(T) : zero(T))
-        dvalue = -sign_delta / scale
-        dmu = sign_delta / scale
-        dscale = -1 / scale + abs(delta) / (scale * scale)
+        dvalue, dmu, dscale = _laplace_logpdf_partials(mu, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -676,11 +642,7 @@ function _accumulate_cauchy_gradient!(
         mu = mu_values[batch_index]
         sigma = sigma_values[batch_index]
         totals[batch_index] += _backend_cauchy_logpdf(mu, sigma, value)
-        z = (value - mu) / sigma
-        denominator = 1 + z * z
-        dvalue = -2 * z / (sigma * denominator)
-        dmu = -dvalue
-        dsigma = (z * z - 1) / (sigma * denominator)
+        dvalue, dmu, dsigma = _cauchy_logpdf_partials(mu, sigma, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -706,9 +668,7 @@ function _accumulate_halfnormal_gradient!(
         if value < 0
             continue
         end
-        z = value / sigma
-        dvalue = -z / sigma
-        dsigma = (z * z - 1) / sigma
+        dvalue, dsigma = _halfnormal_logpdf_partials(sigma, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -733,10 +693,7 @@ function _accumulate_halfcauchy_gradient!(
         if value < 0
             continue
         end
-        z = value / scale
-        denominator = 1 + z * z
-        dvalue = -2 * z / (scale * denominator)
-        dscale = (z * z - 1) / (scale * denominator)
+        dvalue, dscale = _halfcauchy_logpdf_partials(scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -766,9 +723,7 @@ function _accumulate_uniform_gradient!(
         end
         # d/dvalue is 0 on the open interval; the bound partials are the only
         # nonzero channels (relevant only for dynamic-bound observations).
-        inv_width = 1 / (upper - lower)
-        dlower = inv_width
-        dupper = -inv_width
+        dlower, dupper = _uniform_logpdf_partials(lower, upper, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dlower * lower_gradients[parameter_index, batch_index] +
@@ -793,11 +748,7 @@ function _accumulate_logistic_gradient!(
         mu = mu_values[batch_index]
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_logistic_logpdf(mu, scale, value)
-        z = (value - mu) / scale
-        s = 1 / (1 + exp(-z)) # sigmoid(z)
-        dvalue = (1 - 2 * s) / scale
-        dmu = -dvalue
-        dscale = (-1 - z * (1 - 2 * s)) / scale
+        dvalue, dmu, dscale = _logistic_logpdf_partials(mu, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -823,11 +774,7 @@ function _accumulate_gumbel_gradient!(
         mu = mu_values[batch_index]
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_gumbel_logpdf(mu, scale, value)
-        z = (value - mu) / scale
-        e = exp(-z)
-        dvalue = (e - 1) / scale
-        dmu = -dvalue
-        dscale = (-1 - z * (e - 1)) / scale
+        dvalue, dmu, dscale = _gumbel_logpdf_partials(mu, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -1044,9 +991,7 @@ function _accumulate_pareto_gradient!(
         if !(xm > 0 && alpha > 0 && value >= xm)
             continue
         end
-        dvalue = -(alpha + 1) / value
-        dxm = alpha / xm
-        dalpha = 1 / alpha + log(xm) - log(value)
+        dvalue, dxm, dalpha = _pareto_logpdf_partials(xm, alpha, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -1075,11 +1020,7 @@ function _accumulate_frechet_gradient!(
         if !(shape > 0 && scale > 0 && value > 0)
             continue
         end
-        logz = log(value) - log(scale)
-        w = exp(-shape * logz)
-        dvalue = (-(1 + shape) + shape * w) / value
-        dshape = 1 / shape - logz * (1 - w)
-        dscale = (shape / scale) * (1 - w)
+        dvalue, dshape, dscale = _frechet_logpdf_partials(shape, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -1105,8 +1046,7 @@ function _accumulate_rayleigh_gradient!(
         if !(scale > 0 && value > 0)
             continue
         end
-        dvalue = 1 / value - value / (scale * scale)
-        dscale = -2 / scale + value * value / (scale * scale * scale)
+        dvalue, dscale = _rayleigh_logpdf_partials(scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
@@ -1134,10 +1074,7 @@ function _accumulate_inversegaussian_gradient!(
         if !(mu > 0 && lambda > 0 && value > 0)
             continue
         end
-        d = value - mu
-        dvalue = -3 / (2 * value) - lambda / (2 * mu * mu) + lambda / (2 * value * value)
-        dmu = lambda * d / (mu * mu * mu)
-        dlambda = 1 / (2 * lambda) - d * d / (2 * mu * mu * value)
+        dvalue, dmu, dlambda = _inversegaussian_logpdf_partials(mu, lambda, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dvalue * value_gradients[parameter_index, batch_index] +
