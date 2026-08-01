@@ -75,6 +75,37 @@ function _even_draw_indices(total::Int, num_draws::Int)
     return [round(Int, value) for value in range(1, total; length=count)]
 end
 
+"""
+    prior_predictive(model, args, constraints; num_draws=100, rng=Random.default_rng())
+
+Prior predictive draws: sample the FULL joint from the prior (`generate` with no
+constraints) `num_draws` times and keep the observation addresses — the
+addresses `constraints` defines (its values are not used; it only fixes the
+observed/latent split, exactly as in inference). The standard prior-workflow
+check before conditioning: does the model generate data on the right scale?
+Returns `PredictiveDraws`, the same container `predict` produces.
+"""
+function prior_predictive(
+    model::TeaModel,
+    args::Tuple,
+    constraints::ChoiceMap;
+    num_draws::Int=100,
+    rng::AbstractRNG=Random.default_rng(),
+)
+    num_draws > 0 || throw(ArgumentError("prior_predictive requires num_draws > 0"))
+    draws = ChoiceMap[]
+    for _ = 1:num_draws
+        trace, _ = generate(model, args, ChoiceMap(); rng=rng)
+        draw = ChoiceMap()
+        for entry in trace.choices
+            address = first(entry)
+            haskey(constraints, address) && _pushchoice!(draw, address, last(entry))
+        end
+        push!(draws, draw)
+    end
+    return PredictiveDraws(draws)
+end
+
 # Posterior predictive from pooled HMC/NUTS chains.
 function predict(
     model::TeaModel,

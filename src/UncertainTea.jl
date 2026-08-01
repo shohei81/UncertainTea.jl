@@ -54,6 +54,7 @@ export map_estimate, laplace_approximation, MAPResult, LaplaceResult
 export pathfinder, PathfinderResult
 export variational_mean, variational_samples, variational_covariance
 export predict, PredictiveDraws, addresses, log_evidence
+export prior_predictive
 export nested_sampling, NestedSamplingResult, log_evidence_error, information
 export elliptical_slice, EllipticalSliceResult
 export normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, beta, dirichlet, mvnormal, bernoulli,

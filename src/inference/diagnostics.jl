@@ -589,11 +589,48 @@ function _split_ess(draws::AbstractMatrix)
     return min(Float64(total_draws), Float64(total_draws) / tau_hat)
 end
 
-function rhat(chains::HMCChains; space::Symbol=:constrained)
+# Rank-normal (inverse-normal) transform of the pooled draws (Vehtari et al.
+# 2021): fractional ranks (r - 3/8)/(S + 1/4) mapped through the standard-normal
+# quantile. Makes the split-Rhat robust to heavy tails and nonlinear scale.
+function _rank_normal_transform(draws::AbstractMatrix)
+    flat = vec(collect(draws))
+    S = length(flat)
+    order = sortperm(flat)
+    ranks = Vector{Float64}(undef, S)
+    for (position, index) in enumerate(order)
+        ranks[index] = position
+    end
+    z = [sqrt(2.0) * erfinv(2 * ((r - 0.375) / (S + 0.25)) - 1) for r in ranks]
+    return reshape(z, size(draws))
+end
+
+# Rank-normalized split-Rhat (Vehtari et al. 2021): the max of the bulk
+# statistic (rank-normalized draws) and the tail-sensitive folded statistic
+# (rank-normalized |x - median|).
+function _rank_normalized_rhat(draws::AbstractMatrix)
+    bulk = _split_rhat(_rank_normal_transform(draws))
+    med = _quantile(sort(vec(collect(draws))), 0.5)
+    folded = _split_rhat(_rank_normal_transform(abs.(draws .- med)))
+    return max(bulk, folded)
+end
+
+"""
+    rhat(chains::HMCChains; space=:constrained, method=:split) -> Vector{Float64}
+
+Per-parameter split-R̂. `method=:split` (default) is the classical split-chain
+statistic; `method=:rank` is the rank-normalized split-R̂ of Vehtari et al.
+(2021) — the max of the bulk (rank-normalized) and folded (tail-sensitive)
+statistics, robust to heavy tails and nonlinear scale, now the standard in
+Stan/ArviZ.
+"""
+function rhat(chains::HMCChains; space::Symbol=:constrained, method::Symbol=:split)
+    method in (:split, :rank) ||
+        throw(ArgumentError("rhat method must be :split or :rank, got $(repr(method))"))
     num_params, _ = _validate_hmc_diagnostics(chains, space)
     values = Vector{Float64}(undef, num_params)
     for parameter_index = 1:num_params
-        values[parameter_index] = _split_rhat(_split_chain_parameter_draws(chains, parameter_index, space))
+        draws = _split_chain_parameter_draws(chains, parameter_index, space)
+        values[parameter_index] = method === :split ? _split_rhat(draws) : _rank_normalized_rhat(draws)
     end
     return values
 end
