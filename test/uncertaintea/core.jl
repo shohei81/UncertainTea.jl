@@ -45,6 +45,7 @@ core_test_files = [
     ("dist_ordered_logistic.jl", "dist"),
     ("dist_zero_inflated.jl", "dist"),
     ("dist_gp_latent.jl", "dist"),
+    ("elliptical_slice.jl", "inference"),
     ("transform_logit_saturation.jl", "dist"),
     ("dist_integer_params.jl", "dist"),
     ("dist_count_logfactorial.jl", "dist"),
