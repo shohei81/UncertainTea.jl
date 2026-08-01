@@ -193,6 +193,47 @@ scalar_kernel_cases = [
         end
     end
 
+    @testset "discrete partials match ForwardDiff on the logpdf kernels" begin
+        # counts/support values are data (zero derivative); differentiate the
+        # continuous parameters at fixed classified counts.
+        for value in (1.0, 0.0)
+            fd = ForwardDiff.derivative(p -> UncertainTea._backend_bernoulli_logpdf(p, value), 0.35)
+            @test UncertainTea._bernoulli_logpdf_partials(0.35, value) ≈ fd rtol = 1e-10
+        end
+        for (value, support) in ((1.0, true), (0.0, false))
+            fd = ForwardDiff.derivative(eta -> UncertainTea._backend_bernoullilogit_logpdf(eta, value), 0.7)
+            @test UncertainTea._bernoullilogit_logpdf_partials(0.7, support) ≈ fd rtol = 1e-10
+        end
+        for count in (0, 3, 7)
+            fd = ForwardDiff.derivative(l -> UncertainTea._backend_poisson_logpdf(l, count), 2.4)
+            @test UncertainTea._poisson_logpdf_partials(2.4, count) ≈ fd rtol = 1e-10
+        end
+        for count in (0, 4, 10)
+            fd = ForwardDiff.derivative(p -> UncertainTea._backend_binomial_logpdf(10, p, count), 0.4)
+            @test UncertainTea._binomial_logpdf_partials(10, 0.4, count) ≈ fd rtol = 1e-10
+        end
+        for count in (0, 3)
+            fd = ForwardDiff.derivative(p -> UncertainTea._backend_geometric_logpdf(p, count), 0.3)
+            @test UncertainTea._geometric_logpdf_partials(0.3, count) ≈ fd rtol = 1e-10
+        end
+        for count in (0, 5)
+            fd = ForwardDiff.gradient(
+                v -> UncertainTea._backend_negativebinomial_logpdf(v[1], v[2], count), [3.0, 0.45],
+            )
+            dsuccesses, dprobability =
+                UncertainTea._negativebinomial_logpdf_partials(3.0, 0.45, count)
+            @test isapprox([dsuccesses, dprobability], fd; rtol=1e-10)
+        end
+        for count in (0, 4, 10)
+            fd = ForwardDiff.gradient(
+                v -> UncertainTea._backend_betabinomial_logpdf(10, v[1], v[2], count), [2.0, 3.5],
+            )
+            dalpha, dbeta = UncertainTea._betabinomial_logpdf_partials(10, 2.0, 3.5, count)
+            @test isapprox([dalpha, dbeta], fd; rtol=1e-10)
+        end
+        @test UncertainTea._categorical_logpdf_partials(0.3) ≈ 1 / 0.3 rtol = 1e-12
+    end
+
     @testset "CPU logpdf delegation matches the kernels" begin
         # a spot check that the delegated CPU-reference logpdfs return the kernel
         # values exactly (same code path now, but this pins the wiring)
@@ -202,5 +243,11 @@ scalar_kernel_cases = [
               UncertainTea._backend_weibull_logpdf(1.0, 2.0, 0.0)   # boundary case preserved
         @test UncertainTea.logpdf(beta(2.0, 3.0), 1.5) == -Inf       # off support
         @test UncertainTea.logpdf(studentt(4.0f0, 0.0f0, 1.0f0), 0.5f0) isa Float32  # eltype preserved
+        @test UncertainTea.logpdf(poisson(2.4), 3) ==
+              UncertainTea._backend_poisson_logpdf(2.4, 3)
+        @test UncertainTea.logpdf(UncertainTea.binomial(10, 0.4), 4) ==
+              UncertainTea._backend_binomial_logpdf(10, 0.4, 4)
+        @test UncertainTea.logpdf(geometric(1.0), 2) == -Inf  # p == 1 boundary preserved
+        @test UncertainTea.logpdf(bernoulli(0.3), 0.5) == -Inf  # off-support value
     end
 end

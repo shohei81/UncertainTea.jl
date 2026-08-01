@@ -1,22 +1,9 @@
 # Backend-native scalar and batched scoring: discrete families (bernoulli, poisson, geometric, binomial, negativebinomial, categorical).
 
-function _backend_bernoulli_logpdf(p, x)
-    probability = p
-    zero(probability) <= probability <= one(probability) ||
-        throw(ArgumentError("bernoulli requires 0 <= p <= 1"))
-    value = _bernoulli_value(x)
-    isnothing(value) && return oftype(float(probability), -Inf)
-    return value ? log(probability) : log1p(-probability)
-end
-
-# Logit-parameterized Bernoulli (issues #149/#150), stable log-scale form
-# `x*eta - log1p(exp(eta))`; mirrors the CPU `logpdf(::BernoulliLogitDist, x)`.
-function _backend_bernoullilogit_logpdf(eta, x)
-    value = _bernoulli_value(x)
-    isnothing(value) && return oftype(float(eta), -Inf)
-    log_normalizer = _bernoullilogit_log1p_exp(eta)
-    return value ? eta - log_normalizer : -log_normalizer
-end
+# The discrete logpdf kernels (_backend_<family>_logpdf) live in
+# src/distributions/scalar_kernels.jl (issue #285, stage 2): one declaration
+# serves the CPU-reference logpdf methods, this scoring path, and the batched
+# gradients.
 
 function _score_backend_step!(
     step::BackendBernoulliLogitChoicePlanStep,
@@ -79,13 +66,6 @@ function _score_backend_observed_loop_choice!(
         totals[batch_index] += _backend_bernoullilogit_logpdf(eta_values[batch_index], observed_values[batch_index])
     end
     return totals
-end
-
-function _backend_poisson_logpdf(lambda, x)
-    lambda > zero(lambda) || throw(ArgumentError("poisson requires lambda > 0"))
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(float(lambda), -Inf)
-    return count * log(lambda) - lambda - _logfactorial_like(lambda, count)
 end
 
 function _score_backend_step!(
@@ -215,84 +195,6 @@ function _score_backend_observed_loop_choice!(
         totals[batch_index] += _backend_poisson_logpdf(lambda, value)
     end
     return totals
-end
-
-function _backend_geometric_logpdf(probability, x)
-    probability_ = float(probability)
-    zero(probability_) < probability_ <= one(probability_) ||
-        throw(ArgumentError("geometric requires 0 < p <= 1"))
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(probability_, -Inf)
-    if count == 0
-        return log(probability_)
-    elseif probability_ == one(probability_)
-        return oftype(probability_, -Inf)
-    end
-    return log(probability_) + count * log1p(-probability_)
-end
-
-function _backend_negativebinomial_logpdf(successes, probability, x)
-    successes_, probability_ = promote(successes, probability)
-    successes_ > zero(successes_) || throw(ArgumentError("negativebinomial requires successes > 0"))
-    zero(probability_) < probability_ <= one(probability_) ||
-        throw(ArgumentError("negativebinomial requires 0 < p <= 1"))
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(probability_, -Inf)
-    if count == 0 && probability_ == one(probability_)
-        return zero(probability_)
-    elseif probability_ == one(probability_)
-        return oftype(probability_, -Inf)
-    end
-    return loggamma(count + successes_) - loggamma(successes_) - _logfactorial_like(probability_, count) +
-           successes_ * log(probability_) + count * log1p(-probability_)
-end
-
-function _backend_binomial_logpdf(trials, probability, x)
-    probability_ = float(probability)
-    zero(probability_) <= probability_ <= one(probability_) ||
-        throw(ArgumentError("binomial requires 0 <= p <= 1"))
-    trial_count = _binomial_trials(trials)
-    isnothing(trial_count) && throw(ArgumentError("binomial requires integer trials >= 0"))
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(probability_, -Inf)
-    count <= trial_count || return oftype(probability_, -Inf)
-    log_combination = _logbinomial_like(probability_, trial_count, count)
-    if count == 0 && count == trial_count
-        return log_combination
-    elseif count == 0
-        return log_combination + trial_count * log1p(-probability_)
-    elseif count == trial_count
-        return log_combination + count * log(probability_)
-    end
-    return log_combination +
-           count * log(probability_) +
-           (trial_count - count) * log1p(-probability_)
-end
-
-# Beta-Binomial (issue #231): shares `_betabinomial_logpdf_core` with the CPU
-# reference; `alpha`/`beta` may be latent-flowing.
-function _backend_betabinomial_logpdf(trials, alpha, beta, x)
-    alpha_, beta_ = promote(float(alpha), float(beta))
-    alpha_ > zero(alpha_) || throw(ArgumentError("betabinomial requires alpha > 0"))
-    beta_ > zero(beta_) || throw(ArgumentError("betabinomial requires beta > 0"))
-    trial_count = _binomial_trials(trials)
-    isnothing(trial_count) && throw(ArgumentError("betabinomial requires integer trials >= 0"))
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(alpha_, -Inf)
-    count <= trial_count || return oftype(alpha_, -Inf)
-    return _betabinomial_logpdf_core(trial_count, alpha_, beta_, count)
-end
-
-# Discrete-uniform (issue #231): trivial `-log(b - a + 1)` density with no
-# continuous parameters.
-function _backend_discreteuniform_logpdf(lower, upper, x)
-    lo = _discrete_integer(lower)
-    hi = _discrete_integer(upper)
-    (isnothing(lo) || isnothing(hi)) && throw(ArgumentError("discreteuniform requires integer bounds"))
-    lo <= hi || throw(ArgumentError("discreteuniform requires a <= b"))
-    value = _discrete_integer(x)
-    (isnothing(value) || value < lo || value > hi) && return -Inf
-    return -log(float(hi - lo + 1))
 end
 
 function _score_backend_step!(
@@ -630,22 +532,6 @@ function _score_backend_step!(
         end
     end
     return totals
-end
-
-function _backend_categorical_logpdf(probabilities::Tuple, x)
-    length(probabilities) > 0 || throw(ArgumentError("categorical requires at least one probability"))
-    total = zero(float(first(probabilities)))
-    for probability in probabilities
-        probability_ = float(probability)
-        zero(probability_) <= probability_ <= one(probability_) ||
-            throw(ArgumentError("categorical requires 0 <= p <= 1"))
-        total += probability_
-    end
-    tolerance = sqrt(eps(total)) * max(length(probabilities), 1) * 8
-    abs(total - one(total)) <= tolerance || throw(ArgumentError("categorical probabilities must sum to 1"))
-    index = _categorical_index(x, length(probabilities))
-    isnothing(index) && return oftype(total, -Inf)
-    return log(float(probabilities[index]))
 end
 
 function _score_backend_step!(

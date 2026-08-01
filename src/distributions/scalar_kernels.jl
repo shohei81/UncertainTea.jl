@@ -350,3 +350,190 @@ end
     dlambda = 1 / (2 * lambda) - d * d / (2 * mu * mu * value)
     return dvalue, dmu, dlambda
 end
+
+# --- discrete logpdf kernels (issue #285, stage 2) ---------------------------
+# Same single-source contract as the continuous kernels above. Unlike those,
+# invalid PARAMETERS throw ArgumentError (matching the historical backend
+# semantics for discrete families); off-support VALUES return -Inf. The count/
+# support classification helpers (_bernoulli_value, _poisson_count,
+# _binomial_trials, _categorical_index, _discrete_integer) and the
+# precision-careful data-term helpers (_logfactorial_like, _logbinomial_like,
+# _betabinomial_logpdf_core) live in distributions/discrete.jl.
+
+function _backend_bernoulli_logpdf(p, x)
+    probability = p
+    zero(probability) <= probability <= one(probability) ||
+        throw(ArgumentError("bernoulli requires 0 <= p <= 1"))
+    value = _bernoulli_value(x)
+    isnothing(value) && return oftype(float(probability), -Inf)
+    return value ? log(probability) : log1p(-probability)
+end
+
+# Logit-parameterized Bernoulli (issues #149/#150), stable log-scale form
+# `x*eta - log1p(exp(eta))`.
+function _backend_bernoullilogit_logpdf(eta, x)
+    value = _bernoulli_value(x)
+    isnothing(value) && return oftype(float(eta), -Inf)
+    log_normalizer = _bernoullilogit_log1p_exp(eta)
+    return value ? eta - log_normalizer : -log_normalizer
+end
+
+function _backend_poisson_logpdf(lambda, x)
+    lambda > zero(lambda) || throw(ArgumentError("poisson requires lambda > 0"))
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(float(lambda), -Inf)
+    return count * log(lambda) - lambda - _logfactorial_like(lambda, count)
+end
+
+function _backend_geometric_logpdf(probability, x)
+    probability_ = float(probability)
+    zero(probability_) < probability_ <= one(probability_) ||
+        throw(ArgumentError("geometric requires 0 < p <= 1"))
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(probability_, -Inf)
+    if count == 0
+        return log(probability_)
+    elseif probability_ == one(probability_)
+        return oftype(probability_, -Inf)
+    end
+    return log(probability_) + count * log1p(-probability_)
+end
+
+function _backend_negativebinomial_logpdf(successes, probability, x)
+    successes_, probability_ = promote(successes, probability)
+    successes_ > zero(successes_) || throw(ArgumentError("negativebinomial requires successes > 0"))
+    zero(probability_) < probability_ <= one(probability_) ||
+        throw(ArgumentError("negativebinomial requires 0 < p <= 1"))
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(probability_, -Inf)
+    if count == 0 && probability_ == one(probability_)
+        return zero(probability_)
+    elseif probability_ == one(probability_)
+        return oftype(probability_, -Inf)
+    end
+    return loggamma(count + successes_) - loggamma(successes_) - _logfactorial_like(probability_, count) +
+           successes_ * log(probability_) + count * log1p(-probability_)
+end
+
+function _backend_binomial_logpdf(trials, probability, x)
+    probability_ = float(probability)
+    zero(probability_) <= probability_ <= one(probability_) ||
+        throw(ArgumentError("binomial requires 0 <= p <= 1"))
+    trial_count = _binomial_trials(trials)
+    isnothing(trial_count) && throw(ArgumentError("binomial requires integer trials >= 0"))
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(probability_, -Inf)
+    count <= trial_count || return oftype(probability_, -Inf)
+    log_combination = _logbinomial_like(probability_, trial_count, count)
+    if count == 0 && count == trial_count
+        return log_combination
+    elseif count == 0
+        return log_combination + trial_count * log1p(-probability_)
+    elseif count == trial_count
+        return log_combination + count * log(probability_)
+    end
+    return log_combination +
+           count * log(probability_) +
+           (trial_count - count) * log1p(-probability_)
+end
+
+# Beta-Binomial (issue #231): shares `_betabinomial_logpdf_core` with the CPU
+# reference; `alpha`/`beta` may be latent-flowing.
+function _backend_betabinomial_logpdf(trials, alpha, beta, x)
+    alpha_, beta_ = promote(float(alpha), float(beta))
+    alpha_ > zero(alpha_) || throw(ArgumentError("betabinomial requires alpha > 0"))
+    beta_ > zero(beta_) || throw(ArgumentError("betabinomial requires beta > 0"))
+    trial_count = _binomial_trials(trials)
+    isnothing(trial_count) && throw(ArgumentError("betabinomial requires integer trials >= 0"))
+    count = _poisson_count(x)
+    isnothing(count) && return oftype(alpha_, -Inf)
+    count <= trial_count || return oftype(alpha_, -Inf)
+    return _betabinomial_logpdf_core(trial_count, alpha_, beta_, count)
+end
+
+# Discrete-uniform (issue #231): trivial `-log(b - a + 1)` density with no
+# continuous parameters.
+function _backend_discreteuniform_logpdf(lower, upper, x)
+    lo = _discrete_integer(lower)
+    hi = _discrete_integer(upper)
+    (isnothing(lo) || isnothing(hi)) && throw(ArgumentError("discreteuniform requires integer bounds"))
+    lo <= hi || throw(ArgumentError("discreteuniform requires a <= b"))
+    value = _discrete_integer(x)
+    (isnothing(value) || value < lo || value > hi) && return -Inf
+    return -log(float(hi - lo + 1))
+end
+
+function _backend_categorical_logpdf(probabilities::Tuple, x)
+    length(probabilities) > 0 || throw(ArgumentError("categorical requires at least one probability"))
+    total = zero(float(first(probabilities)))
+    for probability in probabilities
+        probability_ = float(probability)
+        zero(probability_) <= probability_ <= one(probability_) ||
+            throw(ArgumentError("categorical requires 0 <= p <= 1"))
+        total += probability_
+    end
+    tolerance = sqrt(eps(total)) * max(length(probabilities), 1) * 8
+    abs(total - one(total)) <= tolerance || throw(ArgumentError("categorical probabilities must sum to 1"))
+    index = _categorical_index(x, length(probabilities))
+    isnothing(index) && return oftype(total, -Inf)
+    return log(float(probabilities[index]))
+end
+
+# --- discrete analytic partials (classified inputs; caller classifies) -------
+# The caller runs the support/count classification (_bernoulli_value /
+# _poisson_count) and skips off-support values exactly as before; these kernels
+# take the already-classified inputs.
+
+@inline _bernoulli_logpdf_partials(probability, value) =
+    value != 0 ? 1 / probability : -1 / (1 - probability)
+
+# `d/d_eta = x - logistic(eta)`: well-conditioned where the sigmoid-spelling
+# gradient (1/p or -1/(1-p)) blows up as p saturates.
+@inline _bernoullilogit_logpdf_partials(eta, support::Bool) =
+    (support ? one(eta) : zero(eta)) - _bernoullilogit_logistic(eta)
+
+@inline _poisson_logpdf_partials(lambda, count) = count / lambda - 1
+
+@inline _categorical_logpdf_partials(probability) = 1 / probability
+
+@inline function _binomial_logpdf_partials(trials, probability, count)
+    if count == 0
+        return -trials / (1 - probability)
+    elseif count == trials
+        return count / probability
+    end
+    return count / probability - (trials - count) / (1 - probability)
+end
+
+# The count == 0 contribution of the -count / (1 - p) term is exactly zero;
+# skipping it keeps the gradient finite at p == 1 (issue #77).
+@inline function _geometric_logpdf_partials(probability, count)
+    derivative = 1 / probability
+    if count > 0
+        derivative -= count / (1 - probability)
+    end
+    return derivative
+end
+
+@inline function _negativebinomial_logpdf_partials(successes, probability, count)
+    dsuccesses = digamma(count + successes) - digamma(successes) + log(probability)
+    # as in the geometric case, skip the exactly-zero count == 0 term so p == 1
+    # stays finite (issue #77)
+    dprobability = successes / probability
+    if count > 0
+        dprobability -= count / (1 - probability)
+    end
+    return dsuccesses, dprobability
+end
+
+# Beta-Binomial (issue #231): closed-form digamma differences. With s = alpha + beta,
+#   d/dalpha = psi(k+a) - psi(n+s) - psi(a) + psi(s),
+#   d/dbeta  = psi(n-k+b) - psi(n+s) - psi(b) + psi(s).
+@inline function _betabinomial_logpdf_partials(trials, alpha, beta, count)
+    s = alpha + beta
+    dgamma_ns = digamma(trials + s)
+    dgamma_s = digamma(s)
+    dalpha = digamma(count + alpha) - dgamma_ns - digamma(alpha) + dgamma_s
+    dbeta = digamma(trials - count + beta) - dgamma_ns - digamma(beta) + dgamma_s
+    return dalpha, dbeta
+end

@@ -11,7 +11,7 @@ function _accumulate_bernoulli_gradient!(
         probability = probability_values[batch_index]
         value = value_values[batch_index]
         totals[batch_index] += _backend_bernoulli_logpdf(probability, value)
-        derivative = value != 0 ? 1 / probability : -1 / (1 - probability)
+        derivative = _bernoulli_logpdf_partials(probability, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] += derivative * probability_gradients[parameter_index, batch_index]
         end
@@ -35,7 +35,7 @@ function _accumulate_bernoullilogit_gradient!(
         totals[batch_index] += _backend_bernoullilogit_logpdf(eta, value)
         support = _bernoulli_value(value)
         isnothing(support) && continue
-        derivative = (support ? one(T) : zero(T)) - _bernoullilogit_logistic(eta)
+        derivative = _bernoullilogit_logpdf_partials(eta, support)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] += derivative * eta_gradients[parameter_index, batch_index]
         end
@@ -91,13 +91,8 @@ function _accumulate_binomial_gradient!(
         count = _poisson_count(value)
         if isnothing(count) || count > trials
             continue
-        elseif count == 0
-            derivative = -trials / (1 - probability)
-        elseif count == trials
-            derivative = count / probability
-        else
-            derivative = count / probability - (trials - count) / (1 - probability)
         end
+        derivative = _binomial_logpdf_partials(trials, probability, count)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] += derivative * probability_gradients[parameter_index, batch_index]
         end
@@ -118,7 +113,7 @@ function _accumulate_poisson_gradient!(
         totals[batch_index] += _backend_poisson_logpdf(lambda, value)
         count = _poisson_count(value)
         isnothing(count) && continue
-        derivative = count / lambda - 1
+        derivative = _poisson_logpdf_partials(lambda, count)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] += derivative * lambda_gradients[parameter_index, batch_index]
         end
@@ -139,7 +134,7 @@ function _accumulate_categorical_gradient!(
         totals[batch_index] += _backend_categorical_logpdf(probabilities, value)
         index = _categorical_index(value, length(probabilities))
         isnothing(index) && continue
-        derivative = 1 / probabilities[index]
+        derivative = _categorical_logpdf_partials(probabilities[index])
         selected_gradients = probability_gradients[index]
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] += derivative * selected_gradients[parameter_index, batch_index]
@@ -300,12 +295,7 @@ function _accumulate_geometric_gradient!(
         totals[batch_index] += _backend_geometric_logpdf(probability, value)
         count = _poisson_count(value)
         isnothing(count) && continue
-        # The count == 0 contribution of the -count / (1 - p) term is exactly
-        # zero; skipping it keeps the gradient finite at p == 1 (issue #77).
-        derivative = 1 / probability
-        if count > 0
-            derivative -= count / (1 - probability)
-        end
+        derivative = _geometric_logpdf_partials(probability, count)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] += derivative * probability_gradients[parameter_index, batch_index]
         end
@@ -329,13 +319,7 @@ function _accumulate_negativebinomial_gradient!(
         totals[batch_index] += _backend_negativebinomial_logpdf(successes, probability, value)
         count = _poisson_count(value)
         isnothing(count) && continue
-        dsuccesses = digamma(count + successes) - digamma(successes) + log(probability)
-        # As in the geometric case, skip the exactly-zero count == 0 term so
-        # p == 1 stays finite (issue #77).
-        dprobability = successes / probability
-        if count > 0
-            dprobability -= count / (1 - probability)
-        end
+        dsuccesses, dprobability = _negativebinomial_logpdf_partials(successes, probability, count)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dsuccesses * successes_gradients[parameter_index, batch_index] +
@@ -442,11 +426,7 @@ function _accumulate_betabinomial_gradient!(
         totals[batch_index] += _backend_betabinomial_logpdf(trials, alpha, beta, value)
         count = _poisson_count(value)
         (isnothing(count) || count > trials) && continue
-        s = alpha + beta
-        dgamma_ns = digamma(trials + s)
-        dgamma_s = digamma(s)
-        dalpha = digamma(count + alpha) - dgamma_ns - digamma(alpha) + dgamma_s
-        dbeta = digamma(trials - count + beta) - dgamma_ns - digamma(beta) + dgamma_s
+        dalpha, dbeta = _betabinomial_logpdf_partials(trials, alpha, beta, count)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
                 dalpha * alpha_gradients[parameter_index, batch_index] +
