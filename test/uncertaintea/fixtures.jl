@@ -13,6 +13,21 @@ using Test
 using Random
 using UncertainTea
 
+# Internal (unexported) names the white-box suite reaches for. They are qualified-
+# access-only in the public API (issue #283); import them explicitly here so the
+# core tests keep referring to them unqualified.
+using UncertainTea:
+    AddressSpec, ChoiceSpec, ModelSpec, AddressLiteralPart, AddressDynamicPart,
+    DistributionSpec, GenerativeCallSpec, RawChoiceRhsSpec, BroadcastDistributionSpec,
+    LoopScopeSpec, ParameterLayout, ParameterSlotSpec, ExecutionPlan, ChoicePlanStep,
+    DeterministicPlanStep, LoopPlanStep, executionplan, IdentityTransform,
+    VectorIdentityTransform, LogTransform, LogitTransform, SimplexTransform,
+    CholeskyCorrTransform, CholeskyCovTransform, VectorLogTransform, VectorLogitTransform,
+    BoundedTransform, LowerBoundedTransform, UpperBoundedTransform, StaticMode, DynamicMode,
+    modelspec, isstaticaddress, isaddresstemplate, isrepeatedchoice, hasrepeatedchoices,
+    parameterlayout, parametercount, parametervaluecount, BackendExecutionPlan,
+    BackendLoweringReport, backend_report, backend_execution_plan
+
 @tea static function gaussian_mean()
     mu ~ normal(0.0f0, 1.0f0)
     {:y} ~ normal(mu, 1.0f0)

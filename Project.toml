@@ -1,7 +1,7 @@
 name = "UncertainTea"
 uuid = "9b1291ec-f7ff-476f-9e6f-459056809ae0"
 authors = ["shohei81"]
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"

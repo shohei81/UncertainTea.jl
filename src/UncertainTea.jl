@@ -7,25 +7,31 @@ using Random
 using SpecialFunctions: digamma, loggamma, erf, erfc, erfcx, erfinv, erfcinv, logerfc, beta_inc, gamma_inc
 
 export @tea
-export AddressSpec, ChoiceSpec, ModelSpec
-export AddressLiteralPart, AddressDynamicPart
-export DistributionSpec, GenerativeCallSpec, RawChoiceRhsSpec, BroadcastDistributionSpec
-export LoopScopeSpec
-export ParameterLayout, ParameterSlotSpec
-export ExecutionPlan, ChoicePlanStep
-export DeterministicPlanStep, LoopPlanStep
-export IdentityTransform,
-    VectorIdentityTransform, LogTransform, LogitTransform, SimplexTransform, CholeskyCorrTransform,
-    CholeskyCovTransform
-export VectorLogTransform, VectorLogitTransform
-export BoundedTransform, LowerBoundedTransform, UpperBoundedTransform
 export ChoiceMap, TeaModel, TeaTrace
-export StaticMode, DynamicMode
-export modelspec, isstaticaddress, isaddresstemplate, isrepeatedchoice, hasrepeatedchoices
-export parameterlayout, parametercount, parametervaluecount
-export executionplan
 export choicemap, generate, assess, logjoint, logjoint_unconstrained, logjoint_gradient_unconstrained
-export BackendExecutionPlan, BackendLoweringReport, backend_report, backend_execution_plan
+
+# --- Internal / advanced interfaces (issue #283) ----------------------------
+# The IR, execution-plan, transform, and lowering-introspection names below are
+# implementation details. They remain reachable QUALIFIED (`UncertainTea.ExecutionPlan`,
+# `UncertainTea.backend_report`, ...) for white-box tests and power users, but are
+# deliberately NOT exported, so `using UncertainTea` no longer floods the namespace
+# with ~45 compiler internals. They carry NO semver stability guarantee; the exported
+# surface (see docs/src/api.md) is the supported public API.
+#   IR specs         : AddressSpec, ChoiceSpec, ModelSpec, AddressLiteralPart,
+#                      AddressDynamicPart, DistributionSpec, GenerativeCallSpec,
+#                      RawChoiceRhsSpec, BroadcastDistributionSpec, LoopScopeSpec
+#   Execution plan   : ParameterLayout, ParameterSlotSpec, ExecutionPlan, ChoicePlanStep,
+#                      DeterministicPlanStep, LoopPlanStep, executionplan
+#   Transforms       : IdentityTransform, VectorIdentityTransform, LogTransform,
+#                      LogitTransform, SimplexTransform, CholeskyCorrTransform,
+#                      CholeskyCovTransform, VectorLogTransform, VectorLogitTransform,
+#                      BoundedTransform, LowerBoundedTransform, UpperBoundedTransform
+#   Modes            : StaticMode, DynamicMode
+#   Introspection    : modelspec, isstaticaddress, isaddresstemplate, isrepeatedchoice,
+#                      hasrepeatedchoices, parameterlayout, parametercount, parametervaluecount
+#   Lowering report  : BackendExecutionPlan, BackendLoweringReport, backend_report,
+#                      backend_execution_plan
+
 export batched_logjoint, batched_logjoint_unconstrained, batched_logjoint_gradient_unconstrained
 export BatchedLogjointGradientCache, batched_logjoint_gradient_unconstrained!
 export initialparameters, parameter_vector, parameterchoicemap
