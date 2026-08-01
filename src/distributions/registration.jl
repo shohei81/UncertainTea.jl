@@ -45,6 +45,7 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :orderedlogistic,
     :zeroinflatedpoisson,
     :zeroinflatednegativebinomial,
+    :vonmises,
     :mvstudentt,
     :mvstudenttdense,
     :wishart,
