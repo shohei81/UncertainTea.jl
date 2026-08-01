@@ -49,9 +49,11 @@ repeated = choicemap((:y => i, ys[i]) for i in eachindex(ys))
 trace2, logw2 = generate(iid_model, (length(ys),), repeated; rng=MersenneTwister(2))
 params2 = [Float64(trace2[:mu])]
 
+# `cbrt` stays outside the backend primitive allowlist (sin joined it in issue
+# #286), so this model still exercises the honest-unsupported reporting path.
 @tea static function unsupported_backend_model()
     mu ~ normal(0.0f0, 1.0f0)
-    sigma = sin(mu)
+    sigma = cbrt(mu)
     {:y} ~ normal(mu, 1.0f0)
     return sigma
 end
