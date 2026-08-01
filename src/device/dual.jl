@@ -113,6 +113,19 @@ end
     t = tanh(a.value)
     DeviceDual{T}(t, (one(T) - t * t) * a.deriv)
 end
+@inline function Base.tan(a::DeviceDual{T}) where {T}
+    t = tan(a.value)
+    DeviceDual{T}(t, (one(T) + t * t) * a.deriv)
+end
+@inline function Base.sinh(a::DeviceDual{T}) where {T}
+    DeviceDual{T}(sinh(a.value), cosh(a.value) * a.deriv)
+end
+@inline function Base.cosh(a::DeviceDual{T}) where {T}
+    DeviceDual{T}(cosh(a.value), sinh(a.value) * a.deriv)
+end
+@inline function Base.atan(a::DeviceDual{T}) where {T}
+    DeviceDual{T}(atan(a.value), a.deriv / (one(T) + a.value * a.value))
+end
 
 # ---- min / max / clamp (value-selected branches) --------------------------------
 

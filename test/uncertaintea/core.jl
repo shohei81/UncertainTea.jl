@@ -55,6 +55,7 @@ core_test_files = [
     ("backend_glm_logistic.jl", "backend"),
     ("batched_observed_loop_gradient.jl", "backend"),
     ("batched_adtype.jl", "backend"),
+    ("backend_trig_primitives.jl", "backend"),
     ("batched_observed_loop_suffstats.jl", "backend"),
     ("threaded_batched_gradient.jl", "backend"),
     # "device": the KernelAbstractions device kernels (heavier compile).

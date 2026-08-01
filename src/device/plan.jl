@@ -553,7 +553,12 @@ end
 
 # ---- lowering ------------------------------------------------------------------
 
-const DEVICE_SUPPORTED_PRIMITIVES = (:+, :-, :*, :/, :^, :exp, :log, :log1p, :sqrt, :abs, :min, :max, :clamp)
+const DEVICE_SUPPORTED_PRIMITIVES = (
+    :+, :-, :*, :/, :^, :exp, :log, :log1p, :sqrt, :abs, :min, :max, :clamp,
+    # issue #286: trig/hyperbolic/expm1 -- Metal-supported Base intrinsics with
+    # DeviceDual/DeviceGradN rules, mirrored in _device_apply below
+    :sin, :cos, :tan, :tanh, :sinh, :cosh, :atan, :expm1,
+)
 
 function _device_issue!(issues::Vector{String}, message::String)
     push!(issues, message)

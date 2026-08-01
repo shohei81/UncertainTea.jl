@@ -47,6 +47,15 @@
 @inline _device_apply(::Val{:max}, args...) = max(args...)
 @inline _device_apply(::Val{:clamp}, a, b, c) = clamp(a, b, c)
 
+@inline _device_apply(::Val{:sin}, a) = sin(a)
+@inline _device_apply(::Val{:cos}, a) = cos(a)
+@inline _device_apply(::Val{:tan}, a) = tan(a)
+@inline _device_apply(::Val{:tanh}, a) = tanh(a)
+@inline _device_apply(::Val{:sinh}, a) = sinh(a)
+@inline _device_apply(::Val{:cosh}, a) = cosh(a)
+@inline _device_apply(::Val{:atan}, a) = atan(a)
+@inline _device_apply(::Val{:expm1}, a) = expm1(a)
+
 # ---- choice value resolution ---------------------------------------------------
 
 @inline function _device_store_binding!(slots, binding_slot::Int32, value, col)

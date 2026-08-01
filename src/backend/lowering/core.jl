@@ -17,6 +17,20 @@ const GPU_BACKEND_SUPPORTED_PRIMITIVES = Symbol[
     :min,
     :max,
     :clamp,
+    # trig/hyperbolic/expm1 (issue #286): link functions, periodic features, and
+    # angle math stay on the fast path. Every op here must be mirrored in the
+    # backend evaluator (_backend_primitive), the analytic gradient chain rules
+    # (BACKEND_GRADIENT_SUPPORTED_PRIMITIVES + _apply_backend_numeric_gradient_unary!),
+    # DEVICE_SUPPORTED_PRIMITIVES + _device_apply, and the device dual rules
+    # (DeviceDual / DeviceGradN).
+    :sin,
+    :cos,
+    :tan,
+    :tanh,
+    :sinh,
+    :cosh,
+    :atan,
+    :expm1,
 ]
 
 abstract type AbstractBackendExpr end

@@ -1,5 +1,7 @@
-const BACKEND_GRADIENT_SUPPORTED_PRIMITIVES =
-    Set([:+, :-, :*, :/, :^, :%, :exp, :log, :log1p, :sqrt, :abs, :min, :max, :clamp])
+const BACKEND_GRADIENT_SUPPORTED_PRIMITIVES = Set([
+    :+, :-, :*, :/, :^, :%, :exp, :log, :log1p, :sqrt, :abs, :min, :max, :clamp,
+    :sin, :cos, :tan, :tanh, :sinh, :cosh, :atan, :expm1,
+])
 
 _backend_gradient_supported_expr(::BackendLiteralExpr) = true
 _backend_gradient_supported_expr(::BackendSlotExpr) = true
@@ -534,6 +536,78 @@ function _apply_backend_numeric_gradient_unary!(
             original = values[batch_index]
             values[batch_index] = abs(original)
             factor = original > 0 ? one(T) : (original < 0 ? -one(T) : zero(T))
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :sin
+        for batch_index in eachindex(values)
+            original = values[batch_index]
+            values[batch_index] = sin(original)
+            factor = cos(original)
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :cos
+        for batch_index in eachindex(values)
+            original = values[batch_index]
+            values[batch_index] = cos(original)
+            factor = -sin(original)
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :tan
+        for batch_index in eachindex(values)
+            value = tan(values[batch_index])
+            values[batch_index] = value
+            factor = 1 + value * value      # sec^2 = 1 + tan^2
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :tanh
+        for batch_index in eachindex(values)
+            value = tanh(values[batch_index])
+            values[batch_index] = value
+            factor = 1 - value * value
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :sinh
+        for batch_index in eachindex(values)
+            original = values[batch_index]
+            values[batch_index] = sinh(original)
+            factor = cosh(original)
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :cosh
+        for batch_index in eachindex(values)
+            original = values[batch_index]
+            values[batch_index] = cosh(original)
+            factor = sinh(original)
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] *= factor
+            end
+        end
+    elseif op === :atan
+        for batch_index in eachindex(values)
+            original = values[batch_index]
+            values[batch_index] = atan(original)
+            denominator = 1 + original * original
+            for parameter_index in axes(gradients, 1)
+                gradients[parameter_index, batch_index] /= denominator
+            end
+        end
+    elseif op === :expm1
+        for batch_index in eachindex(values)
+            original = values[batch_index]
+            values[batch_index] = expm1(original)
+            factor = exp(original)
             for parameter_index in axes(gradients, 1)
                 gradients[parameter_index, batch_index] *= factor
             end
