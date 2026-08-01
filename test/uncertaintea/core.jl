@@ -37,6 +37,7 @@ core_test_files = [
     ("dist_multivariate.jl", "dist"),
     ("dist_lkj_cholesky.jl", "dist"),
     ("dist_gaussian_process.jl", "dist"),
+    ("dist_sparse_gaussian_process.jl", "dist"),
     ("dist_hidden_markov.jl", "dist"),
     ("dist_gp_latent.jl", "dist"),
     ("transform_logit_saturation.jl", "dist"),
