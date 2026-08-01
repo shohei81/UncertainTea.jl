@@ -38,14 +38,13 @@ function _gp_rbf_cross(a::AbstractMatrix, b::AbstractMatrix, lengthscale, varian
     return K
 end
 
-struct SparseGaussianProcessDist{X<:AbstractMatrix,Z<:AbstractMatrix,L,T} <: AbstractTeaDistribution
+struct SparseGaussianProcessDist{X<:AbstractMatrix,Z<:AbstractMatrix,K<:AbstractGPKernel,T} <: AbstractTeaDistribution
     inputs::X            # D x N
     inducing::Z          # D x M
-    lengthscale::L       # scalar (isotropic) or length-D vector (ARD)
-    variance::T
+    kernel::K
     noise::T
 
-    function SparseGaussianProcessDist(inputs::AbstractMatrix, inducing::AbstractMatrix, lengthscale, variance, noise)
+    function SparseGaussianProcessDist(inputs::AbstractMatrix, inducing::AbstractMatrix, kernel::AbstractGPKernel, noise)
         size(inputs, 2) >= 1 || throw(ArgumentError("sparsegaussianprocess requires at least one input point"))
         size(inducing, 2) >= 1 || throw(ArgumentError("sparsegaussianprocess requires at least one inducing point"))
         size(inputs, 1) == size(inducing, 1) || throw(
@@ -54,17 +53,9 @@ struct SparseGaussianProcessDist{X<:AbstractMatrix,Z<:AbstractMatrix,L,T} <: Abs
                 "$(size(inputs, 1)) and $(size(inducing, 1))",
             ),
         )
-        if lengthscale isa AbstractVector
-            length(lengthscale) == size(inputs, 1) || throw(
-                ArgumentError(
-                    "sparsegaussianprocess ARD lengthscale length $(length(lengthscale)) must match the " *
-                    "input dimension $(size(inputs, 1))",
-                ),
-            )
-        end
-        v, nz = promote(variance, noise)
-        return new{typeof(inputs),typeof(inducing),typeof(lengthscale),typeof(v)}(
-            inputs, inducing, lengthscale, v, nz,
+        _gp_check_kernel_ard("sparsegaussianprocess", kernel, inputs)
+        return new{typeof(inputs),typeof(inducing),typeof(kernel),typeof(noise)}(
+            inputs, inducing, kernel, noise,
         )
     end
 end
@@ -84,9 +75,14 @@ With `inducing = inputs` it reduces exactly to `gaussianprocess`. CPU-reference
 only (not device-lowered). Expects centred outputs (the prior mean is zero).
 """
 function sparsegaussianprocess(inputs, inducing, lengthscale, variance, noise)
+    return sparsegaussianprocess(inputs, inducing, RBFKernel(lengthscale, variance), noise)
+end
+
+# kernel-spec form (issue #290)
+function sparsegaussianprocess(inputs, inducing, kernel::AbstractGPKernel, noise)
     input_matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
     inducing_matrix = inducing isa AbstractVector ? reshape(collect(float.(inducing)), 1, length(inducing)) : inducing
-    return SparseGaussianProcessDist(input_matrix, inducing_matrix, lengthscale, variance, noise)
+    return SparseGaussianProcessDist(input_matrix, inducing_matrix, kernel, noise)
 end
 
 # FITC log marginal likelihood via Woodbury (issue #281). Returns -Inf when a
@@ -98,20 +94,20 @@ function logpdf(sgp::SparseGaussianProcessDist, y::AbstractVector)
     length(y) == n || throw(ArgumentError(
         "sparsegaussianprocess observation length $(length(y)) must match the $(n) inputs",
     ))
-    l, v, nz = sgp.lengthscale, sgp.variance, sgp.noise
-    T = promote_type(eltype(sgp.inputs), _gp_lengthscale_eltype(l), typeof(v), typeof(nz), eltype(y))
+    kern, nz = sgp.kernel, sgp.noise
+    T = promote_type(eltype(sgp.inputs), _gp_kernel_eltype(kern), typeof(nz), eltype(y))
 
-    Kmm = _gp_rbf_cross(sgp.inducing, sgp.inducing, l, v)
+    Kmm = _gp_kernel_cross(kern, sgp.inducing, sgp.inducing)
     @inbounds for i = 1:m
         Kmm[i, i] += T(1e-6)                                   # jitter for a PD K_MM
     end
-    Kmn = _gp_rbf_cross(sgp.inducing, sgp.inputs, l, v)        # M x N
+    Kmn = _gp_kernel_cross(kern, sgp.inducing, sgp.inputs)     # M x N
 
     chol_mm = cholesky(Symmetric(Kmm); check=false)
     issuccess(chol_mm) || return convert(float(T), -Inf)
     A = chol_mm.L \ Kmn                                        # M x N, Q_NN = A' A
 
-    knn_diag = v^2                                             # RBF self-covariance
+    knn_diag = _gp_kernel_self(kern)                           # stationary self-covariance
     lambda = Vector{T}(undef, n)
     @inbounds for i = 1:n
         qii = zero(T)
@@ -148,14 +144,14 @@ end
 function Random.rand(rng::AbstractRNG, sgp::SparseGaussianProcessDist)
     n = size(sgp.inputs, 2)
     m = size(sgp.inducing, 2)
-    l, v, nz = sgp.lengthscale, sgp.variance, sgp.noise
-    Kmm = _gp_rbf_cross(sgp.inducing, sgp.inducing, l, v)
+    kern, nz = sgp.kernel, sgp.noise
+    Kmm = _gp_kernel_cross(kern, sgp.inducing, sgp.inducing)
     @inbounds for i = 1:m
         Kmm[i, i] += 1e-6
     end
-    Kmn = _gp_rbf_cross(sgp.inducing, sgp.inputs, l, v)
+    Kmn = _gp_kernel_cross(kern, sgp.inducing, sgp.inputs)
     A = cholesky(Symmetric(Kmm)).L \ Kmn
-    lambda = [v^2 - sum(abs2, view(A, :, i)) + nz^2 + 1e-8 for i = 1:n]
+    lambda = [_gp_kernel_self(kern) - sum(abs2, view(A, :, i)) + nz^2 + 1e-8 for i = 1:n]
     # sample from N(0, Q_NN + diag(lambda)) = A' u + sqrt(lambda) .* eps
     return transpose(A) * randn(rng, m) .+ sqrt.(max.(lambda, 0.0)) .* randn(rng, n)
 end

@@ -21,6 +21,169 @@ _gp_inv_two_l2(lengthscale::AbstractVector, d::Int) = inv(2 * lengthscale[d]^2)
 _gp_lengthscale_eltype(lengthscale::Number) = typeof(lengthscale)
 _gp_lengthscale_eltype(lengthscale::AbstractVector) = eltype(lengthscale)
 
+# --- kernel specifications (issue #290) ---------------------------------------
+#
+# A GP kernel is a lightweight spec struct with two elementwise operations:
+# `_gp_kernel_element(k, a, i, b, j)` (the covariance of columns a[:, i] and
+# b[:, j]) and `_gp_kernel_self(k)` (the self-covariance k(x, x), constant for
+# the stationary kernels here; used by the FITC diagonal correction). All
+# hyperparameters may be latent-flowing (ForwardDiff / Enzyme generic), and
+# `lengthscale` is a scalar (isotropic) or length-D ARD vector wherever it
+# scales a distance. `kernel_sum` / `kernel_product` compose kernels.
+
+abstract type AbstractGPKernel end
+
+struct RBFKernel{L,T} <: AbstractGPKernel
+    lengthscale::L
+    variance::T
+end
+
+struct Matern32Kernel{L,T} <: AbstractGPKernel
+    lengthscale::L
+    variance::T
+end
+
+struct Matern52Kernel{L,T} <: AbstractGPKernel
+    lengthscale::L
+    variance::T
+end
+
+# The standard exp-sine-squared periodic kernel over the isotropic input
+# distance; `period` is the repeat length.
+struct PeriodicKernel{L,T,P} <: AbstractGPKernel
+    lengthscale::L
+    variance::T
+    period::P
+end
+
+struct SumKernel{A<:AbstractGPKernel,B<:AbstractGPKernel} <: AbstractGPKernel
+    a::A
+    b::B
+end
+
+struct ProductKernel{A<:AbstractGPKernel,B<:AbstractGPKernel} <: AbstractGPKernel
+    a::A
+    b::B
+end
+
+"""
+    rbf_kernel(lengthscale, variance)
+    matern32_kernel(lengthscale, variance)
+    matern52_kernel(lengthscale, variance)
+    periodic_kernel(lengthscale, variance, period)
+    kernel_sum(a, b), kernel_product(a, b)
+
+GP kernel constructors for `gaussianprocess(inputs, kernel, noise)`,
+`sparsegaussianprocess(inputs, inducing, kernel, noise)`, and
+`gp_cholesky(inputs, kernel, noise)` (issue #290). `lengthscale` is a positive
+scalar or a length-`D` ARD vector; `variance` the signal standard deviation;
+`period` the periodic repeat length. Matérn 3/2 and 5/2 give once/twice
+mean-square-differentiable sample paths (the common defaults when RBF is too
+smooth); the periodic kernel is the standard exp-sine-squared form over the
+isotropic input distance. `kernel_sum` / `kernel_product` compose kernels
+(e.g. a locally-periodic `kernel_product(periodic_kernel(...), rbf_kernel(...))`).
+"""
+rbf_kernel(lengthscale, variance) = RBFKernel(lengthscale, variance)
+matern32_kernel(lengthscale, variance) = Matern32Kernel(lengthscale, variance)
+matern52_kernel(lengthscale, variance) = Matern52Kernel(lengthscale, variance)
+periodic_kernel(lengthscale, variance, period) = PeriodicKernel(lengthscale, variance, period)
+kernel_sum(a::AbstractGPKernel, b::AbstractGPKernel) = SumKernel(a, b)
+kernel_product(a::AbstractGPKernel, b::AbstractGPKernel) = ProductKernel(a, b)
+
+# lengthscale-scaled squared distance sum_d ((a_d - b_d) / l_d)^2
+@inline function _gp_scaled_sqdist(lengthscale, a, i, b, j)
+    d2 = zero(promote_type(eltype(a), eltype(b), _gp_lengthscale_eltype(lengthscale)))
+    @inbounds for k in axes(a, 1)
+        dk = a[k, i] - b[k, j]
+        d2 += dk * dk * (2 * _gp_inv_two_l2(lengthscale, k))
+    end
+    return d2
+end
+
+# unscaled squared distance sum_d (a_d - b_d)^2
+@inline function _gp_sqdist(a, i, b, j)
+    d2 = zero(promote_type(eltype(a), eltype(b)))
+    @inbounds for k in axes(a, 1)
+        dk = a[k, i] - b[k, j]
+        d2 += dk * dk
+    end
+    return d2
+end
+
+@inline _gp_kernel_element(k::RBFKernel, a, i, b, j) =
+    k.variance^2 * exp(-_gp_scaled_sqdist(k.lengthscale, a, i, b, j) / 2)
+
+@inline function _gp_kernel_element(k::Matern32Kernel, a, i, b, j)
+    r2 = _gp_scaled_sqdist(k.lengthscale, a, i, b, j)
+    # guard r == 0 (the diagonal): sqrt has an infinite derivative at 0, so a
+    # dual-valued lengthscale would produce a NaN gradient channel there; the
+    # self-covariance is exactly variance^2
+    r2 == 0 && return k.variance^2
+    r = sqrt(r2)
+    s = sqrt(oftype(r, 3)) * r
+    return k.variance^2 * (1 + s) * exp(-s)
+end
+
+@inline function _gp_kernel_element(k::Matern52Kernel, a, i, b, j)
+    r2 = _gp_scaled_sqdist(k.lengthscale, a, i, b, j)
+    r2 == 0 && return k.variance^2      # see the Matern-3/2 diagonal guard
+    r = sqrt(r2)
+    s = sqrt(oftype(r, 5)) * r
+    return k.variance^2 * (1 + s + 5 * r2 / 3) * exp(-s)
+end
+
+@inline function _gp_kernel_element(k::PeriodicKernel, a, i, b, j)
+    r = sqrt(_gp_sqdist(a, i, b, j))
+    sine = sin(oftype(r, pi) * r / k.period)
+    return k.variance^2 * exp(-2 * sine * sine / (k.lengthscale^2))
+end
+
+@inline _gp_kernel_element(k::SumKernel, a, i, b, j) =
+    _gp_kernel_element(k.a, a, i, b, j) + _gp_kernel_element(k.b, a, i, b, j)
+@inline _gp_kernel_element(k::ProductKernel, a, i, b, j) =
+    _gp_kernel_element(k.a, a, i, b, j) * _gp_kernel_element(k.b, a, i, b, j)
+
+# self-covariance k(x, x): variance^2 for the stationary kernels here
+@inline _gp_kernel_self(k::Union{RBFKernel,Matern32Kernel,Matern52Kernel,PeriodicKernel}) = k.variance^2
+@inline _gp_kernel_self(k::SumKernel) = _gp_kernel_self(k.a) + _gp_kernel_self(k.b)
+@inline _gp_kernel_self(k::ProductKernel) = _gp_kernel_self(k.a) * _gp_kernel_self(k.b)
+
+# element type carried by a kernel's hyperparameters (for buffer allocation)
+_gp_kernel_eltype(k::Union{RBFKernel,Matern32Kernel,Matern52Kernel}) =
+    promote_type(_gp_lengthscale_eltype(k.lengthscale), typeof(k.variance))
+_gp_kernel_eltype(k::PeriodicKernel) =
+    promote_type(_gp_lengthscale_eltype(k.lengthscale), typeof(k.variance), typeof(k.period))
+_gp_kernel_eltype(k::Union{SumKernel,ProductKernel}) =
+    promote_type(_gp_kernel_eltype(k.a), _gp_kernel_eltype(k.b))
+
+# cross-covariance block K[i, j] = k(a[:, i], b[:, j]) with no noise/jitter
+function _gp_kernel_cross(k::AbstractGPKernel, a::AbstractMatrix, b::AbstractMatrix)
+    T = promote_type(eltype(a), eltype(b), _gp_kernel_eltype(k))
+    K = Matrix{T}(undef, size(a, 2), size(b, 2))
+    @inbounds for j in axes(b, 2)
+        for i in axes(a, 2)
+            K[i, j] = _gp_kernel_element(k, a, i, b, j)
+        end
+    end
+    return K
+end
+
+# full covariance K = k(X, X) + (noise^2 + jitter) I
+function _gp_kernel_covariance(k::AbstractGPKernel, inputs::AbstractMatrix, noise)
+    K = _gp_kernel_cross(k, inputs, inputs)
+    T = eltype(K)
+    diag_add = noise^2 + T(1e-8)
+    @inbounds for i in axes(K, 1)
+        K[i, i] += diag_add
+    end
+    return K
+end
+
+# retained as a thin RBF wrapper (issue #290 moved the general machinery to the
+# kernel-spec layer above)
+_gp_rbf_covariance_kernel(inputs, lengthscale, variance, noise) =
+    _gp_kernel_covariance(RBFKernel(lengthscale, variance), inputs, noise)
+
 function _gp_rbf_covariance(inputs::AbstractMatrix, lengthscale, variance, noise)
     n = size(inputs, 2)
     T = promote_type(eltype(inputs), _gp_lengthscale_eltype(lengthscale), typeof(variance), typeof(noise))
@@ -40,24 +203,37 @@ function _gp_rbf_covariance(inputs::AbstractMatrix, lengthscale, variance, noise
     return K
 end
 
-struct GaussianProcessDist{X<:AbstractMatrix,L,T} <: AbstractTeaDistribution
+# ARD lengthscale sanity against the input dimension (shared by every kernel
+# that scales a distance per dimension)
+function _gp_check_ard_lengthscale(family::String, lengthscale, inputs::AbstractMatrix)
+    lengthscale isa AbstractVector || return nothing
+    length(lengthscale) == size(inputs, 1) || throw(
+        ArgumentError(
+            "$(family) ARD lengthscale length $(length(lengthscale)) must match the " *
+            "input dimension $(size(inputs, 1))",
+        ),
+    )
+    return nothing
+end
+
+_gp_check_kernel_ard(family::String, k::Union{RBFKernel,Matern32Kernel,Matern52Kernel}, inputs) =
+    _gp_check_ard_lengthscale(family, k.lengthscale, inputs)
+_gp_check_kernel_ard(::String, ::PeriodicKernel, inputs) = nothing
+function _gp_check_kernel_ard(family::String, k::Union{SumKernel,ProductKernel}, inputs)
+    _gp_check_kernel_ard(family, k.a, inputs)
+    _gp_check_kernel_ard(family, k.b, inputs)
+    return nothing
+end
+
+struct GaussianProcessDist{X<:AbstractMatrix,K<:AbstractGPKernel,T} <: AbstractTeaDistribution
     inputs::X            # D x N
-    lengthscale::L       # scalar (isotropic) or length-D vector (ARD)
-    variance::T
+    kernel::K
     noise::T
 
-    function GaussianProcessDist(inputs::AbstractMatrix, lengthscale, variance, noise)
+    function GaussianProcessDist(inputs::AbstractMatrix, kernel::AbstractGPKernel, noise)
         size(inputs, 2) >= 1 || throw(ArgumentError("gaussianprocess requires at least one input point"))
-        if lengthscale isa AbstractVector
-            length(lengthscale) == size(inputs, 1) || throw(
-                ArgumentError(
-                    "gaussianprocess ARD lengthscale length $(length(lengthscale)) must match the " *
-                    "input dimension $(size(inputs, 1))",
-                ),
-            )
-        end
-        v, nz = promote(variance, noise)
-        return new{typeof(inputs),typeof(lengthscale),typeof(v)}(inputs, lengthscale, v, nz)
+        _gp_check_kernel_ard("gaussianprocess", kernel, inputs)
+        return new{typeof(inputs),typeof(kernel),typeof(noise)}(inputs, kernel, noise)
     end
 end
 
@@ -79,7 +255,13 @@ the ARD marginal likelihood is a natural `reverse_mode_gradient` target (issue
 """
 function gaussianprocess(inputs, lengthscale, variance, noise)
     matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
-    return GaussianProcessDist(matrix, lengthscale, variance, noise)
+    return GaussianProcessDist(matrix, RBFKernel(lengthscale, variance), noise)
+end
+
+# kernel-spec form (issue #290): `gaussianprocess(X, matern52_kernel(l, v), noise)`
+function gaussianprocess(inputs, kernel::AbstractGPKernel, noise)
+    matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
+    return GaussianProcessDist(matrix, kernel, noise)
 end
 
 """
@@ -111,7 +293,14 @@ end
 """
 function gp_cholesky(inputs, lengthscale, variance, noise)
     matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
-    K = _gp_rbf_covariance(matrix, lengthscale, variance, noise)
+    K = _gp_kernel_covariance(RBFKernel(lengthscale, variance), matrix, noise)
+    return cholesky(Symmetric(K)).L
+end
+
+# kernel-spec form (issue #290)
+function gp_cholesky(inputs, kernel::AbstractGPKernel, noise)
+    matrix = inputs isa AbstractVector ? reshape(collect(float.(inputs)), 1, length(inputs)) : inputs
+    K = _gp_kernel_covariance(kernel, matrix, noise)
     return cholesky(Symmetric(K)).L
 end
 
@@ -119,7 +308,7 @@ function logpdf(gp::GaussianProcessDist, y::AbstractVector)
     n = size(gp.inputs, 2)
     length(y) == n ||
         throw(ArgumentError("gaussianprocess observation length $(length(y)) must match the $(n) inputs"))
-    K = _gp_rbf_covariance(gp.inputs, gp.lengthscale, gp.variance, gp.noise)
+    K = _gp_kernel_covariance(gp.kernel, gp.inputs, gp.noise)
     factorization = cholesky(Symmetric(K); check=false)
     issuccess(factorization) || return convert(float(eltype(K)), -Inf)
     alpha = factorization \ y
@@ -128,7 +317,7 @@ function logpdf(gp::GaussianProcessDist, y::AbstractVector)
 end
 
 function Random.rand(rng::AbstractRNG, gp::GaussianProcessDist)
-    K = _gp_rbf_covariance(gp.inputs, gp.lengthscale, gp.variance, gp.noise)
+    K = _gp_kernel_covariance(gp.kernel, gp.inputs, gp.noise)
     L = cholesky(Symmetric(K)).L
     return L * randn(rng, size(gp.inputs, 2))
 end

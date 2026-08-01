@@ -500,6 +500,26 @@ Requirements:
   ard_gp(X, lengthscales, n) = gaussianprocess(X, lengthscales, 1.0, 0.2)
   ```
 
+  Beyond the RBF shorthand, a **kernel specification** may be passed instead of
+  `(lengthscale, variance)` (issue #290): `rbf_kernel(l, v)`,
+  `matern32_kernel(l, v)` / `matern52_kernel(l, v)` (once/twice
+  mean-square-differentiable paths — the common defaults when RBF is too
+  smooth), `periodic_kernel(l, v, period)` (exp-sine-squared seasonality), and
+  the compositions `kernel_sum(a, b)` / `kernel_product(a, b)` (e.g. a
+  locally-periodic `kernel_product(periodic_kernel(...), rbf_kernel(...))`).
+  All hyperparameters may be latent-flowing, `lengthscale` may be an ARD
+  vector, and the same specs work for `sparsegaussianprocess(X, Z, kernel,
+  noise)` and `gp_cholesky(X, kernel, noise)`:
+
+  ```julia
+  @tea static function gp_matern(X)
+      logl ~ normal(0.0, 1.0)
+      logn ~ normal(-1.0, 1.0)
+      {:y} ~ gaussianprocess(X, matern32_kernel(exp(logl), 1.0), exp(logn))
+      return logl
+  end
+  ```
+
   `gaussianprocess` marginalizes the latent function analytically, so it only fits
   a **Gaussian** likelihood. For **direct latent-function inference** — GP
   classification, count regression, or any non-Gaussian likelihood —
