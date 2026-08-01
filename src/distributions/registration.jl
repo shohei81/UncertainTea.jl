@@ -43,6 +43,8 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :sparsegaussianprocess,
     :hmm,
     :orderedlogistic,
+    :zeroinflatedpoisson,
+    :zeroinflatednegativebinomial,
     :mvstudentt,
     :mvstudenttdense,
     :wishart,

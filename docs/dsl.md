@@ -571,6 +571,13 @@ Requirements:
   latent-flowing; give latent cutpoints an increasing parameterization (base +
   `exp` gaps, the HMM ordered-means recipe) since there is no ordered-vector
   transform yet. CPU-reference only.
+- `zeroinflatedpoisson(p, lambda)` and
+  `zeroinflatednegativebinomial(p, successes, probability)` are zero-inflated
+  counts for excess-zero data (ecology, insurance, utilization): a structural
+  zero with probability `p` mixed with the count component, `P(y = 0) = p +
+  (1−p)·P_count(0)` and `P(y = k) = (1−p)·P_count(k)`, scored via a stable
+  logaddexp on the zero branch. All parameters may be latent-flowing (`p`
+  typically through a logistic link). CPU-reference only.
 - `hmm(init, transition, means, sigma)` is a hidden Markov model with Gaussian
   emissions. `init` is the length-`K` initial-state distribution and `transition`
   the `K×K` row-stochastic transition matrix (fixed dynamics, supplied as model
