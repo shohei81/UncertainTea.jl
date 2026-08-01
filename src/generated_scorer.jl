@@ -369,6 +369,8 @@ function _gen_choice_value_expr(step::CompiledChoicePlanStep)
         end
         return Expr(:call, collect, Expr(:call, view, :params, indices))
     end
+    # static whole-vector observation (issue #288): the dense site vector itself
+    step.stage_iterator_slot == -1 && return Expr(:ref, :obs, step.stage_index)
     # staged loop observation: dense per-site Float64 vector indexed by the
     # enclosing loop iterator slot
     return Expr(:ref, Expr(:ref, :obs, step.stage_index), _gen_slot_sym(step.stage_iterator_slot))

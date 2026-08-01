@@ -129,9 +129,14 @@ stg_reference_gradient(model, theta, args, cons) =
         @test sum(stage.sites[1].filled) == stg_n
         @test stage.sites[1].values == stg_y
         @test UncertainTea._stage_is_current(stage, stg_gauss_cons)
-        # a broadcast (single static address) model has nothing to stage
+        # a broadcast (single static address) model now stages the WHOLE observed
+        # vector as one static site (iterator slot -1, issue #288), which puts it
+        # on the generated-scorer / reverse-mode path
         bc_resolved = UncertainTea._resolve_signature_plan(stg_broadcast, stg_bc_cons)
-        @test bc_resolved.compiled.stage_count == 0
+        @test bc_resolved.compiled.stage_count == 1
+        bc_stage = UncertainTea._stage_observations(stg_broadcast, bc_resolved, [0.1, -0.2], (stg_xs,), stg_bc_cons)
+        @test bc_stage isa UncertainTea.ObservationStage
+        @test all(bc_stage.sites[1].filled)
     end
 
     @testset "stg_mutated_constraints_fall_back_to_live_lookups" begin

@@ -16,6 +16,7 @@ core_test_files = [
     ("dsl_contract_guards.jl", "dsl"),
     ("batched_logjoint_and_gradient.jl", "dsl"),
     ("interpreter_obs_staging.jl", "dsl"),
+    ("static_vector_obs_staging.jl", "dsl"),
     ("hmc_and_nuts_workspace.jl", "dsl"),
     ("nuts_scheduler_and_backend.jl", "dsl"),
     ("tuple_and_loop_addresses.jl", "dsl"),

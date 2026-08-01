@@ -182,11 +182,17 @@ end
         gsi_UT._USE_GENERATED_SCORER[] = true
         logjoint(gsi_marg, Float64[], (), choicemap((:y, 0.7)))
         @test gsi_UT._GEN_SCORER_LAST_USED[] == false
-        # broadcast observation
+        # broadcast observation: now GENERATED via static whole-vector staging
+        # (issue #288) -- and identical to the interpreter
         bxs = collect(0.0:0.2:1.0)
         by = 1.1 .* bxs
-        logjoint(gsi_broadcast, [0.3, 0.5], (bxs,), choicemap(:y => by))
-        @test gsi_UT._GEN_SCORER_LAST_USED[] == false
+        bc_prev = gsi_UT._USE_GENERATED_SCORER[]
+        gsi_UT._USE_GENERATED_SCORER[] = false
+        bc_interp = logjoint(gsi_broadcast, [0.3, 0.5], (bxs,), choicemap(:y => by))
+        gsi_UT._USE_GENERATED_SCORER[] = bc_prev
+        bc_gen = logjoint(gsi_broadcast, [0.3, 0.5], (bxs,), choicemap(:y => by))
+        @test gsi_UT._GEN_SCORER_LAST_USED[]
+        @test bc_gen == bc_interp
         # Float32 observation (not densifiable as Float64)
         f32_cons = choicemap(((:y => i, Float32(gsi_y[i])) for i = 1:gsi_n)...)
         logjoint(gsi_float32, [0.2], (gsi_n,), f32_cons)
