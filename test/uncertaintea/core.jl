@@ -47,6 +47,7 @@ core_test_files = [
     ("dist_von_mises.jl", "dist"),
     ("dist_gp_latent.jl", "dist"),
     ("elliptical_slice.jl", "inference"),
+    ("prior_predictive_and_rank_rhat.jl", "inference"),
     ("transform_logit_saturation.jl", "dist"),
     ("dist_integer_params.jl", "dist"),
     ("dist_count_logfactorial.jl", "dist"),
