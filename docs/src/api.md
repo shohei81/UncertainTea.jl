@@ -1,7 +1,17 @@
 # API Reference
 
 This page auto-renders the docstrings attached to UncertainTea's **exported**
-surface.
+surface. The exported surface **is** the supported public API: the `@tea` DSL,
+the samplers, the distribution families, the diagnostics, and the result types.
+
+!!! note "Public vs. internal (issue #283)"
+    The IR, execution-plan, transform, and lowering-introspection types
+    (`ExecutionPlan`, `ChoicePlanStep`, `DistributionSpec`, `IdentityTransform`,
+    `backend_report`, `StaticMode`, …) are **implementation details** and are no
+    longer exported as of `v0.2.0`. They remain reachable qualified —
+    `UncertainTea.ExecutionPlan`, `UncertainTea.backend_report`, … — for
+    white-box tests and power users, but carry **no semver stability guarantee**.
+    Only the exported names shown below are covered by the versioning contract.
 
 !!! note "Docstring coverage is a work in progress"
     The build runs with `checkdocs=:none` because the exported surface is only
