@@ -120,7 +120,8 @@ their `truncatednormal` / `truncatedstudentt` truncations; the discrete families
 dense `mvnormaldense`, `mvstudentt` / `mvstudenttdense`, `lkjcholesky` (with the
 `scale_cholesky` helper), `gaussianprocess` regression (isotropic or ARD kernel; with
 the `gp_cholesky` helper for direct latent-function inference under non-Gaussian
-likelihoods), `hmm` (Gaussian-emission hidden Markov models via the forward
+likelihoods, and `sparsegaussianprocess` for the `O(NM²+M³)` FITC inducing-point
+approximation), `hmm` (Gaussian-emission hidden Markov models via the forward
 algorithm), and finite `mixture`s; plus `iid` vectors and
 user-defined families via `register_distribution` (`AbstractTeaDistribution`).
 
