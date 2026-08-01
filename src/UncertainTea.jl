@@ -55,6 +55,7 @@ export pathfinder, PathfinderResult
 export variational_mean, variational_samples, variational_covariance
 export predict, PredictiveDraws, addresses, log_evidence
 export nested_sampling, NestedSamplingResult, log_evidence_error, information
+export elliptical_slice, EllipticalSliceResult
 export normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, beta, dirichlet, mvnormal, bernoulli,
     bernoullilogit, geometric, negativebinomial, poisson, studentt, categorical, betabinomial, multinomial,
     discreteuniform
