@@ -404,6 +404,13 @@ function _stage_observation_marker(
     return (stage_counter[], tail.expr.slot)
 end
 
+_static_vector_obs_constructor(constructor) =
+    constructor === gaussianprocess ||
+    constructor === sparsegaussianprocess ||
+    constructor === hmm ||
+    constructor === BroadcastNormalDist ||
+    (constructor isa UnionAll && constructor <: BroadcastScalarDist)
+
 function _compile_plan_step(
     @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
@@ -453,6 +460,20 @@ function _compile_plan_step(
     address = _compile_address(layout, model, step.address)
     stage_index, stage_iterator_slot =
         _stage_observation_marker(address, step.parameter_slot, marginalize, loop_iterator_slots, stage_counter)
+    # Static single-address VECTOR observation (issue #288): the whole observed
+    # vector lives at one all-literal address (`{:y} ~ gaussianprocess(...)`,
+    # `{:y} ~ poisson.(...)`, ...). It stages like a loop site but with the
+    # sentinel iterator slot -1 (the emitted scorer reads the dense site vector
+    # whole instead of indexing it), which puts GP/HMM hyperparameter models and
+    # the broadcast GLMs on the generated-scorer path -- and therefore on the
+    # Enzyme reverse-mode path (#268). The conservative constructor allowlist
+    # keeps custom builders and transform-coupled vector families interpreted.
+    if stage_index == 0 && isnothing(step.parameter_slot) && isnothing(marginalize) &&
+       all(part -> part isa CompiledAddressLiteralPart, address.parts) &&
+       _static_vector_obs_constructor(constructor)
+        stage_counter[] += 1
+        stage_index, stage_iterator_slot = stage_counter[], -1
+    end
     return CompiledChoicePlanStep(
         step.binding_slot,
         address,
@@ -839,6 +860,9 @@ _stage_is_current(stage::ObservationStage, constraints::ChoiceMap) =
 # Staged value for a stage-marked choice step, or `nothing` when the site (or
 # this particular index) must fall back to the ChoiceMap.
 @inline function _staged_observation_value(stage::ObservationStage, step::CompiledChoicePlanStep, env::PlanEnvironment)
+    # static whole-vector sites (iterator slot -1, issue #288) are consumed only
+    # by the generated scorer; the interpreter keeps its ChoiceMap lookup
+    step.stage_iterator_slot == -1 && return nothing
     site = @inbounds stage.sites[step.stage_index]
     index = _environment_value(env, step.stage_iterator_slot)
     index isa Int || return nothing
@@ -1174,7 +1198,21 @@ function _stage_walk_step!(
             throw(ArgumentError("staging walk found no value for choice $(address)"))
         end
     end
-    if step.stage_index != 0 && active[step.stage_index]
+    if step.stage_index != 0 && active[step.stage_index] && step.stage_iterator_slot == -1
+        # static whole-vector observation site (issue #288): the constrained
+        # value is the dense Float64 vector itself (the same Float64-only rule
+        # the loop sites apply; anything else deactivates the site)
+        site = sites[step.stage_index]
+        if value isa Vector{Float64} && !isempty(value)
+            n = length(value)
+            resize!(site.values, n)
+            copyto!(site.values, value)
+            resize!(site.filled, n)
+            fill!(site.filled, true)
+        else
+            active[step.stage_index] = false
+        end
+    elseif step.stage_index != 0 && active[step.stage_index]
         index = _environment_value(env, step.stage_iterator_slot)
         if index isa Int && index >= 1 && value isa Float64
             site = sites[step.stage_index]

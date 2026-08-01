@@ -109,6 +109,50 @@ using Enzyme   # activates UncertainTeaEnzymeExt
               logjoint_gradient_unconstrained(coupled_rev, theta2, (), cm) rtol = 1e-8
     end
 
+    @testset "static-vector-obs models: reverse matches forward (issue #288)" begin
+        # GP / broadcast-GLM / HMM hyperparameter models -- the reverse-mode
+        # killer cases -- now take the generated-scorer path via static
+        # whole-vector observation staging, so the model-level reverse gradient
+        # works where it previously threw ArgumentError.
+        @tea static function svo_gp_rev(X)
+            logl ~ normal(0.0, 1.0)
+            logv ~ normal(0.0, 1.0)
+            logn ~ normal(-1.0, 1.0)
+            {:y} ~ gaussianprocess(X, exp(logl), exp(logv), exp(logn))
+            return logl
+        end
+        rng288 = MersenneTwister(288)
+        Xg = reshape(sort(rand(rng288, 16) .* 5), 1, 16)
+        cm_g = UT.choicemap((:y, randn(rng288, 16)))
+        fg = logjoint_gradient_unconstrained(svo_gp_rev, [0.1, 0.2, -0.8], (Xg,), cm_g)
+        rg = reverse_mode_gradient(svo_gp_rev, [0.1, 0.2, -0.8], (Xg,), cm_g)
+        @test rg ≈ fg rtol = 1e-8
+
+        @tea static function svo_glm_rev(x, n)
+            a ~ normal(0.0, 1.0)
+            b ~ normal(0.0, 1.0)
+            {:y} ~ poisson.(exp.(a .+ b .* x))
+            return a
+        end
+        xg = collect(range(-1.0, 1.0; length=8))
+        cm_p = UT.choicemap((:y, Float64[2, 1, 3, 2, 4, 5, 3, 6]))
+        fp = logjoint_gradient_unconstrained(svo_glm_rev, [0.3, 0.5], (xg, 8), cm_p)
+        rp = reverse_mode_gradient(svo_glm_rev, [0.3, 0.5], (xg, 8), cm_p)
+        @test rp ≈ fp rtol = 1e-8
+
+        @tea static function svo_hmm_rev(init, trans)
+            m1 ~ normal(-1.0, 2.0)
+            log_gap ~ normal(0.0, 1.0)
+            logs ~ normal(-0.5, 0.5)
+            {:y} ~ hmm(init, trans, [m1, m1 + exp(log_gap)], exp(logs))
+            return m1
+        end
+        cm_h = UT.choicemap((:y, randn(MersenneTwister(3), 30)))
+        fh = logjoint_gradient_unconstrained(svo_hmm_rev, [0.1, 0.2, -0.3], ([0.6, 0.4], [0.8 0.2; 0.3 0.7]), cm_h)
+        rh = reverse_mode_gradient(svo_hmm_rev, [0.1, 0.2, -0.3], ([0.6, 0.4], [0.8 0.2; 0.3 0.7]), cm_h)
+        @test rh ≈ fh rtol = 1e-8
+    end
+
     @testset "interpreter-fallback model is rejected with a clear message" begin
         # a scalar (non-loop) observation falls off the generated-scorer path;
         # reverse-mode must reject it rather than silently take a slow route.
