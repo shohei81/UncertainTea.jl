@@ -82,7 +82,8 @@ end
 # Distribution families that may be dot-called as broadcast observations, e.g.
 # `{:y} ~ normal.(mu, sigma)`. Any known distribution family other than these is
 # rejected at macro time.
-const _BROADCAST_DISTRIBUTION_FAMILIES = (:normal,)
+const _BROADCAST_DISTRIBUTION_FAMILIES =
+    (:normal, :poisson, :bernoulli, :bernoullilogit, :exponential, :studentt)
 
 const _KNOWN_DISTRIBUTION_FAMILIES = (
     :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull,
@@ -103,11 +104,18 @@ function _rewrite_broadcast_rhs(rhs, ctxsym)
     argtuple = rhs.args[2]
     (family isa Symbol && argtuple isa Expr && argtuple.head == :tuple) || return nothing
     family in _KNOWN_DISTRIBUTION_FAMILIES || return nothing
-    family in _BROADCAST_DISTRIBUTION_FAMILIES || throw(ArgumentError(
-        "broadcast (dot-call) observations currently support only `normal.(...)`, got `$(family).(...)`",
-    ))
+    family in _BROADCAST_DISTRIBUTION_FAMILIES || throw(
+        ArgumentError(
+            "broadcast (dot-call) observations support $(join(_BROADCAST_DISTRIBUTION_FAMILIES, ", ")); got `$(family).(...)`",
+        ),
+    )
     arguments = Any[_rewrite_tea_expr(arg, ctxsym) for arg in argtuple.args]
-    return Expr(:call, _qualify(:BroadcastNormalDist), arguments...)
+    family === :normal && return Expr(:call, _qualify(:BroadcastNormalDist), arguments...)
+    return Expr(
+        :call,
+        Expr(:curly, _qualify(:BroadcastScalarDist), QuoteNode(family)),
+        arguments...,
+    )
 end
 
 function _rewrite_tea_expr(expr, ctxsym)
@@ -373,9 +381,11 @@ function _rhs_spec_expr(rhs)
        rhs.args[1] isa Symbol && rhs.args[2] isa Expr && rhs.args[2].head == :tuple &&
        rhs.args[1] in _KNOWN_DISTRIBUTION_FAMILIES
         family = rhs.args[1]
-        family in _BROADCAST_DISTRIBUTION_FAMILIES || throw(ArgumentError(
-            "broadcast (dot-call) observations currently support only `normal.(...)`, got `$(family).(...)`",
-        ))
+        family in _BROADCAST_DISTRIBUTION_FAMILIES || throw(
+            ArgumentError(
+                "broadcast (dot-call) observations support $(join(_BROADCAST_DISTRIBUTION_FAMILIES, ", ")); got `$(family).(...)`",
+            ),
+        )
         arguments = Expr(:vect, map(QuoteNode, rhs.args[2].args)...)
         return :($(_qualify(:BroadcastDistributionSpec))($(QuoteNode(family)), $arguments))
     end

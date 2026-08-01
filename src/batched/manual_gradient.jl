@@ -242,6 +242,14 @@ function _backend_gradient_supported_step(step::BackendBroadcastNormalChoicePlan
            _backend_gradient_supported_expr(step.sigma)
 end
 
+# family-generic broadcast scalar observations (issue #287): observation-only,
+# every argument channel must be gradient-differentiable
+function _backend_gradient_supported_step(step::BackendBroadcastScalarChoicePlanStep)
+    return isnothing(step.parameter_slot) &&
+           isnothing(step.binding_slot) &&
+           all(_backend_gradient_supported_expr, step.arguments)
+end
+
 function _backend_gradient_supported_step(step::BackendDeterministicPlanStep, numeric_slots::BitVector)
     return numeric_slots[step.binding_slot] ? _backend_gradient_supported_expr(step.expr) : true
 end
@@ -330,6 +338,8 @@ _backend_gradient_supported_step(step::BackendLKJCholeskyChoicePlanStep, numeric
     _backend_gradient_supported_step(step)
 _backend_gradient_supported_step(step::BackendBroadcastNormalChoicePlanStep, numeric_slots::BitVector) =
     _backend_gradient_supported_step(step)
+_backend_gradient_supported_step(step::BackendBroadcastScalarChoicePlanStep, numeric_slots::BitVector) =
+    _backend_gradient_supported_step(step)
 
 # Latent vector bindings (mvnormal/dirichlet/lkjcholesky/mvnormaldense) are
 # stored as generic per-column vectors with no per-row gradients, so any
@@ -384,6 +394,11 @@ function _backend_step_reads_tainted_slot(step, tainted::BitVector)
     if step isa BackendBroadcastNormalChoicePlanStep
         _mark_backend_generic_expr_slots!(step.mu, referenced_numeric, referenced_index, referenced_generic)
         _mark_backend_generic_expr_slots!(step.sigma, referenced_numeric, referenced_index, referenced_generic)
+    end
+    if step isa BackendBroadcastScalarChoicePlanStep
+        for argument in step.arguments
+            _mark_backend_generic_expr_slots!(argument, referenced_numeric, referenced_index, referenced_generic)
+        end
     end
     # a step's own binding mark is a write, not a read
     if step isa BackendChoicePlanStep && !isnothing(step.binding_slot)

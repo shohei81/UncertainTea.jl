@@ -401,6 +401,52 @@ function _score_backend_step_and_gradient!(
     return totals, gradients
 end
 
+# Family-generic broadcast scalar observation gradient (issue #287): the same
+# per-element loop as broadcast normal, but with a tuple of argument channels
+# and the family's single-source partials (issue #285). Argument k uses numeric
+# scratch k, gradient scratch k, and nested-evaluation depth 2k + 1 (the same
+# depth spacing the two-argument normal path uses).
+function _score_backend_step_and_gradient!(
+    step::BackendBroadcastScalarChoicePlanStep{F},
+    totals::AbstractVector{T},
+    gradients::AbstractMatrix{T},
+    cache::BatchedBackendGradientCache,
+    env::BatchedPlanEnvironment{T},
+    params::AbstractMatrix{T},
+    constraints,
+) where {F,T<:AbstractFloat}
+    isnothing(step.binding_slot) ||
+        throw(BatchedBackendFallback("batched backend gradient does not support broadcast $(F) bindings"))
+    address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
+    observed = _batched_broadcast_observed_values(env, address_parts, constraints)
+    n = _broadcast_uniform_length(observed)
+    arg_count = length(step.arguments)
+    arg_values = ntuple(k -> _batched_numeric_scratch!(env, k), arg_count)
+    arg_gradients = ntuple(k -> _batched_backend_gradient_scratch!(cache, k), arg_count)
+    for element_index = 1:n
+        for k = 1:arg_count
+            _eval_backend_broadcast_numeric_and_gradient!(
+                arg_values[k], arg_gradients[k], cache, env, step.arguments[k], element_index, 2 * k + 1,
+            )
+        end
+        for batch_index in eachindex(totals)
+            value = observed[batch_index][element_index]
+            args = ntuple(k -> arg_values[k][batch_index], arg_count)
+            totals[batch_index] += _broadcast_element_logpdf(Val(F), value, args...)
+            partials = _broadcast_element_partials(Val(F), value, args...)
+            isnothing(partials) && continue
+            for parameter_index in axes(gradients, 1)
+                accumulator = zero(T)
+                for k = 1:arg_count
+                    accumulator += partials[k] * arg_gradients[k][parameter_index, batch_index]
+                end
+                gradients[parameter_index, batch_index] += accumulator
+            end
+        end
+    end
+    return totals, gradients
+end
+
 function _score_backend_step_and_gradient!(
     step::BackendDirichletChoicePlanStep,
     totals::AbstractVector{T},

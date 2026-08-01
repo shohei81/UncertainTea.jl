@@ -338,7 +338,9 @@ function _backend_lower_step(
     issues::Vector{String},
 )
     if step.rhs isa BroadcastDistributionSpec
-        return _backend_lower_broadcast_normal_choice_step(model, layout, step, issues)
+        step.rhs.family === :normal &&
+            return _backend_lower_broadcast_normal_choice_step(model, layout, step, issues)
+        return _backend_lower_broadcast_scalar_choice_step(model, layout, step, issues)
     end
     step.rhs isa DistributionSpec || begin
         _backend_issue!(issues, "unsupported choice RHS $(typeof(step.rhs)) in backend lowering")

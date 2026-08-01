@@ -138,15 +138,25 @@ Semantics:
 - Each element scores against the broadcast-elementwise arguments. Arguments may be
   real scalars or vectors of the observation's length (scalar-or-N broadcast only);
   a length mismatch throws at scoring time.
-- Only `normal.(...)` is currently supported. Dot-calling any other distribution
-  family throws an `ArgumentError` at macro-expansion time.
+- Supported families (issue #287): `normal.(...)`, `poisson.(...)`,
+  `bernoulli.(...)`, `bernoullilogit.(...)`, `exponential.(...)`, and
+  `studentt.(...)` — the GLM bread-and-butter likelihoods. Dot-calling any other
+  distribution family throws an `ArgumentError` at macro-expansion time. The
+  non-normal families are observation-only (no broadcast latents) and are not
+  device-lowered yet.
+- Broadcast arguments accept dotted operators (`.*`, `.+`) **and** dotted
+  function calls of the supported primitives (`exp.(...)`, `tanh.(...)`, ...),
+  so a Poisson GLM reads `{:y} ~ poisson.(exp.(a .+ b .* x))`.
 - **Generate requires a length source**: sampling the choice (i.e. running the model
   with the observation unconstrained) needs at least one vector argument to infer
   the sample length. With all-scalar arguments the observation must be constrained,
   otherwise `generate` throws an informative `ArgumentError`.
-- Backend lowering emits a native `BackendBroadcastNormalChoicePlanStep`, so
-  `backend_report(model).supported == true` and the batched logjoint / manual
-  gradient paths score the vector observation densely per batch column.
+- Backend lowering emits a native step (`BackendBroadcastNormalChoicePlanStep`
+  for normal, the family-generic `BackendBroadcastScalarChoicePlanStep`
+  otherwise), so `backend_report(model).supported == true` and the batched
+  logjoint / manual gradient paths score the vector observation densely per
+  batch column; the generic step's analytic gradient consumes the single-source
+  scalar kernels and partials (issue #285).
 
 ### `iid` Latent Vectors
 

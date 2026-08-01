@@ -312,6 +312,18 @@ function _compile_plan_expr(@nospecialize(model::TeaModel), layout::EnvironmentL
             callee = _compile_plan_expr(model, layout, expr.args[1])
             arguments = tuple((_compile_plan_expr(model, layout, arg) for arg in expr.args[2:end])...)
             return _rewrite_compiled_call(CompiledCallExpr(callee, arguments))
+        elseif expr.head == :. && length(expr.args) == 2 &&
+               expr.args[2] isa Expr && expr.args[2].head == :tuple
+            # dotted FUNCTION call `f.(args...)` (issue #287): evaluate as
+            # `broadcast(f, args...)`, the same rule the dotted operators above
+            # use, so vectorized deterministic expressions compile instead of
+            # rejecting the plan.
+            callee = _compile_plan_expr(model, layout, expr.args[1])
+            arguments = tuple(
+                callee,
+                (_compile_plan_expr(model, layout, arg) for arg in expr.args[2].args)...,
+            )
+            return CompiledCallExpr(CompiledLiteralExpr(broadcast), arguments)
         elseif expr.head == :block
             arguments = tuple((
                 _compile_plan_expr(model, layout, arg) for arg in expr.args if !(arg isa LineNumberNode)
@@ -404,7 +416,10 @@ function _compile_plan_step(
         throw(ArgumentError("compiled lower-level logjoint only supports distribution choice steps"))
     arguments = tuple((_compile_plan_expr(model, layout, arg) for arg in step.rhs.arguments)...)
     constructor = if step.rhs isa BroadcastDistributionSpec
-        getfield(@__MODULE__, :BroadcastNormalDist)
+        # normal keeps its dedicated runtime dist; every other broadcast family
+        # constructs the generic BroadcastScalarDist{family} (issue #287)
+        step.rhs.family === :normal ? getfield(@__MODULE__, :BroadcastNormalDist) :
+        BroadcastScalarDist{step.rhs.family}
     elseif !isnothing(step.rhs.builder)
         step.rhs.builder
     else
