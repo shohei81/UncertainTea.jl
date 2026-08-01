@@ -226,32 +226,16 @@ _bernoulli_value(x::Bool) = x
 _bernoulli_value(x::Real) = x == zero(x) ? false : (x == one(x) ? true : nothing)
 _bernoulli_value(@nospecialize(x)) = nothing
 
-function logpdf(dist::BernoulliDist, x)
-    value = _bernoulli_value(x)
-    isnothing(value) && return oftype(float(dist.p), -Inf)
-    return value ? log(dist.p) : log1p(-dist.p)
-end
+# The scalar discrete logpdfs delegate to the single-source kernels in
+# distributions/scalar_kernels.jl (issue #285, stage 2); the parameter-validation
+# throws are unreachable behind validated constructors.
+logpdf(dist::BernoulliDist, x) = _backend_bernoulli_logpdf(dist.p, x)
 
 # Support handling mirrors `bernoulli` (Bool or a numeric 0/1); the density is
 # the stable log-scale form `x*eta - log1p(exp(eta))`.
-function logpdf(dist::BernoulliLogitDist, x)
-    value = _bernoulli_value(x)
-    isnothing(value) && return oftype(float(dist.eta), -Inf)
-    eta = dist.eta
-    log_normalizer = _bernoullilogit_log1p_exp(eta)
-    return value ? eta - log_normalizer : -log_normalizer
-end
+logpdf(dist::BernoulliLogitDist, x) = _backend_bernoullilogit_logpdf(dist.eta, x)
 
-function logpdf(dist::GeometricDist, x)
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(float(dist.p), -Inf)
-    if count == 0
-        return log(dist.p)
-    elseif dist.p == one(dist.p)
-        return oftype(float(dist.p), -Inf)
-    end
-    return log(dist.p) + count * log1p(-dist.p)
-end
+logpdf(dist::GeometricDist, x) = _backend_geometric_logpdf(dist.p, x)
 
 function _poisson_count(x)
     if x isa Integer
@@ -298,43 +282,11 @@ function _logbinomial_like(value, n::Integer, k::Integer)
            _logfactorial_like(value, n - k)
 end
 
-function logpdf(dist::BinomialDist, x)
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(float(dist.p), -Inf)
-    count <= dist.trials || return oftype(float(dist.p), -Inf)
-    probability = dist.p
-    log_combination = _logbinomial_like(probability, dist.trials, count)
-    if count == 0 && count == dist.trials
-        return log_combination
-    elseif count == 0
-        return log_combination + dist.trials * log1p(-probability)
-    elseif count == dist.trials
-        return log_combination + count * log(probability)
-    end
-    return log_combination +
-           count * log(probability) +
-           (dist.trials - count) * log1p(-probability)
-end
+logpdf(dist::BinomialDist, x) = _backend_binomial_logpdf(dist.trials, dist.p, x)
 
-function logpdf(dist::NegativeBinomialDist, x)
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(float(dist.p), -Inf)
-    successes, probability = promote(dist.successes, dist.p)
-    if count == 0 && probability == one(probability)
-        return zero(probability)
-    elseif probability == one(probability)
-        return oftype(probability, -Inf)
-    end
-    return loggamma(count + successes) - loggamma(successes) - _logfactorial_like(probability, count) +
-           successes * log(probability) + count * log1p(-probability)
-end
+logpdf(dist::NegativeBinomialDist, x) = _backend_negativebinomial_logpdf(dist.successes, dist.p, x)
 
-function logpdf(dist::PoissonDist, x)
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(float(dist.lambda), -Inf)
-    lambda = dist.lambda
-    return count * log(lambda) - lambda - _logfactorial_like(lambda, count)
-end
+logpdf(dist::PoissonDist, x) = _backend_poisson_logpdf(dist.lambda, x)
 
 # --- issue #231: betabinomial, multinomial, discreteuniform ------------------
 
@@ -464,12 +416,7 @@ function _betabinomial_logpdf_core(trials::Integer, alpha, beta, count::Integer)
     return log_combination + _logbeta(count + alpha, trials - count + beta) - _logbeta(alpha, beta)
 end
 
-function logpdf(dist::BetaBinomialDist, x)
-    count = _poisson_count(x)
-    isnothing(count) && return oftype(float(dist.alpha), -Inf)
-    count <= dist.trials || return oftype(float(dist.alpha), -Inf)
-    return _betabinomial_logpdf_core(dist.trials, dist.alpha, dist.beta, count)
-end
+logpdf(dist::BetaBinomialDist, x) = _backend_betabinomial_logpdf(dist.trials, dist.alpha, dist.beta, x)
 
 function logpdf(dist::MultinomialDist, x)
     values = x isa Tuple ? collect(x) : x
@@ -492,8 +439,4 @@ function logpdf(dist::MultinomialDist, x)
     return accumulator
 end
 
-function logpdf(dist::DiscreteUniformDist, x)
-    value = _discrete_integer(x)
-    (isnothing(value) || value < dist.a || value > dist.b) && return -Inf
-    return -log(float(dist.b - dist.a + 1))
-end
+logpdf(dist::DiscreteUniformDist, x) = _backend_discreteuniform_logpdf(dist.a, dist.b, x)
