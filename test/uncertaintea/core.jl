@@ -60,6 +60,7 @@ core_test_files = [
     # "device": the KernelAbstractions device kernels (heavier compile).
     ("device_rng.jl", "device"),
     ("device_lowering_parity.jl", "device"),
+    ("device_kernel_host_parity.jl", "device"),
     ("device_marginalize_lowering.jl", "device"),
     ("signature_batched_device_parity.jl", "device"),
     ("device_gradient_dual.jl", "device"),
