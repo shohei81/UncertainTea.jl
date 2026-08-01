@@ -60,6 +60,30 @@ function _backend_primitive(op::Symbol, args...)
     elseif op === :clamp
         length(args) == 3 || throw(ArgumentError("`clamp` expects exactly 3 arguments"))
         return clamp(args...)
+    elseif op === :sin
+        length(args) == 1 || throw(ArgumentError("`sin` expects exactly 1 argument"))
+        return sin(args[1])
+    elseif op === :cos
+        length(args) == 1 || throw(ArgumentError("`cos` expects exactly 1 argument"))
+        return cos(args[1])
+    elseif op === :tan
+        length(args) == 1 || throw(ArgumentError("`tan` expects exactly 1 argument"))
+        return tan(args[1])
+    elseif op === :tanh
+        length(args) == 1 || throw(ArgumentError("`tanh` expects exactly 1 argument"))
+        return tanh(args[1])
+    elseif op === :sinh
+        length(args) == 1 || throw(ArgumentError("`sinh` expects exactly 1 argument"))
+        return sinh(args[1])
+    elseif op === :cosh
+        length(args) == 1 || throw(ArgumentError("`cosh` expects exactly 1 argument"))
+        return cosh(args[1])
+    elseif op === :atan
+        length(args) == 1 || throw(ArgumentError("`atan` expects exactly 1 argument"))
+        return atan(args[1])
+    elseif op === :expm1
+        length(args) == 1 || throw(ArgumentError("`expm1` expects exactly 1 argument"))
+        return expm1(args[1])
     end
 
     throw(ArgumentError("unsupported backend primitive `$op`"))

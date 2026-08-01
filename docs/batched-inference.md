@@ -485,7 +485,8 @@ The next lowering layer is now explicit:
   `negativebinomial` / `categorical` / `poisson`, numeric deterministic
   assignments, and the primitive subset
   `+`, `-`, `*`, `/`, `exp`, `log`, `log1p`, `sqrt`, `abs`, `min`, `max`,
-  `clamp`, `%` with a literal divisor, and `^` with a literal exponent
+  `clamp`, `sin`, `cos`, `tan`, `tanh`, `sinh`, `cosh`, `atan`, `expm1`,
+  `%` with a literal divisor, and `^` with a literal exponent
 - backend-lowered models outside that differentiable subset fall back to the
   flat `ForwardDiff` objective over the whole `num_params x batch` state, and
   fully unsupported models still fall back to the older column-wise cache

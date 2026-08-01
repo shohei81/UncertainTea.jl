@@ -148,6 +148,16 @@ end
     t = tanh(a.value)
     return DeviceGradN{N,T}(t, _gn_scale(a.partials, one(T) - t * t))
 end
+@inline function Base.tan(a::DeviceGradN{N,T}) where {N,T}
+    t = tan(a.value)
+    return DeviceGradN{N,T}(t, _gn_scale(a.partials, one(T) + t * t))
+end
+@inline Base.sinh(a::DeviceGradN{N,T}) where {N,T} =
+    DeviceGradN{N,T}(sinh(a.value), _gn_scale(a.partials, cosh(a.value)))
+@inline Base.cosh(a::DeviceGradN{N,T}) where {N,T} =
+    DeviceGradN{N,T}(cosh(a.value), _gn_scale(a.partials, sinh(a.value)))
+@inline Base.atan(a::DeviceGradN{N,T}) where {N,T} =
+    DeviceGradN{N,T}(atan(a.value), _gn_scale(a.partials, one(T) / (one(T) + a.value * a.value)))
 
 # ---- min / max / clamp (value-selected branches, whole dual chosen) -------------
 @inline Base.min(a::DeviceGradN{N,T}, b::DeviceGradN{N,T}) where {N,T} = ifelse(a.value <= b.value, a, b)

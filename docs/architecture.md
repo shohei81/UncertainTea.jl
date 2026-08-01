@@ -85,7 +85,8 @@ Current backend-lowering subset:
   flattened constrained/unconstrained parameter spans, and both now lower to
   the backend-native subset for their restricted static forms
 - primitive calls: `:`, `=>`, `+`, `-`, `*`, `/`, `^`, `%`, `exp`, `log`,
-  `log1p`, `sqrt`, `abs`, `min`, `max`, `clamp`
+  `log1p`, `sqrt`, `abs`, `min`, `max`, `clamp`, and (issue #286) `sin`, `cos`,
+  `tan`, `tanh`, `sinh`, `cosh`, `atan`, `expm1`
 - batched backend execution assumes synchronized loop iterables across the batch
 - backend environments separate numeric slots, index slots, and generic slots
 - backend score evaluation uses direct family kernels for supported distributions
@@ -123,7 +124,10 @@ Current backend-lowering subset:
   subset
 - the differentiable backend primitive subset now includes `abs`, `min`,
   `max`, `clamp`, `%` with a literal divisor, and `^` with a literal exponent
-  in addition to the earlier arithmetic and log/exp primitives
+  in addition to the earlier arithmetic and log/exp primitives; issue #286
+  added the trig/hyperbolic set (`sin`, `cos`, `tan`, `tanh`, `sinh`, `cosh`,
+  `atan`, `expm1`) with hand-derived chain rules and device dual rules, so link
+  functions and periodic features stay on the fast paths
 - batched HMC now keeps a sampler workspace for momentum, proposals,
   diagnostics, and constrained-position scratch so repeated sampling no longer
   rebuilds those buffers every iteration

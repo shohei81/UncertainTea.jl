@@ -597,7 +597,7 @@
     @test !any(deterministic_backend_plan.index_slots)
     @test !any(deterministic_backend_plan.generic_slots)
     @test !unsupported_backend_report.supported
-    @test any(occursin("sin", issue) for issue in unsupported_backend_report.issues)
+    @test any(occursin("cbrt", issue) for issue in unsupported_backend_report.issues)
     @test unsupported_backend_logjoint ≈ [
         logjoint(
             unsupported_backend_model,
