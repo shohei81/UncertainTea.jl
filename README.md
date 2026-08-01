@@ -116,7 +116,7 @@ The current built-in distribution set includes the continuous scalar families
 their `truncatednormal` / `truncatedstudentt` truncations; the discrete families
 `bernoulli`, `bernoullilogit`, `binomial`, `betabinomial`, `geometric`,
 `negativebinomial`, `poisson`, `categorical`, `discreteuniform`, and
-`multinomial`; the vector/structured families `dirichlet`, diagonal `mvnormal`,
+`multinomial`, and `orderedlogistic` (ordinal outcomes); the vector/structured families `dirichlet`, diagonal `mvnormal`,
 dense `mvnormaldense`, `mvstudentt` / `mvstudenttdense`, `lkjcholesky` (with the
 `scale_cholesky` helper), `gaussianprocess` regression (isotropic or ARD kernel; with
 the `gp_cholesky` helper for direct latent-function inference under non-Gaussian
