@@ -562,6 +562,15 @@ Requirements:
       return logl
   end
   ```
+- `orderedlogistic(eta, cutpoints)` is the ordered logistic (cumulative-logit)
+  distribution over the ordinal categories `1..K` — the staple likelihood for
+  Likert scales, severity grades, and ranked outcomes. `eta` is the linear
+  predictor and `cutpoints` the `K−1` strictly increasing thresholds:
+  `P(y ≤ k) = logistic(cutpoints[k] − eta)`, scored in log space through the
+  overflow-free `log1p(exp(·))` helpers. `eta` and the cutpoints may be
+  latent-flowing; give latent cutpoints an increasing parameterization (base +
+  `exp` gaps, the HMM ordered-means recipe) since there is no ordered-vector
+  transform yet. CPU-reference only.
 - `hmm(init, transition, means, sigma)` is a hidden Markov model with Gaussian
   emissions. `init` is the length-`K` initial-state distribution and `transition`
   the `K×K` row-stochastic transition matrix (fixed dynamics, supplied as model

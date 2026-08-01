@@ -42,6 +42,7 @@ const BUILTIN_DISTRIBUTION_FAMILIES = (
     :gaussianprocess,
     :sparsegaussianprocess,
     :hmm,
+    :orderedlogistic,
     :mvstudentt,
     :mvstudenttdense,
     :wishart,
