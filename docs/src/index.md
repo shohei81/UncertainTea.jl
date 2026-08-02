@@ -1,3 +1,7 @@
+```@meta
+CurrentModule = UncertainTea
+```
+
 # UncertainTea
 
 UncertainTea is an experimental Julia probabilistic programming package with a
@@ -56,7 +60,9 @@ Pkg.develop(path="/path/to/uncertaintea")
 
 ```julia
 using Random
-using UncertainTea
+using UncertainTea               # the @tea DSL, choicemap, distributions
+using UncertainTea.Inference     # samplers: nuts_chains, batched_nuts, ...
+using UncertainTea.Diagnostics   # summarize, rhat, ess, ...
 
 @tea static function gaussian_mean()
     mu ~ normal(0.0, 1.0)

@@ -10,7 +10,9 @@
 # (this runs in CI on every push). Scale everything up for real work.
 
 using Random
-using UncertainTea
+using UncertainTea               # the @tea DSL, choicemap, distributions, kernels
+using UncertainTea.Inference     # nuts_chains
+using UncertainTea.Diagnostics   # summarize, rhat
 
 # ## The data
 #

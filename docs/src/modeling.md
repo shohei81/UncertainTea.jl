@@ -1,3 +1,7 @@
+```@meta
+CurrentModule = UncertainTea
+```
+
 # Modeling
 
 This page covers the modeling features beyond the basics in
@@ -11,6 +15,9 @@ A whole observation vector can be a single addressed choice, written with
 Julia's dot syntax. The canonical linear-regression spelling:
 
 ```julia
+using UncertainTea
+using UncertainTea.Inference   # nuts, batched_nuts, ...
+
 @tea static function linreg(x, n)
     a ~ normal(0.0, 1.0)
     b ~ normal(0.0, 1.0)
@@ -169,6 +176,8 @@ The batched samplers accept `adtype`:
 - `:forward` — force forward-mode.
 
 ```julia
+using UncertainTea.Inference: batched_nuts
+
 chain = batched_nuts(model, args, constraints; num_chains=8, adtype=:reverse)
 ```
 
@@ -184,6 +193,8 @@ keeps the observation addresses (the supplied constraints only fix the
 observed/latent split; their values are unused):
 
 ```julia
+using UncertainTea.Diagnostics: prior_predictive
+
 draws = prior_predictive(model, args, constraints; num_draws=200)
 ```
 

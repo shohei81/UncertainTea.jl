@@ -10,6 +10,9 @@
 using Random
 using Test
 using UncertainTea
+using UncertainTea.Inference
+using UncertainTea.Diagnostics
+using UncertainTea.Device
 using Metal
 
 @tea static function gpu_gauss_model(n)

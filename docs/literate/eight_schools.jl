@@ -10,7 +10,9 @@
 # in CI on every push). Scale `num_chains`/`num_samples` up for real work.
 
 using Random
-using UncertainTea
+using UncertainTea               # the @tea DSL, choicemap, distributions
+using UncertainTea.Inference     # batched_nuts
+using UncertainTea.Diagnostics   # summarize, rhat, ess
 
 # ## The model
 #

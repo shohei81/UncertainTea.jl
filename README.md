@@ -64,9 +64,18 @@ Pkg.develop(path="/path/to/uncertaintea")
 
 ## Quick Start
 
+The public API is namespaced (issue #329): `using UncertainTea` brings in the
+modeling language only (the `@tea` DSL, `choicemap`, `generate`, `logjoint`,
+and the distribution constructors); the samplers live in
+`UncertainTea.Inference`, the chain summaries and model-comparison tools in
+`UncertainTea.Diagnostics`, and the device density APIs in
+`UncertainTea.Device`.
+
 ```julia
 using Random
-using UncertainTea
+using UncertainTea               # the @tea DSL, choicemap, distributions
+using UncertainTea.Inference     # hmc_chains, nuts_chains, parameter_vector, ...
+using UncertainTea.Diagnostics   # summarize, rhat, ess, ...
 
 @tea (static) function gaussian_mean()
     mu ~ normal(0.0f0, 1.0f0)
