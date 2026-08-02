@@ -59,6 +59,39 @@ def build_model(model_name: str, data: dict):
 
         return model, ["alpha", "beta"]
 
+    if model_name == "poisson_glm":
+        # issue #317: the vectorized Poisson GLM — NumPyro's natural formulation,
+        # matching UncertainTea's broadcast `{:y} ~ poisson.(exp.(a .+ b .* x))`
+        # and Stan's `y ~ poisson_log(a + b * x)`.
+        x = jnp.asarray(data["x"])
+        y = jnp.asarray(np.array(data["y"], dtype=np.int32))
+
+        def model():
+            a = numpyro.sample("a", dist.Normal(0.0, 1.0))
+            b = numpyro.sample("b", dist.Normal(0.0, 1.0))
+            with numpyro.plate("obs", x.shape[0]):
+                numpyro.sample("y", dist.Poisson(jnp.exp(a + b * x)), obs=y)
+
+        return model, ["a", "b"]
+
+    if model_name == "schools_large":
+        # issue #317: J=32 centered hierarchy with log-normal tau (the P >= 24
+        # reverse-mode leg on the UncertainTea side). log_tau is the sampled
+        # parameter in every framework so the exported columns align by name.
+        y = jnp.asarray(data["y"])
+        sigma = jnp.asarray(data["sigma"])
+        J = data["J"]
+
+        def model():
+            mu = numpyro.sample("mu", dist.Normal(0.0, 5.0))
+            log_tau = numpyro.sample("log_tau", dist.Normal(0.0, 1.0))
+            with numpyro.plate("J", J):
+                theta = numpyro.sample("theta", dist.Normal(mu, jnp.exp(log_tau)))
+            with numpyro.plate("obs", J):
+                numpyro.sample("y", dist.Normal(theta, sigma), obs=y)
+
+        return model, ["mu", "log_tau", "theta"]
+
     if model_name == "gauss":
         y = jnp.asarray(data["y"])
 

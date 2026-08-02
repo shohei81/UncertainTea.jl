@@ -68,6 +68,19 @@ docker run --rm -v "$(git rev-parse --show-toplevel)":/work \
   (`sampler.chain_parallelism`): CmdStan forks processes, NumPyro
   `parallel`/`vectorized`, UncertainTea `cpu` is sequential (issue #136) and
   `batched-*` vectorized.
+- **Gradient tiers are measured explicitly, never mixed** (issue #317).
+  `poisson_glm` states the model in every framework's natural vectorized form
+  (UncertainTea's broadcast `{:y} ~ poisson.(exp.(a .+ b .* x))`, Stan's
+  `poisson_log`, a NumPyro plate) and rides the analytic broadcast gradient.
+  `schools_large` (J=32, P=34; centered, log-normal tau) is the
+  reverse-mode leg: `julia/run.jl --adtype forward|reverse` pins the
+  ForwardDiff vs Enzyme tier on the host batched path, labels the runs
+  `batched-cpu-forward`/`batched-cpu-reverse`, and records
+  `sampler.adtype`; Enzyme is loaded only for `reverse` runs so `auto` legs
+  keep their default tier. The model is centered with a log-normal tau
+  deliberately — the noncentered `reparam` machinery and the truncated-t tau
+  both fail Enzyme's type analysis today, and the guard would silently fall
+  back to forward.
 
 ## Sampler settings
 

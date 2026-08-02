@@ -53,21 +53,25 @@ gone.
 Enzyme reverse matches ForwardDiff to `max|Δ| = 1.07e-14` (**MATCH**) — the
 textbook reverse-mode-through-Cholesky win is numerically exact.
 
-### (3) integration blocker (the key finding)
+### (3) integration blocker — RESOLVED (shipped in #270–#272)
 
-Enzyme **cannot yet** differentiate UncertainTea's real batched per-column
-objective. Two obstacles, both in the current evaluator:
+At prototype time Enzyme could not differentiate UncertainTea's real batched
+per-column objective (type-unstable compiled-plan machinery + workspace
+mutation). That blocker was resolved by the **generated scorer**: a pure,
+type-stable per-column log-density function generated from the execution plan,
+which is exactly what Enzyme differentiates today.
 
-- **Type instability**: Enzyme's type analysis asserts on the deeply parametric
-  `CompiledChoicePlanStep{…}` machinery (the compiled plan uses `Any`-typed
-  scratch buffers, `Base.RefValue{Any}`), which it cannot lay out.
-- **Mutation**: the objective mutates its captured workspace, so Enzyme cannot
-  prove the function argument readonly.
+What shipped from this prototype's conclusions:
 
-**Conclusion / next step.** The reverse-mode win is real and numerically exact
-on pure functions, and Enzyme is viable and isolatable. Shipping it in the
-gradient path requires a **type-stable, non-mutating per-column evaluator**
-(or a `Duplicated`-shadowed workspace) that Enzyme can differentiate — the GP
-hyperparameter gradient (already a pure `logpdf`) is the natural first target to
-wire behind a package extension. That evaluator refactor is the concrete
-follow-up scoped by this prototype.
+- **#270** — `UncertainTeaEnzymeExt`: the package extension wiring Enzyme
+  reverse-mode through pure GP/`logpdf` objectives (the prototype's stated
+  first target).
+- **#271/#272** — reverse-mode through the generated scorer on the batched
+  gradient path, selectable with `adtype=:reverse` and picked automatically by
+  `adtype=:auto` for supported models with ≥ 24 parameters (threshold measured
+  in #278).
+
+Enzyme still lives outside the core dependency graph — loading `Enzyme`
+activates the extension; nothing changes for users who never load it. This
+directory remains useful as the standalone scaling benchmark for the
+forward-vs-reverse crossover.

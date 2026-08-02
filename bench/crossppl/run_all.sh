@@ -41,7 +41,7 @@ SCALE_SEED=200
 GAUSS_PINNED_INIT="0.5,0.18232155679395463"
 scale_reps() { if [[ "$1" -ge 4096 ]]; then echo 1; else echo 3; fi; }
 
-MODELS=(eight_schools_centered eight_schools_noncentered logistic logistic_large gauss mixture lkj)
+MODELS=(eight_schools_centered eight_schools_noncentered logistic logistic_large gauss mixture lkj poisson_glm schools_large)
 
 if [[ "${CROSSPPL_IN_CONTAINER:-0}" == "1" ]]; then
     PY=(uv run --project /opt/bench-python --no-sync python)
@@ -76,6 +76,15 @@ run_cpu() {
         "${JL[@]}" julia/run.jl --model gauss --variant batched-cpu-ka \
             --chains "$k" --samples $SCALE_SAMPLES --warmup $SCALE_WARMUP \
             --seed $SCALE_SEED --reps "$r"
+    done
+    # schools_large (P=34) is the gradient-tier model (issue #317): the same
+    # run with the forward tier vs the Enzyme reverse tier isolates the AD cost
+    # (labels batched-cpu-forward / batched-cpu-reverse; the correctness pass
+    # above already covers the default adtype=auto leg).
+    echo "=== schools_large: gradient-tier legs (forward vs Enzyme reverse) ==="
+    for tier in forward reverse; do
+        "${JL[@]}" julia/run.jl --model schools_large --variant batched-cpu --adtype "$tier" \
+            --chains $CHAINS --samples $SAMPLES --warmup $WARMUP --seed $SEED --reps $REPS
     done
     # logistic_large (D=16, N=8000) is the device-story model: a heavy
     # per-gradient GLM that lowers to the device analytic path (issue #135), so

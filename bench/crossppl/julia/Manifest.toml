@@ -2,7 +2,7 @@
 
 julia_version = "1.12.2"
 manifest_format = "2.0"
-project_hash = "7eb3f0cf2d9bdb35647931f88ac235f782882192"
+project_hash = "e324c499f78d342f1db2354bc7d19590a6668a27"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -135,6 +135,52 @@ deps = ["ArgTools", "FileWatching", "LibCURL", "NetworkOptions"]
 uuid = "f43a241f-c20a-4ad4-852c-f6b1247861c6"
 version = "1.7.0"
 
+[[deps.Enzyme]]
+deps = ["CEnum", "EnzymeCore", "Enzyme_jll", "GPUCompiler", "InteractiveUtils", "LLVM", "Libdl", "LinearAlgebra", "ObjectFile", "PrecompileTools", "Preferences", "Printf", "Random", "SparseArrays"]
+git-tree-sha1 = "6087682e50b82df6edd6b4e6ea540fa1c6603b8d"
+uuid = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+version = "0.13.197"
+
+    [deps.Enzyme.extensions]
+    EnzymeBFloat16sExt = "BFloat16s"
+    EnzymeCUDAExt = "CUDA"
+    EnzymeChainRulesCoreExt = "ChainRulesCore"
+    EnzymeGPUArraysCoreExt = "GPUArraysCore"
+    EnzymeLogExpFunctionsExt = "LogExpFunctions"
+    EnzymeOrderedCollectionsExt = "OrderedCollections"
+    EnzymeSpecialFunctionsExt = "SpecialFunctions"
+    EnzymeStaticArraysExt = "StaticArrays"
+
+    [deps.Enzyme.weakdeps]
+    ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+    BFloat16s = "ab4f0b2a-ad5b-11e8-123f-65d77653426b"
+    CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+    GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
+    LogExpFunctions = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
+    OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+    SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+    StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[[deps.EnzymeCore]]
+git-tree-sha1 = "971d7831cc85f43bc9f51d615a3f7f21270c2f1d"
+uuid = "f151be2c-9106-41f4-ab19-57ee4f262869"
+version = "0.8.21"
+
+    [deps.EnzymeCore.extensions]
+    AdaptExt = "Adapt"
+    EnzymeCoreChainRulesCoreExt = "ChainRulesCore"
+
+    [deps.EnzymeCore.weakdeps]
+    Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+    ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+
+[[deps.Enzyme_jll]]
+deps = ["Artifacts", "JLLWrappers", "LazyArtifacts", "Libdl", "TOML"]
+git-tree-sha1 = "35464c0c51db8a6d5a9bb995a14a8fe390c050f9"
+uuid = "7cc45869-7501-5eee-bdea-0790c847d4ef"
+version = "0.0.289+0"
+
 [[deps.ExprTools]]
 git-tree-sha1 = "d2e49e7efd29719d6f28b891b0e0e159daa9d2b4"
 uuid = "e2ba6199-217a-4e67-a87a-7c52f15ade04"
@@ -249,16 +295,12 @@ deps = ["Adapt", "Atomix", "InteractiveUtils", "MacroTools", "PrecompileTools", 
 git-tree-sha1 = "a5b87110fa95d711355af44832497745aa93fb52"
 uuid = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 version = "0.9.42"
+weakdeps = ["EnzymeCore", "LinearAlgebra", "SparseArrays"]
 
     [deps.KernelAbstractions.extensions]
     EnzymeExt = "EnzymeCore"
     LinearAlgebraExt = "LinearAlgebra"
     SparseArraysExt = "SparseArrays"
-
-    [deps.KernelAbstractions.weakdeps]
-    EnzymeCore = "f151be2c-9106-41f4-ab19-57ee4f262869"
-    LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-    SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [[deps.LLVM]]
 deps = ["CEnum", "LLVMExtra_jll", "Libdl", "PrecompileTools", "Preferences", "Printf", "Unicode"]
@@ -395,6 +437,12 @@ version = "1.1.4"
 [[deps.NetworkOptions]]
 uuid = "ca575930-c2e3-43a9-ace4-1e988b2c1908"
 version = "1.3.0"
+
+[[deps.ObjectFile]]
+deps = ["Reexport", "StructIO"]
+git-tree-sha1 = "23c4d109603f7a7bfe888c1f63c5ab7be6183d0b"
+uuid = "d8793406-e978-5875-9003-1fc021f44a92"
+version = "0.5.1"
 
 [[deps.ObjectiveC]]
 deps = ["CEnum", "Libdl", "Preferences"]
@@ -583,6 +631,11 @@ git-tree-sha1 = "532e983cd333609f95d618c744fc40d01ea6e17a"
 uuid = "892a3eda-7b42-436c-8928-eab12a02cf0e"
 version = "0.4.6"
 
+[[deps.StructIO]]
+git-tree-sha1 = "c581be48ae1cbf83e899b14c07a807e1787512cc"
+uuid = "53d494c1-5632-5724-8f4c-31dff12d585f"
+version = "0.3.1"
+
 [[deps.StructTypes]]
 deps = ["Dates", "UUIDs"]
 git-tree-sha1 = "159331b30e94d7b11379037feeb9b690950cace8"
@@ -646,13 +699,15 @@ version = "1.11.0"
 deps = ["ForwardDiff", "KernelAbstractions", "LinearAlgebra", "PrecompileTools", "Random", "SpecialFunctions"]
 path = "../../.."
 uuid = "9b1291ec-f7ff-476f-9e6f-459056809ae0"
-version = "0.1.0"
+version = "0.2.0"
 
     [deps.UncertainTea.extensions]
+    UncertainTeaEnzymeExt = "Enzyme"
     UncertainTeaMCMCChainsExt = "MCMCChains"
     UncertainTeaMetalExt = "Metal"
 
     [deps.UncertainTea.weakdeps]
+    Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
     MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
     Metal = "dde4c033-4e86-420c-a63e-0dd931031962"
 

@@ -121,6 +121,68 @@ function lkj_data(rng)
     )
 end
 
+# issue #317: Poisson GLM in the broadcast observation form — the case where
+# NumPyro's natural vectorized formulation and UncertainTea's
+# `{:y} ~ poisson.(exp.(a .+ b .* x))` fast path state the same model. One
+# covariate because broadcast arguments are element-wise (a D-dim dot product
+# per observation is the fused-loop logistic models' job).
+function poisson_glm_data(rng)
+    n = 1000
+    x = randn(rng, n)
+    a, b = 0.4, 0.9
+    y = [rand_poisson(rng, exp(a + b * x[i])) for i = 1:n]
+    return Dict(
+        "model" => "poisson_glm",
+        "seed" => SEED,
+        "n" => n,
+        "true_a" => a,
+        "true_b" => b,
+        "x" => x,
+        "y" => y,
+    )
+end
+
+# Knuth-style Poisson sampler: enough for data generation at the rates used
+# here (exp(a + b x) <= ~20), and keeps this script dependency-free.
+function rand_poisson(rng, lambda)
+    L = exp(-lambda)
+    k, p = 0, 1.0
+    while true
+        p *= rand(rng)
+        p <= L && return k
+        k += 1
+    end
+end
+
+# issue #317: a J=32 hierarchical Gaussian (eight-schools shape, CENTERED, with
+# a log-normal tau) — the P >= 24 model for the reverse-mode (Enzyme) leg.
+# Centered + lognormal because the reverse tier's generated scorer engages for
+# plain iid latents; the noncentered `reparam` machinery and the truncated-t
+# tau both fail Enzyme's type analysis today (the guard falls back to forward,
+# which would silently measure the wrong thing). J = 32 with informative
+# per-group sigma keeps the centered geometry well-conditioned (no funnel).
+function schools_large_data(rng)
+    J = 32
+    mu, tau = 4.0, 3.0
+    # sigma in [1, 2.5] << tau: every group is strongly informative, so
+    # log_tau is well-identified and the CENTERED geometry has no funnel —
+    # the gate (R-hat < 1.01 at 1000 draws, EVERY rep) is met with margin by
+    # all frameworks and gradient tiers. This model measures gradient cost at
+    # P=34; the funnel stress test stays eight_schools_noncentered's job.
+    sigma = 1.0 .+ 1.5 .* rand(rng, J)
+    theta = mu .+ tau .* randn(rng, J)
+    y = theta .+ sigma .* randn(rng, J)
+    return Dict(
+        "model" => "schools_large",
+        "seed" => SEED,
+        "J" => J,
+        "true_mu" => mu,
+        "true_tau" => tau,
+        "sigma" => sigma,
+        "y" => y,
+    )
+end
+
 rng = MersenneTwister(SEED)
 dir = joinpath(@__DIR__, "data")
 write_json(joinpath(dir, "logistic.json"), logistic_data(rng))
@@ -130,3 +192,5 @@ write_json(joinpath(dir, "gauss.json"), gauss_data(rng))
 write_json(joinpath(dir, "logistic_large.json"), logistic_large_data(MersenneTwister(SEED + 1)))
 write_json(joinpath(dir, "mixture.json"), mixture_data(MersenneTwister(SEED + 2)))
 write_json(joinpath(dir, "lkj.json"), lkj_data(MersenneTwister(SEED + 3)))
+write_json(joinpath(dir, "poisson_glm.json"), poisson_glm_data(MersenneTwister(SEED + 4)))
+write_json(joinpath(dir, "schools_large.json"), schools_large_data(MersenneTwister(SEED + 5)))

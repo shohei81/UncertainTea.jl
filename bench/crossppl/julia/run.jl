@@ -42,6 +42,13 @@ end
 if any(i -> ARGS[i] == "--variant" && ARGS[i+1] in ("batched-cpu-ka", "batched-cpu-persistent"), 1:(length(ARGS)-1))
     using KernelAbstractions
 end
+# `--adtype reverse` (issue #317) measures the Enzyme reverse-mode gradient
+# tier; the extension activates only when Enzyme is loaded, so load it lazily —
+# `--adtype auto`/`forward` runs must NOT load it (with Enzyme in scope, :auto
+# would silently switch tiers for P >= 24 models and the labels would lie).
+if any(i -> ARGS[i] == "--adtype" && ARGS[i+1] == "reverse", 1:(length(ARGS)-1))
+    using Enzyme
+end
 
 include(joinpath(@__DIR__, "models.jl"))
 
@@ -61,6 +68,11 @@ function parse_args(argv)
         # cross-chain ensemble during warmup. `jitter` is the Halton jitter fraction.
         "num-leapfrog-steps" => "10",
         "jitter" => "1.0",
+        # Gradient tier for the host batched variants (issue #317): auto | forward |
+        # reverse. `reverse` loads Enzyme (see the lazy `using` above) and forces the
+        # reverse tier; runs carry an "-<adtype>" label suffix so default-configuration
+        # results are never mixed with tier-comparison legs.
+        "adtype" => "auto",
     )
     i = 1
     while i <= length(argv)
@@ -99,6 +111,17 @@ function setup_model(model_name)
         @assert size(X) == (d, n)
         cons = choicemap(((:y => i, Float64(data.y[i])) for i = 1:n)...)
         return (bench_logistic_large, (X, n), cons)
+    elseif model_name == "poisson_glm"
+        data = load_json("poisson_glm.json")
+        n = data.n
+        x = Float64.(data.x)
+        cons = choicemap((:y, Float64.(data.y)))
+        return (bench_poisson_glm, (x, n), cons)
+    elseif model_name == "schools_large"
+        data = load_json("schools_large.json")
+        sigma = Float64.(data.sigma)
+        cons = choicemap(((:y => i, Float64(data.y[i])) for i = 1:data.J)...)
+        return (bench_schools_large, (sigma,), cons)
     elseif model_name == "gauss"
         data = load_json("gauss.json")
         n = data.n
@@ -140,6 +163,10 @@ function run_once(model, args, cons, opts; num_samples, seed)
     else
         nothing
     end
+    adtype = Symbol(opts["adtype"])
+    adtype in (:auto, :forward, :reverse) || error("unknown adtype $(adtype)")
+    adtype === :auto || variant == "batched-cpu" ||
+        error("--adtype $(adtype) is a host batched-cpu tier selector; got variant $(variant)")
     rng = MersenneTwister(seed)
     if variant == "cpu"
         t = @elapsed chains = nuts_chains(model, args, cons;
@@ -149,7 +176,7 @@ function run_once(model, args, cons, opts; num_samples, seed)
     elseif variant == "batched-cpu"
         t = @elapsed chains = batched_nuts(model, args, cons;
             num_chains, num_samples, num_warmup, target_accept, max_tree_depth,
-            tree_strategy=:hybrid, initial_params, rng)
+            tree_strategy=:hybrid, adtype, initial_params, rng)
         return (chains, t)
     elseif variant == "batched-cpu-ka"
         backend = KernelAbstractions.CPU()
@@ -221,6 +248,10 @@ function main(argv)
         variant_label =
             get(opts, "init", "") == "pathfinder" ? string(variant, "-pathfinder-init") :
             haskey(opts, "init") ? string(variant, "-pinned-init") : variant
+        # tier-comparison legs (issue #317) are labeled, like the init overrides,
+        # so they are never mistaken for default-configuration results
+        variant_label =
+            opts["adtype"] == "auto" ? variant_label : string(variant_label, "-", opts["adtype"])
         stem = string(model_name, "__uncertaintea-", variant_label,
             "__chains", num_chains, "__seed", seed, "__rep", rep)
         npzwrite(joinpath(outdir, stem * ".npz"), Dict("draws" => draws))
@@ -258,6 +289,10 @@ function main(argv)
                     "init" => haskey(opts, "init") ? opts["init"] : "prior-draw",
                     "target_accept" => parse(Float64, opts["target-accept"]),
                     "max_tree_depth" => parse(Int, opts["max-tree-depth"]),
+                    # gradient tier request (issue #317): auto | forward | reverse
+                    # (reverse = Enzyme loaded + forced; auto on the host batched
+                    # path = analytic when supported, else forward below P=24)
+                    "adtype" => opts["adtype"],
                     "metric" => "diag",
                     # `:persistent` (issue #154) builds each chain's whole tree in one
                     # device kernel launch; the other device/CPU variants use :masked/
