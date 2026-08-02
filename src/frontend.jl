@@ -95,6 +95,40 @@ const _KNOWN_DISTRIBUTION_FAMILIES = (
     :pareto, :frechet, :rayleigh, :inversegaussian,
 )
 
+# One shared error for every site that rejects the left-hand side of `~`: the
+# rejected expression plus the complete list of valid spellings, so the user
+# can fix the model without reading frontend internals.
+function _unsupported_choice_syntax_error(lhs)
+    throw(
+        ArgumentError(
+            "unsupported choice syntax on the left of `~` in @tea: `$(lhs)`. Supported " *
+            "forms: `name ~ dist(...)` (implicit address `:name`), `{:addr} ~ dist(...)` " *
+            "(explicit address), `{:addr => i} ~ dist(...)` (hierarchical address), and " *
+            "capturing the value with `y = ({:addr} ~ dist(...))`.",
+        ),
+    )
+end
+
+# `mu ~ Normal(...)` is the Distributions.jl habit; UncertainTea's constructors
+# are lowercase functions, so the capitalized call would otherwise surface as a
+# bare runtime `UndefVarError`. When the lowercased name is a known family,
+# reject at macro time with the rename.
+function _reject_capitalized_distribution(rhs)
+    rhs isa Expr && rhs.head == :call && !isempty(rhs.args) && rhs.args[1] isa Symbol ||
+        return nothing
+    name = rhs.args[1]
+    lowered = Symbol(lowercase(String(name)))
+    (lowered !== name && lowered in _KNOWN_DISTRIBUTION_FAMILIES) || return nothing
+    throw(
+        ArgumentError(
+            "unknown distribution `$(name)` on the right of `~` — did you mean " *
+            "`$(lowered)`? UncertainTea's distribution constructors are lowercase " *
+            "functions (`$(lowered)(...)`); the capitalized `$(name)(...)` spelling " *
+            "is Distributions.jl's API.",
+        ),
+    )
+end
+
 # Detects a dot-call distribution observation `family.(args...)` on the RHS of `~`.
 # Returns the runtime broadcast-distribution construction expression, or `nothing`
 # when `rhs` is not a distribution dot-call. Throws for unsupported dot-called families.
@@ -125,6 +159,7 @@ function _rewrite_tea_expr(expr, ctxsym)
 
     if expr.head == :call && !isempty(expr.args) && expr.args[1] === :~
         lhs = expr.args[2]
+        _reject_capitalized_distribution(expr.args[3])
         broadcast_rhs = _rewrite_broadcast_rhs(expr.args[3], ctxsym)
         rhs = isnothing(broadcast_rhs) ? _rewrite_tea_expr(expr.args[3], ctxsym) : broadcast_rhs
 
@@ -133,7 +168,7 @@ function _rewrite_tea_expr(expr, ctxsym)
         elseif lhs isa Expr && lhs.head == :braces && length(lhs.args) == 1
             return Expr(:call, _qualify(:choice), ctxsym, lhs.args[1], rhs)
         else
-            throw(ArgumentError("unsupported choice syntax in @tea: $lhs"))
+            _unsupported_choice_syntax_error(lhs)
         end
     end
 
@@ -189,7 +224,7 @@ function _address_spec_expr(lhs)
     elseif lhs isa Expr && lhs.head == :braces && length(lhs.args) == 1
         _append_address_parts!(parts, lhs.args[1]; symbol_literal=false)
     else
-        throw(ArgumentError("unsupported choice syntax in @tea: $lhs"))
+        _unsupported_choice_syntax_error(lhs)
     end
 
     tuple_expr = Expr(:tuple, parts...)
@@ -377,6 +412,7 @@ function _strip_reparam_arguments(arguments::Vector{Any})
 end
 
 function _rhs_spec_expr(rhs)
+    _reject_capitalized_distribution(rhs)
     if rhs isa Expr && rhs.head == :. && length(rhs.args) == 2 &&
        rhs.args[1] isa Symbol && rhs.args[2] isa Expr && rhs.args[2].head == :tuple &&
        rhs.args[1] in _KNOWN_DISTRIBUTION_FAMILIES
@@ -396,8 +432,16 @@ function _rhs_spec_expr(rhs)
             throw(ArgumentError("iid expects `iid(distribution_call, n)`"))
         base = iid_positional[1]
         n = iid_positional[2]
-        n isa Integer ||
-            throw(ArgumentError("iid requires a literal Int count `n`, got `$(n)`"))
+        n isa Integer || throw(
+            ArgumentError(
+                "iid needs its count to be a literal integer at macro-expansion time, " *
+                "e.g. `iid(normal(0.0, 1.0), 10)`; got the expression `$(n)`. The static " *
+                "execution plan sizes the choice vector when the model is defined, so a " *
+                "runtime variable cannot set it. For a data-dependent count, write the " *
+                "repeated structure as a static `for` loop over `{addr => i}` choices — " *
+                "its extent may be a model argument.",
+            ),
+        )
         (base isa Expr && base.head == :call && !isempty(base.args) && base.args[1] isa Symbol) ||
             throw(ArgumentError("iid first argument must be a distribution constructor call"))
         arguments = Expr(:vect, QuoteNode(base), QuoteNode(n))
@@ -632,7 +676,14 @@ end
 
 function _parameter_layout_sizes(rhs)
     family = _supported_distribution_family(rhs)
-    isnothing(family) && throw(ArgumentError("unsupported parameter layout size for $rhs"))
+    isnothing(family) && throw(
+        ArgumentError(
+            "the latent choice distribution `$rhs` is not a family @tea static can " *
+            "allocate parameter slots for. Latent choices need a built-in or registered " *
+            "family with a statically known size — check the spelling, or constrain the " *
+            "address in the choicemap to make it an observation.",
+        ),
+    )
     if family === :dirichlet
         size = _dirichlet_static_size(rhs)
         isnothing(size) && throw(ArgumentError("dirichlet parameter slots require a statically known simplex size"))
@@ -751,7 +802,7 @@ function _address_has_dynamic_parts(lhs)
         return _address_expr_has_dynamic_parts(lhs.args[1])
     end
 
-    throw(ArgumentError("unsupported choice syntax in @tea: $lhs"))
+    _unsupported_choice_syntax_error(lhs)
 end
 
 function _address_expr_has_dynamic_parts(expr)
