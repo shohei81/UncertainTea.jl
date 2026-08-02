@@ -209,7 +209,7 @@ end
 
 function logpdf(dist::TruncatedNormalDist, x)
     xx, mu, sigma, lower, upper = promote(x, dist.mu, dist.sigma, dist.lower, dist.upper)
-    (xx < lower || xx > upper) && return oftype(xx, -Inf)
+    (xx < lower || xx > upper) && return _offsupport_neginf(xx)
     base = logpdf(normal(mu, sigma), xx)
     za = (lower - mu) / sigma
     zb = (upper - mu) / sigma
@@ -219,7 +219,7 @@ end
 function logpdf(dist::TruncatedStudentTDist, x)
     xx, nu, mu, sigma, lower, upper =
         promote(x, dist.nu, dist.mu, dist.sigma, dist.lower, dist.upper)
-    (xx < lower || xx > upper) && return oftype(xx, -Inf)
+    (xx < lower || xx > upper) && return _offsupport_neginf(xx)
     base = logpdf(studentt(nu, mu, sigma), xx)
     za = (lower - mu) / sigma
     zb = (upper - mu) / sigma

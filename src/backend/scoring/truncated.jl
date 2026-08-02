@@ -19,7 +19,7 @@ end
 function _backend_truncatednormal_logpdf(mu, sigma, lower, upper, x)
     xx, mu_, sigma_, lower_, upper_ = promote(x, mu, sigma, lower, upper)
     sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    (xx < lower_ || xx > upper_) && return oftype(xx, -Inf)
+    (xx < lower_ || xx > upper_) && return _offsupport_neginf(xx)
     base = _backend_normal_logpdf(mu_, sigma_, xx)
     za = (lower_ - mu_) / sigma_
     zb = (upper_ - mu_) / sigma_
@@ -99,7 +99,7 @@ function _backend_truncatedstudentt_logpdf(nu, mu, sigma, lower, upper, x)
     nu_ > zero(nu_) || return oftype(xx, NaN)
     sigma_ > zero(sigma_) || return oftype(xx, NaN)
     lower_ < upper_ || throw(ArgumentError("truncatedstudentt requires lower < upper"))
-    (xx < lower_ || xx > upper_) && return oftype(xx, -Inf)
+    (xx < lower_ || xx > upper_) && return _offsupport_neginf(xx)
     base = _backend_studentt_logpdf(nu_, mu_, sigma_, xx)
     za = (lower_ - mu_) / sigma_
     zb = (upper_ - mu_) / sigma_
