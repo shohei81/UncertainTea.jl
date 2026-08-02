@@ -43,6 +43,12 @@ orderedlogistic(eta, cutpoints) = OrderedLogisticDist(eta, cutpoints)
 @inline _ordlogit_log_cdf(eta, c) = -_bernoullilogit_log1p_exp(eta - c)
 @inline _ordlogit_log_ccdf(eta, c) = -_bernoullilogit_log1p_exp(c - eta)
 
+# Stable log(1 - exp(d)) for d <= 0 (Maechler 2012): near zero -exp(d) would
+# cancel against 1, so difference through expm1 there; in the far tail exp is
+# exact and log1p keeps full precision.
+@inline _ordlogit_log1m_exp(d) =
+    d > -0.6931471805599453 ? log(-expm1(d)) : log1p(-exp(d))
+
 function logpdf(dist::OrderedLogisticDist, x)
     K = length(dist.cutpoints) + 1
     category = _categorical_index(x, K)
@@ -55,11 +61,22 @@ function logpdf(dist::OrderedLogisticDist, x)
     end
     lower = dist.cutpoints[category-1]
     upper = dist.cutpoints[category]
-    # log(sigma(u - eta) - sigma(l - eta)) with u > l, in log space:
-    # log_cdf(u) + log1p(-exp(log_cdf(l) - log_cdf(u)))
-    log_upper = _ordlogit_log_cdf(eta, upper)
-    log_lower = _ordlogit_log_cdf(eta, lower)
-    return log_upper + log1p(-exp(log_lower - log_upper))
+    # log(sigma(u - eta) - sigma(l - eta)) with u > l. Differencing the two
+    # log-CDFs is only well-conditioned when both CDFs are small (eta at or
+    # above the cutpoints); for eta far below both CDFs saturate to 1 and the
+    # ratio -> 1 cancels catastrophically (issue #344, -Inf at eta <= -37).
+    # Mirror the tail there: P(l < Y <= u) = CCDF(l) - CCDF(u), whose logs
+    # stay well separated for eta below the cutpoints. Branch on the midpoint
+    # (a plain value comparison, so ForwardDiff Duals flow through either arm).
+    if 2 * eta > lower + upper
+        log_upper = _ordlogit_log_cdf(eta, upper)
+        log_lower = _ordlogit_log_cdf(eta, lower)
+        return log_upper + _ordlogit_log1m_exp(log_lower - log_upper)
+    else
+        log_lower = _ordlogit_log_ccdf(eta, lower)
+        log_upper = _ordlogit_log_ccdf(eta, upper)
+        return log_lower + _ordlogit_log1m_exp(log_upper - log_lower)
+    end
 end
 
 function Random.rand(rng::AbstractRNG, dist::OrderedLogisticDist)
