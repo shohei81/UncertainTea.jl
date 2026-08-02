@@ -1,4 +1,10 @@
 struct MAPResult
+    # The conditioning triple (issue #337): carried so downstream consumers
+    # (constrained_draws on the Laplace Gaussian, predict, loo) can transform
+    # unconstrained draws without re-supplying the model.
+    model::TeaModel
+    args::Tuple
+    constraints::ChoiceMap
     unconstrained_mode::Vector{Float64}
     constrained_mode::Vector{Float64}
     logjoint::Float64
@@ -209,7 +215,7 @@ function map_estimate(
         _lbfgs_maximize(objective, gradient!, seed; history=history, max_iters=max_iters, g_tol=g_tol)
 
     constrained = transform_to_constrained(model, mode, args, constraints)
-    return MAPResult(mode, constrained, fx, converged, iterations, gnorm)
+    return MAPResult(model, args, constraints, mode, constrained, fx, converged, iterations, gnorm)
 end
 
 """

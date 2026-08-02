@@ -162,14 +162,14 @@ end
     end
 
     @testset "iid_nuts_runs_finite" begin
-        chain = nuts(
+        chain = first(nuts(
             bc_iid_model,
             (),
             choicemap();
             num_samples=60,
             num_warmup=60,
             rng=MersenneTwister(99),
-        )
+        ))
         @test size(chain.constrained_samples, 2) == 60
         @test all(isfinite, chain.constrained_samples)
         # scales occupy value indices 6:8 (after the 5 eps components); constrained
@@ -192,14 +192,14 @@ end
         true_slope = 1.5
         recover_y = true_slope .* recover_xs .+ 0.05 .* randn(rng, length(recover_xs))
         obs = choicemap(:y => recover_y)
-        chain = nuts(
+        chain = first(nuts(
             bc_broadcast_model,
             (recover_xs,),
             obs;
             num_samples=200,
             num_warmup=200,
             rng=MersenneTwister(2024),
-        )
+        ))
         @test all(isfinite, chain.constrained_samples)
         slope_mean = sum(chain.constrained_samples[1, :]) / size(chain.constrained_samples, 2)
         @test isapprox(slope_mean, true_slope; atol=0.3)

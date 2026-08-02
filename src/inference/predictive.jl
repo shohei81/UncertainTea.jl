@@ -106,78 +106,18 @@ function prior_predictive(
     return PredictiveDraws(draws)
 end
 
-# Posterior predictive from pooled HMC/NUTS chains.
-"""
-    predict(model, args, result; num_draws, rng) -> PredictiveDraws
-    predict(model, args=(); num_draws=1000, rng) -> PredictiveDraws
-
-Posterior predictive draws: for each posterior draw in `result` (an
-`HMCChains`, `ImportanceSamplingResult`, `SIRResult`, `SMCResult`, or
-`NestedSamplingResult`), fix the latent parameters at that draw and re-sample
-the model's remaining choices — the observation addresses. Weighted results
-are resampled in proportion to their importance weights first. The form
-without a result runs the prior instead (unconstrained `generate` per draw,
-keeping all addresses). Returns `PredictiveDraws`; see also `prior_predictive`.
-"""
-function predict(
-    model::TeaModel,
-    args::Tuple,
-    chains::HMCChains;
-    num_draws::Int=sum(size(chain.constrained_samples, 2) for chain in chains.chains),
-    rng::AbstractRNG=Random.default_rng(),
-)
-    isempty(chains.chains) && throw(ArgumentError("predict requires at least one chain"))
-    pooled = reduce(hcat, (chain.constrained_samples for chain in chains.chains))
-    total = size(pooled, 2)
-    indices = _even_draw_indices(total, num_draws)
-    columns = (view(pooled, :, index) for index in indices)
-    return _predictive_from_param_columns(model, args, columns, rng)
-end
-
-# Posterior predictive from importance sampling / SIR results: resample particle
-# indices in proportion to the normalized weights (systematic), then run the
-# per-draw predictive kernel on the resampled constrained particles.
-function predict(
-    model::TeaModel,
-    args::Tuple,
-    result::ImportanceSamplingResult;
-    num_draws::Int=size(result.constrained_particles, 2),
-    rng::AbstractRNG=Random.default_rng(),
-)
-    num_draws > 0 || throw(ArgumentError("predict requires num_draws > 0"))
-    ancestors = _systematic_resample_indices(result.normalized_weights, num_draws, rng)
-    columns = (view(result.constrained_particles, :, ancestor) for ancestor in ancestors)
-    return _predictive_from_param_columns(model, args, columns, rng)
-end
-
-function predict(
-    model::TeaModel,
-    args::Tuple,
-    result::SMCResult;
-    num_draws::Int=size(result.importance.constrained_particles, 2),
-    rng::AbstractRNG=Random.default_rng(),
-)
-    return predict(model, args, result.importance; num_draws=num_draws, rng=rng)
-end
-
-# Posterior predictive from SIR results: the SIR step already resampled
-# `num_samples` particles (`result.ancestors`), so draw from those selected
-# particles instead of re-resampling the importance population.
-function predict(
-    model::TeaModel,
-    args::Tuple,
-    result::SIRResult;
-    num_draws::Int=size(result.constrained_samples, 2),
-    rng::AbstractRNG=Random.default_rng(),
-)
-    num_draws > 0 || throw(ArgumentError("predict requires num_draws > 0"))
-    total = size(result.constrained_samples, 2)
-    indices = _even_draw_indices(total, num_draws)
-    columns = (view(result.constrained_samples, :, index) for index in indices)
-    return _predictive_from_param_columns(model, args, columns, rng)
-end
+# The posterior-predictive `predict(model, args, result; ...)` method lives in
+# result_interface.jl: it is typed on the posterior-draws interface union
+# (issue #337), which is only complete once every result type has been defined.
 
 # Prior predictive: unconstrained `generate` per draw, keeping ALL addresses.
+"""
+    predict(model, args=(); num_draws=1000, rng) -> PredictiveDraws
+
+Prior-form `predict` (no inference result): run unconstrained `generate` per
+draw and keep every address. See the posterior form
+`predict(model, args, result; ...)` for predictive draws from a fitted result.
+"""
 function predict(
     model::TeaModel,
     args::Tuple=();

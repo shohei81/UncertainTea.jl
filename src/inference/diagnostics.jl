@@ -382,9 +382,11 @@ function _summary_parameter_entries(layout::ParameterLayout, space::Symbol)
 end
 
 function _validate_hmc_diagnostics(chains::HMCChains, space::Symbol)
-    length(chains) >= 2 || throw(ArgumentError("multi-chain diagnostics require at least 2 chains"))
+    # A single chain is allowed (issue #337): the split-chain machinery halves
+    # each chain, so one chain still yields two split sequences for Rhat/ESS.
+    length(chains) >= 1 || throw(ArgumentError("chain diagnostics require at least 1 chain"))
     num_samples = numsamples(chains)
-    num_samples >= 4 || throw(ArgumentError("multi-chain diagnostics require at least 4 samples per chain"))
+    num_samples >= 4 || throw(ArgumentError("chain diagnostics require at least 4 samples per chain"))
 
     first_samples = _diagnostic_space_samples(first(chains.chains), space)
     num_params = size(first_samples, 1)

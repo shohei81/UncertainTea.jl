@@ -82,14 +82,10 @@ end
     return mu
 end
 
-# a minimal chains-like container so the pointwise matrix can be checked against a
-# hand oracle on chosen parameter draws without depending on sampler noise
-struct PmeChain
-    constrained_samples::Matrix{Float64}
-end
-struct PmeChains
-    chains::Vector{PmeChain}
-end
+# pointwise_loglikelihood accepts a raw constrained-draws matrix (columns are
+# draws), so the matrix can be checked against a hand oracle on chosen
+# parameter draws without depending on sampler noise (issue #337: the old
+# duck-typed chains argument became a typed interface + matrix method)
 
 @testset "pointwise_marginal_enum" begin
     @testset "pme_bernoulli_oracle" begin
@@ -97,7 +93,7 @@ end
         @test observation_addresses(pme_bernoulli_model, (), pme_cm) == Any[(:y,)]
 
         pme_mus = [0.1, -0.5, 1.2, 0.0]
-        pme_chains = PmeChains([PmeChain(reshape(pme_mus, 1, length(pme_mus)))])
+        pme_chains = reshape(pme_mus, 1, length(pme_mus))
         pme_ll = pointwise_loglikelihood(pme_bernoulli_model, (), pme_cm, pme_chains)
         @test size(pme_ll) == (length(pme_mus), 1)
         for (j, mu) in enumerate(pme_mus)
@@ -114,7 +110,7 @@ end
         @test observation_addresses(pme_categorical_model, (), pme_cm) == Any[(:y,)]
 
         pme_mus = [0.6, -0.3, 1.5]
-        pme_chains = PmeChains([PmeChain(reshape(pme_mus, 1, length(pme_mus)))])
+        pme_chains = reshape(pme_mus, 1, length(pme_mus))
         pme_ll = pointwise_loglikelihood(pme_categorical_model, (), pme_cm, pme_chains)
         for (j, mu) in enumerate(pme_mus)
             pme_terms = [
@@ -130,7 +126,7 @@ end
         @test observation_addresses(pme_mixed_model, (), pme_cm) == Any[(:y1,), (:y2,)]
 
         pme_mus = [0.5, -0.4]
-        pme_chains = PmeChains([PmeChain(reshape(pme_mus, 1, length(pme_mus)))])
+        pme_chains = reshape(pme_mus, 1, length(pme_mus))
         pme_ll = pointwise_loglikelihood(pme_mixed_model, (), pme_cm, pme_chains)
         for (j, mu) in enumerate(pme_mus)
             pme_y1_terms = [
@@ -171,7 +167,7 @@ end
         pme_cm = choicemap((:y, 2.2))
         @test observation_addresses(pme_nested_single_obs_model, (), pme_cm) == Any[(:y,)]
         pme_mus = [0.3, -0.6]
-        pme_chains = PmeChains([PmeChain(reshape(pme_mus, 1, length(pme_mus)))])
+        pme_chains = reshape(pme_mus, 1, length(pme_mus))
         pme_ll = pointwise_loglikelihood(pme_nested_single_obs_model, (), pme_cm, pme_chains)
         for (j, mu) in enumerate(pme_mus)
             pme_terms = [
@@ -190,7 +186,7 @@ end
         pme_ind_cm = choicemap((:y1, 0.5), (:y2, -0.2))
         @test observation_addresses(pme_independent_enum_model, (), pme_ind_cm) ==
               Any[(:y1,), (:y2,)]
-        pme_ind_chains = PmeChains([PmeChain(reshape([0.4, -0.3], 1, 2))])
+        pme_ind_chains = reshape([0.4, -0.3], 1, 2)
         pme_ind_ll = pointwise_loglikelihood(pme_independent_enum_model, (), pme_ind_cm, pme_ind_chains)
         for (j, mu) in enumerate([0.4, -0.3])
             pme_o1 = pme_logsumexp([

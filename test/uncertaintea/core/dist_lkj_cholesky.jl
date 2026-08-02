@@ -123,14 +123,14 @@ end
     @test parametervaluecount(lkj_d2_layout) == 3
     @test lkj_d2_layout.slots[1].transform isa CholeskyCorrTransform
 
-    lkj_d2_chain = nuts(
+    lkj_d2_chain = first(nuts(
         lkj_prior2_model,
         (),
         choicemap();
         num_samples=400,
         num_warmup=400,
         rng=MersenneTwister(4904),
-    )
+    ))
     @test all(isfinite, lkj_d2_chain.constrained_samples)
     lkj_d2_draws = lkj_d2_chain.constrained_samples[2, :]
     @test abs(lkj_mean(lkj_d2_draws)) < 0.1

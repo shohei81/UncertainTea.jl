@@ -86,7 +86,7 @@ gpk_mean(x) = sum(x) / length(x)
             {:y} ~ gaussianprocess(X, matern32_kernel(exp(logl), 1.0), exp(logn))
             return logl
         end
-        chain = nuts(gpk_m32, (gpk_X,), choicemap((:y, gpk_y)); num_samples=100, num_warmup=100, rng=MersenneTwister(7))
+        chain = first(nuts(gpk_m32, (gpk_X,), choicemap((:y, gpk_y)); num_samples=100, num_warmup=100, rng=MersenneTwister(7)))
         @test all(isfinite, chain.constrained_samples)
     end
 end

@@ -4,6 +4,39 @@
 
 ### Breaking
 
+- **`nuts`/`hmc` return a one-chain `HMCChains`** (#337): the single-chain
+  samplers no longer return the bare per-chain `HMCChain`, so their results
+  compose with everything that already accepted multi-chain output —
+  `summarize`, `rhat`, `ess` (now defined for a single chain via its split
+  halves), `posterior_array`, `to_arviz_dict`, `to_mcmcchains`, `predict`, and
+  `loo`. The per-chain record is `first(result)` / `result[1]`; `HMCChain`
+  itself is unchanged. `MAPResult` gained leading `model`/`args`/`constraints`
+  fields (positional constructors change), and the four-argument
+  `pointwise_loglikelihood`/`waic`/`psis_loo`/`loo` forms are now typed on the
+  posterior-draws interface (plus a raw constrained-draws matrix method), so a
+  wrong argument fails with a `MethodError` instead of a field error.
+
+### Added
+
+- **Posterior-draws interface** (#337): `constrained_draws(result; num_draws,
+  rng) -> (draws, names)` — a `num_params x num_draws` constrained-space draw
+  matrix plus display names — implemented by every inference result:
+  `HMCChains`, `GibbsChain`, `ADVIResult`, `PathfinderResult` (its previously
+  missing constrained accessor: the stored unconstrained draws mapped through
+  the model transform), `SVGDResult`, `ImportanceSamplingResult` / `SMCResult`
+  / `NestedSamplingResult` (weight-resampled), `SIRResult`,
+  `EllipticalSliceResult`, `LaplaceResult` (Gaussian draws at the mode), and
+  `MAPResult` (the mode as one draw). Exported from
+  `UncertainTea.Diagnostics` together with the `PosteriorDrawsResult` union;
+  `predict` and `loo`/`psis_loo`/`waic` route through it and therefore accept
+  every result type above.
+- **`GibbsChain` diagnostics** (#337): `summarize`, `rhat`, `ess`,
+  `posterior_array`, and `parameter_names` now work on the continuous block of
+  a Gibbs run; `predict` pins each draw's sampled discrete values, and
+  `pointwise_loglikelihood`/`loo` condition each draw on that draw's discrete
+  values (one column per user observation). The discrete part keeps
+  `discrete_ess` and the chain fields.
+
 - **Standardized sampler keyword arguments** (#338): the same concept now has
   one name everywhere. No deprecation shims — old spellings raise a keyword
   argument error.

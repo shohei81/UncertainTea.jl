@@ -8,7 +8,10 @@
 
 # The complete `export` list of src/UncertainTea.jl immediately before #329
 # (hardcoded on purpose: the whole point is to notice accidental drops/renames).
+# Names introduced AFTER the partition are appended below with their issue.
 const PRE_329_EXPORTS = Set{Symbol}([
+    # posterior-draws interface (issue #337, exported from Diagnostics)
+    :constrained_draws, :PosteriorDrawsResult,
     # modeling language
     Symbol("@tea"), :ChoiceMap, :TeaModel, :TeaTrace, :choicemap, :generate, :assess, :logjoint,
     # density / parameter machinery

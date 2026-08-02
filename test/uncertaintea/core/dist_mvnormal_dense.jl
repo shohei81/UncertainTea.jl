@@ -180,14 +180,14 @@ const mvd_latent_L = [1.0 0.0; 0.8 0.6]
     # NUTS runs finite; observing the sum z1 + z2 bends the positively
     # correlated prior (cor 0.8) into a negatively correlated posterior along
     # the likelihood constraint.
-    mvd_latent_chain = nuts(
+    mvd_latent_chain = first(nuts(
         mvd_latent_model,
         (),
         choicemap((:y, 1.0));
         num_samples=200,
         num_warmup=200,
         rng=MersenneTwister(3),
-    )
+    ))
     mvd_latent_samples = mvd_latent_chain.constrained_samples
     @test size(mvd_latent_samples) == (2, 200)
     @test all(isfinite, mvd_latent_samples)

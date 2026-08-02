@@ -78,14 +78,16 @@ end
         # pathfinder draws land in the typical set; prior draws start far out
         @test pathfinder_mean_logjoint > prior_mean_logjoint + 10.0
 
-        chain = nuts(
-            pf_funnel_model,
-            (),
-            funnel_constraints;
-            num_samples=60,
-            num_warmup=40,
-            initial_params=result,
-            rng=MersenneTwister(2),
+        chain = first(
+            nuts(
+                pf_funnel_model,
+                (),
+                funnel_constraints;
+                num_samples=60,
+                num_warmup=40,
+                initial_params=result,
+                rng=MersenneTwister(2),
+            ),
         )
         @test all(isfinite, chain.constrained_samples)
 

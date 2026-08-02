@@ -61,16 +61,18 @@
     @test isnothing(dirichlet_batch_cache.flat_cache)
     @test isempty(dirichlet_batch_cache.column_caches)
 
-    dirichlet_chain = hmc(
-        dirichlet_latent_model,
-        (),
-        choicemap();
-        num_samples=6,
-        num_warmup=0,
-        step_size=0.05,
-        num_leapfrog_steps=2,
-        initial_params=dirichlet_params,
-        rng=MersenneTwister(171),
+    dirichlet_chain = first(
+        hmc(
+            dirichlet_latent_model,
+            (),
+            choicemap();
+            num_samples=6,
+            num_warmup=0,
+            step_size=0.05,
+            num_leapfrog_steps=2,
+            initial_params=dirichlet_params,
+            rng=MersenneTwister(171),
+        ),
     )
 
     @test size(dirichlet_chain.unconstrained_samples) == (2, 6)
@@ -112,7 +114,7 @@ end
     end
     # The exact failing seed from the issue.
     dirichlet_sa_chain =
-        hmc(dirichlet_sa_model, (); num_samples=5, num_warmup=5, rng=MersenneTwister(2795))
+        first(hmc(dirichlet_sa_model, (); num_samples=5, num_warmup=5, rng=MersenneTwister(2795)))
     @test dirichlet_sa_chain isa HMCChain
 
     # Sweep: small-alpha draws are strictly positive and survive the simplex

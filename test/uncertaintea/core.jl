@@ -108,6 +108,7 @@ core_test_files = [
     ("mcmcchains_export.jl", "inference"),
     ("advi_structured_guides.jl", "inference"),
     ("advi_flow_iwae.jl", "inference"),
+    ("result_interface.jl", "inference"),
     ("pathfinder_init.jl", "inference"),
     ("pathfinder_mass_seed.jl", "inference"),
     ("batched_initial_positions.jl", "inference"),

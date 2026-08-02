@@ -183,7 +183,7 @@ using LinearAlgebra
         @test 1.0 <= dyadic_e2e_summary[dyadic_row_index].rhat <= 1.2
     end
 
-    dyadic_depth_chain = nuts(
+    dyadic_depth_chain = first(nuts(
         dyadic_model_1d,
         (),
         choicemap();
@@ -191,7 +191,7 @@ using LinearAlgebra
         num_warmup=300,
         step_size=0.4,
         rng=MersenneTwister(99),
-    )
+    ))
     dyadic_depth_values = treedepths(dyadic_depth_chain)
     @test all(isfinite, dyadic_depth_chain.unconstrained_samples)
     @test (sum(dyadic_depth_values) / length(dyadic_depth_values)) <= 5

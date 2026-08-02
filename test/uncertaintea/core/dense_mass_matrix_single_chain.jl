@@ -108,13 +108,17 @@ using LinearAlgebra
             for i = 1:size(chain.unconstrained_samples, 1)
         )
 
-        dm_diag_chain = nuts(
-            dm_corr_model, (), dm_corr_constraints;
-            num_samples=300, num_warmup=400, metric=:diag, rng=MersenneTwister(2024),
+        dm_diag_chain = first(
+            nuts(
+                dm_corr_model, (), dm_corr_constraints;
+                num_samples=300, num_warmup=400, metric=:diag, rng=MersenneTwister(2024),
+            ),
         )
-        dm_dense_chain = nuts(
-            dm_corr_model, (), dm_corr_constraints;
-            num_samples=300, num_warmup=400, metric=:dense, rng=MersenneTwister(2024),
+        dm_dense_chain = first(
+            nuts(
+                dm_corr_model, (), dm_corr_constraints;
+                num_samples=300, num_warmup=400, metric=:dense, rng=MersenneTwister(2024),
+            ),
         )
 
         # Dense metric captures the strong posterior correlation and mixes
@@ -131,13 +135,17 @@ using LinearAlgebra
         dm_diag_ess_pooled = 0.0
         dm_dense_ess_pooled = 0.0
         for dm_eff_seed in dm_eff_seeds
-            dm_diag_eff = nuts(
-                dm_corr_model, (), dm_corr_constraints;
-                num_samples=300, num_warmup=400, metric=:diag, rng=MersenneTwister(dm_eff_seed),
+            dm_diag_eff = first(
+                nuts(
+                    dm_corr_model, (), dm_corr_constraints;
+                    num_samples=300, num_warmup=400, metric=:diag, rng=MersenneTwister(dm_eff_seed),
+                ),
             )
-            dm_dense_eff = nuts(
-                dm_corr_model, (), dm_corr_constraints;
-                num_samples=300, num_warmup=400, metric=:dense, rng=MersenneTwister(dm_eff_seed),
+            dm_dense_eff = first(
+                nuts(
+                    dm_corr_model, (), dm_corr_constraints;
+                    num_samples=300, num_warmup=400, metric=:dense, rng=MersenneTwister(dm_eff_seed),
+                ),
             )
             dm_diag_ess_pooled += dm_ess_min(dm_diag_eff)
             dm_dense_ess_pooled += dm_ess_min(dm_dense_eff)
@@ -145,10 +153,10 @@ using LinearAlgebra
         @test dm_dense_ess_pooled >= 1.3 * dm_diag_ess_pooled
 
         # metric=:diag reproduces the no-kwarg run exactly (bitwise).
-        dm_default_chain = nuts(
+        dm_default_chain = first(nuts(
             dm_corr_model, (), dm_corr_constraints;
             num_samples=300, num_warmup=400, rng=MersenneTwister(2024),
-        )
+        ))
         @test dm_diag_chain.unconstrained_samples == dm_default_chain.unconstrained_samples
         @test dm_diag_chain.dense_mass_matrix === nothing
 
@@ -163,9 +171,11 @@ using LinearAlgebra
         @test abs(dm_dense_sigma[1, 2]) > 0.1
 
         # dense also works for hmc and the multichain wrappers.
-        dm_dense_hmc = hmc(
-            dm_corr_model, (), dm_corr_constraints;
-            num_samples=100, num_warmup=200, metric=:dense, rng=MersenneTwister(7),
+        dm_dense_hmc = first(
+            hmc(
+                dm_corr_model, (), dm_corr_constraints;
+                num_samples=100, num_warmup=200, metric=:dense, rng=MersenneTwister(7),
+            ),
         )
         @test dm_dense_hmc.dense_mass_matrix isa Matrix{Float64}
         dm_dense_chains = nuts_chains(
@@ -202,13 +212,15 @@ using LinearAlgebra
             for i = 1:size(chain.unconstrained_samples, 1)
         )
 
-        mmfix_adapted = nuts(
+        mmfix_adapted = first(nuts(
             mmfix_aniso_model, (), mmfix_no_data;
             num_samples=200, num_warmup=300, rng=MersenneTwister(7),
-        )
-        mmfix_identity = nuts(
-            mmfix_aniso_model, (), mmfix_no_data;
-            num_samples=200, num_warmup=300, adapt_mass_matrix=false, rng=MersenneTwister(7),
+        ))
+        mmfix_identity = first(
+            nuts(
+                mmfix_aniso_model, (), mmfix_no_data;
+                num_samples=200, num_warmup=300, adapt_mass_matrix=false, rng=MersenneTwister(7),
+            ),
         )
 
         # (a) Variance convention: the wide (sd=10) coordinate carries the LARGER

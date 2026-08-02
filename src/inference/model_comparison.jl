@@ -216,28 +216,23 @@ function psis_loo(ll::AbstractMatrix)
     return LOOResult(elpd, p_loo, se, elpd_i, pareto_k)
 end
 
-# Convenience wrappers computing the pointwise log-likelihood from chains first.
-function waic(model::TeaModel, args::Tuple, constraints::ChoiceMap, chains)
-    return waic(pointwise_loglikelihood(model, args, constraints, chains))
-end
-
-function psis_loo(model::TeaModel, args::Tuple, constraints::ChoiceMap, chains)
-    return psis_loo(pointwise_loglikelihood(model, args, constraints, chains))
-end
+# The four-argument convenience wrappers (`waic`/`psis_loo`/`loo` from an
+# inference result) live in result_interface.jl: they are typed on the
+# posterior-draws interface union, which is only complete once every result
+# type has been defined.
 
 """
-    loo(model, args, constraints, chains) -> LOOResult
+    loo(model, args, constraints, result; kwargs...) -> LOOResult
     loo(ll::AbstractMatrix) -> LOOResult
 
 Leave-one-out cross-validation via Pareto-smoothed importance sampling; an
 alias for `psis_loo`. The four-argument form computes the pointwise
-log-likelihood matrix from posterior `chains` first; the matrix form takes an
-`S x N` (draws x observations) log-likelihood matrix directly.
+log-likelihood matrix from an inference `result` first (anything implementing
+`constrained_draws`: `HMCChains`, `GibbsChain`, `ADVIResult`, `LaplaceResult`,
+weighted particle results, ...; keyword arguments are forwarded to
+`constrained_draws`); the matrix form takes an `S x N` (draws x observations)
+log-likelihood matrix directly.
 """
-function loo(model::TeaModel, args::Tuple, constraints::ChoiceMap, chains)
-    return psis_loo(pointwise_loglikelihood(model, args, constraints, chains))
-end
-
 loo(ll::AbstractMatrix) = psis_loo(ll)
 
 function Base.show(io::IO, result::WAICResult)

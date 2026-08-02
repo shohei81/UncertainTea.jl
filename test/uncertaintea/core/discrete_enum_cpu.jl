@@ -607,21 +607,25 @@ end
         denc_mix_m1 = Float64[]
         denc_mix_m2 = Float64[]
         for denc_seed = 1:5
-            denc_ind_chain = nuts(
-                denc_indicator_model,
-                (),
-                denc_constraints;
-                num_samples=600,
-                num_warmup=400,
-                rng=MersenneTwister(700 + denc_seed),
+            denc_ind_chain = first(
+                nuts(
+                    denc_indicator_model,
+                    (),
+                    denc_constraints;
+                    num_samples=600,
+                    num_warmup=400,
+                    rng=MersenneTwister(700 + denc_seed),
+                ),
             )
-            denc_mix_chain = nuts(
-                denc_mixture_model,
-                (),
-                denc_constraints;
-                num_samples=600,
-                num_warmup=400,
-                rng=MersenneTwister(800 + denc_seed),
+            denc_mix_chain = first(
+                nuts(
+                    denc_mixture_model,
+                    (),
+                    denc_constraints;
+                    num_samples=600,
+                    num_warmup=400,
+                    rng=MersenneTwister(800 + denc_seed),
+                ),
             )
             @test all(isfinite, denc_ind_chain.constrained_samples)
             @test all(isfinite, denc_mix_chain.constrained_samples)
@@ -653,10 +657,10 @@ end
               logjoint_unconstrained(denc_categorical_model, [0.5], (), denc_auto_ccm)
 
         # NUTS now runs on the un-annotated model (it errored before #264).
-        denc_auto_chain = nuts(
+        denc_auto_chain = first(nuts(
             denc_auto_indicator_model, (), denc_auto_cm;
             num_samples=100, num_warmup=100, rng=MersenneTwister(1),
-        )
+        ))
         @test all(isfinite, denc_auto_chain.constrained_samples)
 
         # Constraining the discrete choice makes it data again: auto-marginalization

@@ -352,13 +352,15 @@ end
                 num_warmup=300,
                 rng=MersenneTwister(100 + gibbs_ind_seed),
             )
-            gibbs_enum_chain = nuts(
-                gibbs_indicator_enum_model,
-                (),
-                gibbs_ind_constraints;
-                num_samples=600,
-                num_warmup=300,
-                rng=MersenneTwister(200 + gibbs_ind_seed),
+            gibbs_enum_chain = first(
+                nuts(
+                    gibbs_indicator_enum_model,
+                    (),
+                    gibbs_ind_constraints;
+                    num_samples=600,
+                    num_warmup=300,
+                    rng=MersenneTwister(200 + gibbs_ind_seed),
+                ),
             )
             @test all(isfinite, gibbs_ind_chain.constrained_samples)
             @test gibbs_ind_chain.discrete_addresses == Any[(:z,)]

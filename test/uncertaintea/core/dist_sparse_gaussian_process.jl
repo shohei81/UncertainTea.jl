@@ -89,7 +89,7 @@ end
         sgp_yN = cholesky(Symmetric(sgp_Ktrue)).L * randn(MersenneTwister(3), sgp_nn)
         sgp_Zm = reshape(collect(range(0, 10; length=15)), 1, 15)
         sgp_cm = choicemap((:y, sgp_yN))
-        sgp_chain = nuts(sgp_hyper_model, (sgp_XN, sgp_Zm), sgp_cm; num_samples=300, num_warmup=300, rng=MersenneTwister(7))
+        sgp_chain = first(nuts(sgp_hyper_model, (sgp_XN, sgp_Zm), sgp_cm; num_samples=300, num_warmup=300, rng=MersenneTwister(7)))
         sgp_draws = sgp_chain.constrained_samples
         @test all(isfinite, sgp_draws)
         @test abs(exp(sgp_mean(sgp_draws[3, :])) - 0.2) < 0.15    # noise ~ 0.2

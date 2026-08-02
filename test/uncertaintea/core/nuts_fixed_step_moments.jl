@@ -69,17 +69,19 @@ fsm_var(values) = fsm_std(values)^2
     end
     fsm_constraints = choicemap((:y, 1.4))
     for (fsm_step, fsm_seed) in ((0.25, 1), (1.2, 2))
-        fsm_chain = nuts(
-            fsm_conjugate,
-            (),
-            fsm_constraints;
-            num_samples=6000,
-            num_warmup=300,
-            step_size=fsm_step,
-            adapt_step_size=false,
-            adapt_mass_matrix=false,
-            max_tree_depth=8,
-            rng=MersenneTwister(fsm_seed),
+        fsm_chain = first(
+            nuts(
+                fsm_conjugate,
+                (),
+                fsm_constraints;
+                num_samples=6000,
+                num_warmup=300,
+                step_size=fsm_step,
+                adapt_step_size=false,
+                adapt_mass_matrix=false,
+                max_tree_depth=8,
+                rng=MersenneTwister(fsm_seed),
+            ),
         )
         fsm_draws = vec(fsm_chain.constrained_samples)
         @test 0.41 <= fsm_var(fsm_draws) <= 0.60

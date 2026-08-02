@@ -328,14 +328,23 @@ function observation_addresses(model::TeaModel, args::Tuple=(), constraints::Cho
 end
 
 """
-    pointwise_loglikelihood(model, args, constraints, chains) -> Matrix{Float64}
+    pointwise_loglikelihood(model, args, constraints, result; kwargs...) -> Matrix{Float64}
+    pointwise_loglikelihood(model, args, constraints, draws::AbstractMatrix) -> Matrix{Float64}
 
-Compute the pointwise (per-observation) log-likelihood matrix of size `S_total x N_obs`,
-where `S_total` is the pooled number of posterior draws across all chains and `N_obs` is the
-number of constrained (observation) choices. Each draw uses its *constrained* parameter
-vector (`chain.constrained_samples`). Columns follow `observation_addresses(model, args, constraints)`.
+Compute the pointwise (per-observation) log-likelihood matrix of size `S x N_obs`,
+where `S` is the number of posterior draws and `N_obs` is the number of constrained
+(observation) choices. `result` is any inference result implementing
+`constrained_draws` (see `UncertainTea.Diagnostics.constrained_draws`; keyword
+arguments are forwarded to it), or a raw `num_params x S` matrix whose columns are
+*constrained* parameter vectors. Columns of the output follow
+`observation_addresses(model, args, constraints)`.
 """
-function pointwise_loglikelihood(model::TeaModel, args::Tuple, constraints::ChoiceMap, chains)
+function pointwise_loglikelihood(
+    model::TeaModel,
+    args::Tuple,
+    constraints::ChoiceMap,
+    draws::AbstractMatrix,
+)
     addresses = observation_addresses(model, args, constraints)
     n_obs = length(addresses)
     column_of = Dict{Any,Int}()
@@ -343,23 +352,13 @@ function pointwise_loglikelihood(model::TeaModel, args::Tuple, constraints::Choi
         column_of[a] = i
     end
 
-    total = 0
-    for chain in chains.chains
-        total += size(chain.constrained_samples, 2)
-    end
-
-    ll = Matrix{Float64}(undef, total, n_obs)
+    ll = Matrix{Float64}(undef, size(draws, 2), n_obs)
     records = Pair{Any,Float64}[]
-    s = 0
-    for chain in chains.chains
-        samples = chain.constrained_samples
-        for j = 1:size(samples, 2)
-            s += 1
-            empty!(records)
-            _record_execution!(records, model, view(samples, :, j), args, constraints)
-            for (address, lp) in records
-                ll[s, column_of[address]] = lp
-            end
+    for (s, j) in enumerate(axes(draws, 2))
+        empty!(records)
+        _record_execution!(records, model, view(draws, :, j), args, constraints)
+        for (address, lp) in records
+            ll[s, column_of[address]] = lp
         end
     end
     return ll
