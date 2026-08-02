@@ -14,6 +14,14 @@ vm_mean(x) = sum(x) / length(x)
     return mu
 end
 
+# End-to-end hang reproducer from issue #342: a weak prior on kappa routinely
+# draws kappa ~ 1e-11, which used to freeze the Best-Fisher sampler.
+@tea static function vm_weak_kappa_model()
+    kappa ~ lognormal(-25.0, 1.0)
+    {:y} ~ vonmises(0.0, kappa)
+    return kappa
+end
+
 @testset "dist_von_mises" begin
     @testset "log I0 matches SpecialFunctions across regimes" begin
         for x in (0.05, 1.0, 15.0, 50.0, 299.0, 301.0, 700.0)
@@ -51,6 +59,36 @@ end
         # circular mean of concentrated draws sits near mu
         cmean = atan(vm_mean(sin.(draws)), vm_mean(cos.(draws)))
         @test abs(cmean - 1.0) < 0.15
+    end
+
+    @testset "rand terminates and stays on the circle at extreme kappa (issue #342)" begin
+        # Pre-fix, kappa <= ~1.4e-8 and >= ~1e154 hung rand forever; these
+        # kappas exercise both extreme-regime branches and both crossovers.
+        rng = MersenneTwister(342)
+        for kappa in (1e-30, 1e-8, 1e-7, 1e150, 1e155, 1e300)
+            draws = [rand(rng, vonmises(0.4, kappa)) for _ = 1:50]
+            @test all(x -> isfinite(x) && -pi <= x < pi, draws)
+        end
+    end
+
+    @testset "extreme-kappa branches are statistically sane (issue #342)" begin
+        rng = MersenneTwister(3421)
+        # kappa -> 0: circular uniform, so the mean resultant length over 20k
+        # draws is O(1/sqrt(n)) ~ 0.007; require < 0.02 (~3 sigma).
+        tiny = [rand(rng, vonmises(0.0, 1e-10)) for _ = 1:20_000]
+        resultant = hypot(vm_mean(cos.(tiny)), vm_mean(sin.(tiny)))
+        @test resultant < 0.02
+        # kappa huge: wrapped normal(mu, 1/sqrt(kappa)) with sigma = 1e-5;
+        # every draw sits within 10 sigma = 1e-4 of mu on the circle.
+        mu = 1.0
+        sharp = [rand(rng, vonmises(mu, 1e10)) for _ = 1:2_000]
+        @test all(x -> abs(mod2pi(x - mu + pi) - pi) < 1e-4, sharp)
+    end
+
+    @testset "generate with a weak kappa prior returns (issue #342)" begin
+        trace, logw = generate(vm_weak_kappa_model, (); rng=MersenneTwister(42))
+        @test isfinite(logw)
+        @test isfinite(trace[:y]) && -pi <= trace[:y] < pi
     end
 
     @testset "backend/device honestly unsupported (CPU-reference only)" begin

@@ -61,15 +61,61 @@ function logpdf(dist::VonMisesDist, x)
     return kappa * cos(xx - mu) - log(2 * oftype(xx, pi)) - _log_besseli0(kappa)
 end
 
+# Backstop for the rejection loops below (issue #342). Both loops accept with
+# probability >= ~0.5 per iteration in their regimes, so 10_000 consecutive
+# rejections (probability <= 2^-10000) can only mean a numerical pathology;
+# error out instead of hanging generate/prior_predictive/SBC silently.
+const _VONMISES_MAX_REJECTIONS = 10_000
+
 # Best-Fisher (1979) rejection sampler, the standard von Mises draw; the result
-# is wrapped into [-pi, pi).
+# is wrapped into [-pi, pi). Extreme-kappa guards (issue #342): the core
+# sampler's setup breaks down at both ends of the kappa range —
+#
+#   * small kappa: `tau - sqrt(2 tau)` cancels catastrophically once kappa^2
+#     approaches eps(1.0) ~ 2.2e-16; for kappa <~ 1.5e-8 it rounds to 0, so
+#     rho = 0, r = Inf, f = NaN and neither accept test ever fires (hang).
+#   * large kappa: `4 kappa^2` overflows for kappa >~ 6.7e153, so tau = Inf,
+#     rho = NaN and again the loop never accepts.
+#
+# Each regime gets an explicit branch; the core sampler is untouched in
+# between (Best-Fisher is exact for ANY rho in (0, 1) — the accept test
+# c * exp(1 - c) <= 1 holds identically — so the residual ~1e-4 relative
+# rounding of rho at the 1e-6 crossover only nudges efficiency, not
+# correctness).
 function Random.rand(rng::AbstractRNG, dist::VonMisesDist)
     mu = float(dist.mu)
     kappa = float(dist.kappa)
+    if kappa < 1e-6
+        # Near-uniform regime: exact rejection sampling with a circular-uniform
+        # proposal. Target density is proportional to exp(kappa * cos(delta))
+        # for delta = theta - mu; with envelope constant exp(kappa) the accept
+        # probability exp(kappa * (cos(delta) - 1)) lies in [exp(-2 kappa), 1],
+        # i.e. >= 1 - 2e-6 here, so the draw is exactly von Mises and the loop
+        # essentially never iterates (no small-kappa pathology possible).
+        for _ = 1:_VONMISES_MAX_REJECTIONS
+            delta = (2 * rand(rng) - 1) * pi
+            if rand(rng) <= exp(kappa * (cos(delta) - 1))
+                return mod2pi(mu + delta + pi) - pi
+            end
+        end
+        error(
+            "vonmises rand: small-kappa rejection sampler failed to accept after " *
+            "$(_VONMISES_MAX_REJECTIONS) iterations (kappa = $kappa)",
+        )
+    elseif kappa > 1e8
+        # Sharp-peak regime: von Mises is a wrapped normal(mu, 1/sqrt(kappa))
+        # to double precision. With sigma = 1/sqrt(kappa) < 1e-4, the density
+        # ratio exp(-kappa (1 - cos t)) / exp(-kappa t^2 / 2) =
+        # exp(kappa t^4 / 24 + O(kappa t^6)) deviates from 1 by < 3e-7 even at
+        # |t| = 5 sigma, and the wrapped mass beyond pi is < erfc(pi / sigma)
+        # ~ 0, so a single wrapped Gaussian draw is exact to double precision.
+        theta = mu + randn(rng) / sqrt(kappa)
+        return mod2pi(theta + pi) - pi
+    end
     tau = 1 + sqrt(1 + 4 * kappa * kappa)
     rho = (tau - sqrt(2 * tau)) / (2 * kappa)
     r = (1 + rho * rho) / (2 * rho)
-    while true
+    for _ = 1:_VONMISES_MAX_REJECTIONS
         u1, u2, u3 = rand(rng), rand(rng), rand(rng)
         z = cos(pi * u1)
         f = (1 + r * z) / (r + z)
@@ -79,4 +125,6 @@ function Random.rand(rng::AbstractRNG, dist::VonMisesDist)
             return mod2pi(theta + pi) - pi
         end
     end
+    error("vonmises rand: Best-Fisher sampler failed to accept after " *
+          "$(_VONMISES_MAX_REJECTIONS) iterations (kappa = $kappa)")
 end
