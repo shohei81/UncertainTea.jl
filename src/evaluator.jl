@@ -230,7 +230,13 @@ function _resolve_compile_symbol(@nospecialize(model::TeaModel), layout::Environ
         return CompiledLiteralExpr(getfield(Base, sym))
     end
 
-    throw(ArgumentError("lower-level logjoint could not resolve symbol `$sym` in model $(model.name)"))
+    throw(
+        ArgumentError(
+            "could not resolve the name `$sym` while compiling model `$(model.name)`: " *
+            "it is not a model argument, a bound choice, a local binding, or a name " *
+            "defined in the model's module.",
+        ),
+    )
 end
 
 # `sum(a .* b)` compiled without the intermediate broadcast array (issue #145).
@@ -360,7 +366,14 @@ function _compile_plan_expr(@nospecialize(model::TeaModel), layout::EnvironmentL
             return _rewrite_compiled_call(CompiledCallExpr(callee, arguments))
         end
 
-        throw(ArgumentError("unsupported expression in lower-level logjoint compilation: $expr"))
+        throw(
+            ArgumentError(
+                "expression not supported in compiled @tea static model code: `$expr`. " *
+                "Model bodies compile a fixed expression subset (arithmetic, dotted " *
+                "operators and function calls, indexing, tuples); move other computation " *
+                "outside the model and pass its result in as a model argument.",
+            ),
+        )
     end
 
     return CompiledLiteralExpr(expr)
@@ -420,7 +433,12 @@ function _compile_plan_step(
     stage_counter::Base.RefValue{Int},
 )
     step.rhs isa DistributionSpec || step.rhs isa BroadcastDistributionSpec ||
-        throw(ArgumentError("compiled lower-level logjoint only supports distribution choice steps"))
+        throw(
+            ArgumentError(
+                "the compiled scorer only supports distribution choice steps; this model " *
+                "contains a generative subcall, which evaluates on the interpreted path.",
+            ),
+        )
     arguments = tuple((_compile_plan_expr(model, layout, arg) for arg in step.rhs.arguments)...)
     constructor = if step.rhs isa BroadcastDistributionSpec
         # normal keeps its dedicated runtime dist; every other broadcast family
@@ -1080,7 +1098,14 @@ function _score_plan_step!(
         _parameter_slot_value(step.parameter_value_indices, params)
     else
         found, constrained_value = _choice_tryget_normalized(constraints, address)
-        found || throw(ArgumentError("lower-level logjoint requires a provided value for choice $(address)"))
+        found || throw(
+            ArgumentError(
+                "no constraint value provided for the observed choice `$(address)`. " *
+                "Constraining any index of a repeated site classifies the whole site " *
+                "as observed, so every index needs a value — supply all of them, or " *
+                "none to keep the site latent.",
+            ),
+        )
         constrained_value
     end
 
