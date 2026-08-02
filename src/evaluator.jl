@@ -1203,10 +1203,24 @@ function _stage_walk_step!(
         # value is the dense Float64 vector itself (the same Float64-only rule
         # the loop sites apply; anything else deactivates the site)
         site = sites[step.stage_index]
+        # Float64 vectors stage directly; INTEGER-valued vectors (Int counts,
+        # Bool labels -- the natural spelling of count/binary data, issue #308)
+        # convert EXACTLY to Float64, since every count/support classifier
+        # (_poisson_count, _bernoulli_value) and scalar kernel scores 3 and 3.0
+        # identically. Float32 stays excluded: its promotion-sensitive scoring
+        # is not identical under densification.
         if value isa Vector{Float64} && !isempty(value)
             n = length(value)
             resize!(site.values, n)
             copyto!(site.values, value)
+            resize!(site.filled, n)
+            fill!(site.filled, true)
+        elseif value isa AbstractVector{<:Integer} && !isempty(value)
+            n = length(value)
+            resize!(site.values, n)
+            for i = 1:n
+                site.values[i] = Float64(value[i])
+            end
             resize!(site.filled, n)
             fill!(site.filled, true)
         else
@@ -1214,7 +1228,11 @@ function _stage_walk_step!(
         end
     elseif step.stage_index != 0 && active[step.stage_index]
         index = _environment_value(env, step.stage_iterator_slot)
-        if index isa Int && index >= 1 && value isa Float64
+        # integer-valued observations densify exactly (issue #308, mirroring the
+        # static-vector rule above); Float32 stays excluded
+        staged = value isa Float64 ? value : (value isa Integer ? Float64(value) : nothing)
+        if index isa Int && index >= 1 && staged isa Float64
+            value = staged
             site = sites[step.stage_index]
             if index > length(site.values)
                 previous_length = length(site.values)
