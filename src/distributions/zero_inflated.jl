@@ -50,6 +50,10 @@ zeroinflatedpoisson(p, lambda) = ZeroInflatedPoissonDist(p, lambda)
 zeroinflatednegativebinomial(p, successes, probability) =
     ZeroInflatedNegativeBinomialDist(p, successes, probability)
 
+# The shared docstring binds only to the first definition; mirror it onto the
+# second so `@ref` links and `?` lookups resolve.
+@doc (@doc zeroinflatedpoisson) zeroinflatednegativebinomial
+
 # log(exp(a) + exp(b)) without overflow
 @inline function _zi_logaddexp(a, b)
     m = max(a, b)

@@ -95,16 +95,24 @@ Dynamic-mode models (`@tea function ...` without `static`) may contain
 
 ## Distributions
 
-The built-in distribution set includes `normal`, `lognormal`, `laplace`,
-`exponential`, `gamma`, `inversegamma`, `weibull`, `beta`, `dirichlet`,
-diagonal `mvnormal`, `mvnormaldense`, `bernoulli`, `bernoullilogit`, `binomial`,
-`geometric`, `negativebinomial`, `poisson`, `studentt`, and `categorical`, plus
+The built-in scalar and multivariate families include `normal`, `lognormal`,
+`laplace`, `exponential`, `gamma`, `inversegamma`, `weibull`, `beta`,
+`dirichlet`, diagonal `mvnormal`, `mvnormaldense`, `mvstudentt`, `bernoulli`,
+`bernoullilogit`, `binomial`, `geometric`, `negativebinomial`, `poisson`,
+`studentt`, `categorical`, and `vonmises`, plus
 `truncatednormal`/`truncatedstudentt`, `mixture`, `lkjcholesky`, and the `iid`
-combinator (with an optional `reparam=:noncentered` reparameterization). Custom
-families can be added via `register_distribution`.
+combinator (with an optional `reparam=:noncentered` reparameterization).
+
+Structured and specialized families — Gaussian processes (dense, sparse, and
+latent, with a composable kernel language), `hmm`, `orderedlogistic`, and the
+zero-inflated counts — are covered in [Modeling](modeling.md), along with the
+vectorized `family.(...)` observation syntax for GLMs. Custom families can be
+added via `register_distribution`.
 
 ## Next steps
 
+- [Modeling](modeling.md) — vectorized GLM observations, Gaussian processes,
+  and the structured distributions.
 - [Inference Overview](inference.md) — how to sample these models.
 - [Eight Schools example](generated/eight_schools.md) — a full hierarchical
   model end to end.

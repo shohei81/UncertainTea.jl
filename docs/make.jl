@@ -36,6 +36,7 @@ makedocs(;
     pages=[
         "Home" => "index.md",
         "Getting Started" => "getting-started.md",
+        "Modeling" => "modeling.md",
         "Inference Overview" => "inference.md",
         "Examples" => [
             "Eight Schools (Non-centered)" => "generated/eight_schools.md",
