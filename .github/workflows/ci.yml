@@ -13,11 +13,10 @@ on:
       - "docs/**"
       - "**.md"
       - "LICENSE"
+  # No paths-ignore on pull_request: the CI checks are REQUIRED on main
+  # (issue #330), and a required check that never reports blocks the merge
+  # forever — so docs-/markdown-only PRs must run the matrix too.
   pull_request:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
-      - "LICENSE"
 
 # A new push to the same PR/branch cancels the still-running older build.
 # Cancel superseded runs for PR pushes only. Push-to-main runs must always
