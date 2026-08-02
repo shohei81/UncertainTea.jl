@@ -90,3 +90,48 @@ end
         @test_throws MethodError reverse_mode_gradient(svo_gp, [0.1, 0.2, -0.8], (svo_X,), svo_gp_cm)
     end
 end
+
+@testset "integer-valued observations stage exactly (issue #308)" begin
+    svo_x8 = collect(range(-1.0, 1.0; length=8))
+    @tea static function svo_pois8(x, n)
+        a ~ normal(0.0, 1.0)
+        b ~ normal(0.0, 1.0)
+        {:y} ~ poisson.(exp.(a .+ b .* x))
+        return a
+    end
+    counts = [2, 1, 3, 2, 4, 5, 3, 6]                       # Int, the natural spelling
+    g_int = logjoint_gradient_unconstrained(svo_pois8, [0.3, 0.5], (svo_x8, 8), choicemap((:y, counts)))
+    @test UncertainTea._GEN_SCORER_LAST_USED[]
+    g_f64 = logjoint_gradient_unconstrained(svo_pois8, [0.3, 0.5], (svo_x8, 8), choicemap((:y, Float64.(counts))))
+    @test g_int == g_f64                                     # densification is exact
+
+    # Bool labels on a broadcast logit observation
+    @tea static function svo_blogit8(x, n)
+        b ~ normal(0.0, 1.0)
+        {:y} ~ bernoullilogit.(b .* x)
+        return b
+    end
+    labels = [false, true, false, true, true, false, true, true]
+    gb = logjoint_gradient_unconstrained(svo_blogit8, [0.4], (svo_x8, 8), choicemap((:y, labels)))
+    @test UncertainTea._GEN_SCORER_LAST_USED[]
+    @test all(isfinite, gb)
+
+    # loop-addressed Int observations stage too
+    @tea static function svo_pois_loop(n)
+        ll ~ normal(0.0, 1.0)
+        for i = 1:n
+            {:y => i} ~ poisson(exp(ll))
+        end
+        return ll
+    end
+    cml = choicemap([(:y => i, 2 + i % 3) for i = 1:6])
+    gl = logjoint_gradient_unconstrained(svo_pois_loop, [0.2], (6,), cml)
+    @test UncertainTea._GEN_SCORER_LAST_USED[]
+    @test all(isfinite, gl)
+
+    # Float32 stays excluded (promotion-sensitive scoring is not densification-exact)
+    logjoint_gradient_unconstrained(
+        svo_pois8, [0.3, 0.5], (svo_x8, 8), choicemap((:y, Float32.(counts))),
+    )
+    @test !UncertainTea._GEN_SCORER_LAST_USED[]
+end
