@@ -71,6 +71,36 @@ end
     return alpha
 end
 
+# Poisson GLM in the BROADCAST observation form (issue #317): the whole count
+# vector is one addressed choice, `{:y} ~ poisson.(exp.(a .+ b .* x))` — the
+# same vectorized formulation NumPyro states naturally and Stan writes as
+# `y ~ poisson_log(a + b * x)`. Rides the backend-native dense broadcast step
+# with the analytic batched gradient (issue #287); the first cross-PPL case on
+# a post-#300 fast path.
+@tea static function bench_poisson_glm(x, n)
+    a ~ normal(0.0, 1.0)
+    b ~ normal(0.0, 1.0)
+    {:y} ~ poisson.(exp.(a .+ b .* x))
+    return a
+end
+
+# J=32 hierarchical Gaussian (eight-schools shape, CENTERED, log-normal tau) —
+# the P >= 24 (34-parameter) model for the reverse-mode (Enzyme) leg
+# (issue #317). Centered + lognormal deliberately: the reverse tier engages for
+# plain iid latents, while the noncentered `reparam` machinery and the
+# truncated-t tau both fail Enzyme's type analysis today (the adtype guard
+# would silently fall back to forward). The eight_schools twins keep measuring
+# the canonical funnel; this model measures the gradient tiers at real P.
+@tea static function bench_schools_large(sigma)
+    mu ~ normal(0.0, 5.0)
+    log_tau ~ normal(0.0, 1.0)
+    theta ~ iid(normal(mu, exp(log_tau)), 32)
+    for i = 1:32
+        {:y => i} ~ normal(theta[i], sigma[i])
+    end
+    return mu
+end
+
 # Gaussian mean/scale estimation with a loop-addressed observation vector —
 # the device-supported form (same shape as test/gpu gpu_gauss_model) used for
 # the chain-count scaling sweep.  The logistic model above now rides the HOST
