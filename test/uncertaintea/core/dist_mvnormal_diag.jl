@@ -60,16 +60,18 @@
     @test isnothing(mvnormal_batch_cache.flat_cache)
     @test isempty(mvnormal_batch_cache.column_caches)
 
-    mvnormal_chain = hmc(
-        mvnormal_latent_model,
-        (),
-        choicemap();
-        num_samples=6,
-        num_warmup=0,
-        step_size=0.05,
-        num_leapfrog_steps=2,
-        initial_params=mvnormal_params,
-        rng=MersenneTwister(181),
+    mvnormal_chain = first(
+        hmc(
+            mvnormal_latent_model,
+            (),
+            choicemap();
+            num_samples=6,
+            num_warmup=0,
+            step_size=0.05,
+            num_leapfrog_steps=2,
+            initial_params=mvnormal_params,
+            rng=MersenneTwister(181),
+        ),
     )
 
     @test size(mvnormal_chain.unconstrained_samples) == (2, 6)

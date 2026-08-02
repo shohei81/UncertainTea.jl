@@ -90,26 +90,29 @@ function hmc_chains(
     _run_chains!(chains) do chain_index
         chain_rng = MersenneTwister(seeds[chain_index])
         chain_initial_params = _chain_initial_params(initial_params, chain_index, num_params, constrained_num_params, num_chains)
-        hmc(
-            model,
-            args,
-            constraints;
-            num_samples=num_samples,
-            num_warmup=num_warmup,
-            step_size=step_size,
-            num_leapfrog_steps=num_leapfrog_steps,
-            initial_params=chain_initial_params,
-            target_accept=target_accept,
-            adapt_step_size=adapt_step_size,
-            adapt_mass_matrix=adapt_mass_matrix,
-            find_reasonable_step_size=find_reasonable_step_size,
-            divergence_threshold=divergence_threshold,
-            mass_matrix_regularization=mass_matrix_regularization,
-            mass_matrix_min_samples=mass_matrix_min_samples,
-            metric=metric,
-            callback=_chain_progress_callback(callback, callback_lock, chain_index),
-            callback_every=callback_every,
-            rng=chain_rng,
+        # `hmc` returns a one-chain HMCChains (issue #337); unwrap the HMCChain.
+        only(
+            hmc(
+                model,
+                args,
+                constraints;
+                num_samples=num_samples,
+                num_warmup=num_warmup,
+                step_size=step_size,
+                num_leapfrog_steps=num_leapfrog_steps,
+                initial_params=chain_initial_params,
+                target_accept=target_accept,
+                adapt_step_size=adapt_step_size,
+                adapt_mass_matrix=adapt_mass_matrix,
+                find_reasonable_step_size=find_reasonable_step_size,
+                divergence_threshold=divergence_threshold,
+                mass_matrix_regularization=mass_matrix_regularization,
+                mass_matrix_min_samples=mass_matrix_min_samples,
+                metric=metric,
+                callback=_chain_progress_callback(callback, callback_lock, chain_index),
+                callback_every=callback_every,
+                rng=chain_rng,
+            ).chains,
         )
     end
 
@@ -158,26 +161,29 @@ function nuts_chains(
     _run_chains!(chains) do chain_index
         chain_rng = MersenneTwister(seeds[chain_index])
         chain_initial_params = _chain_initial_params(initial_params, chain_index, num_params, constrained_num_params, num_chains)
-        nuts(
-            model,
-            args,
-            constraints;
-            num_samples=num_samples,
-            num_warmup=num_warmup,
-            step_size=step_size,
-            max_tree_depth=max_tree_depth,
-            initial_params=chain_initial_params,
-            target_accept=target_accept,
-            adapt_step_size=adapt_step_size,
-            adapt_mass_matrix=adapt_mass_matrix,
-            find_reasonable_step_size=find_reasonable_step_size,
-            divergence_threshold=divergence_threshold,
-            mass_matrix_regularization=mass_matrix_regularization,
-            mass_matrix_min_samples=mass_matrix_min_samples,
-            metric=metric,
-            callback=_chain_progress_callback(callback, callback_lock, chain_index),
-            callback_every=callback_every,
-            rng=chain_rng,
+        # `nuts` returns a one-chain HMCChains (issue #337); unwrap the HMCChain.
+        only(
+            nuts(
+                model,
+                args,
+                constraints;
+                num_samples=num_samples,
+                num_warmup=num_warmup,
+                step_size=step_size,
+                max_tree_depth=max_tree_depth,
+                initial_params=chain_initial_params,
+                target_accept=target_accept,
+                adapt_step_size=adapt_step_size,
+                adapt_mass_matrix=adapt_mass_matrix,
+                find_reasonable_step_size=find_reasonable_step_size,
+                divergence_threshold=divergence_threshold,
+                mass_matrix_regularization=mass_matrix_regularization,
+                mass_matrix_min_samples=mass_matrix_min_samples,
+                metric=metric,
+                callback=_chain_progress_callback(callback, callback_lock, chain_index),
+                callback_every=callback_every,
+                rng=chain_rng,
+            ).chains,
         )
     end
 

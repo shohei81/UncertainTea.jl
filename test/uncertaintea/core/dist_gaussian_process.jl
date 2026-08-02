@@ -86,10 +86,10 @@ end
 
     @testset "NUTS recovers the hyperparameters" begin
         gp_cm = choicemap((:y, gp_y))
-        gp_chain = nuts(
+        gp_chain = first(nuts(
             gp_hyper_model, (gp_X, gp_n), gp_cm;
             num_samples=400, num_warmup=400, rng=MersenneTwister(7),
-        )
+        ))
         gp_draws = gp_chain.constrained_samples
         @test all(isfinite, gp_draws)
         # noise is the best-identified hyperparameter at this N; lengthscale and

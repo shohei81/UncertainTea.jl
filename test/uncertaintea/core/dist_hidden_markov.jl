@@ -70,9 +70,11 @@ end
 
     @testset "NUTS recovers the emission parameters" begin
         hmm_cm = choicemap((:y, hmm_y))
-        hmm_chain = nuts(
-            hmm_emission_model, (hmm_init, hmm_trans, hmm_T), hmm_cm;
-            num_samples=300, num_warmup=300, rng=MersenneTwister(7),
+        hmm_chain = first(
+            nuts(
+                hmm_emission_model, (hmm_init, hmm_trans, hmm_T), hmm_cm;
+                num_samples=300, num_warmup=300, rng=MersenneTwister(7),
+            ),
         )
         hmm_draws = hmm_chain.constrained_samples
         @test all(isfinite, hmm_draws)

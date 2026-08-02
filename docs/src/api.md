@@ -63,7 +63,7 @@ UncertainTea.Inference
 Modules = [UncertainTea]
 Private = true
 Order = [:function, :type, :constant]
-Filter = o -> (o isa Function || o isa Type) && nameof(o) in names(UncertainTea.Inference)
+Filter = o -> (o isa Function || (o isa Type && !(o isa Union))) && nameof(o) in names(UncertainTea.Inference)
 ```
 
 ## Diagnostics (`UncertainTea.Diagnostics`)
@@ -76,7 +76,7 @@ UncertainTea.Diagnostics
 Modules = [UncertainTea]
 Private = true
 Order = [:function, :type, :constant]
-Filter = o -> (o isa Function || o isa Type) && nameof(o) in names(UncertainTea.Diagnostics)
+Filter = o -> (o isa Function || (o isa Type && !(o isa Union))) && nameof(o) in names(UncertainTea.Diagnostics)
 ```
 
 ## Device (`UncertainTea.Device`)
@@ -89,5 +89,5 @@ UncertainTea.Device
 Modules = [UncertainTea]
 Private = true
 Order = [:function, :type, :constant]
-Filter = o -> (o isa Function || o isa Type) && nameof(o) in names(UncertainTea.Device)
+Filter = o -> (o isa Function || (o isa Type && !(o isa Union))) && nameof(o) in names(UncertainTea.Device)
 ```

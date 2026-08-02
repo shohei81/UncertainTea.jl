@@ -140,6 +140,7 @@ end # module Inference
 The chain-inspection and model-checking surface: convergence summaries and
 sampler-health checks (`summarize`, `rhat`, `ess`, `check_diagnostics`, ...),
 draw export helpers (`posterior_array`, `to_arviz_dict`, `to_mcmcchains`, ...),
+the posterior-draws interface (`constrained_draws`, `PosteriorDrawsResult`),
 model comparison (`waic`, `psis_loo`, `loo`, `pointwise_loglikelihood`, ...),
 and predictive checks (`predict`, `prior_predictive`, ...). Load it with
 `using UncertainTea.Diagnostics`; all names remain reachable qualified as
@@ -154,6 +155,7 @@ using ..UncertainTea:
     HMCMassAdaptationWindowSummary, HMCMassAdaptationSummary, HMCDiagnosticsSummary,
     HMCParameterSummary, HMCSummary,
     posterior_array, parameter_names, to_arviz_dict, to_mcmcchains,
+    constrained_draws, PosteriorDrawsResult,
     pointwise_loglikelihood, observation_addresses, waic, psis_loo, loo, WAICResult,
     LOOResult,
     predict, PredictiveDraws, addresses, prior_predictive
@@ -164,6 +166,7 @@ export summarize, rhat, ess, discrete_ess, acceptancerate, divergencerate,
     HMCMassAdaptationWindowSummary, HMCMassAdaptationSummary, HMCDiagnosticsSummary,
     HMCParameterSummary, HMCSummary
 export posterior_array, parameter_names, to_arviz_dict, to_mcmcchains
+export constrained_draws, PosteriorDrawsResult
 export pointwise_loglikelihood, observation_addresses, waic, psis_loo, loo, WAICResult,
     LOOResult
 export predict, PredictiveDraws, addresses, prior_predictive

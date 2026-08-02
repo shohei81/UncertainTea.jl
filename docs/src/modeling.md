@@ -26,7 +26,8 @@ using UncertainTea.Inference   # nuts, batched_nuts, ...
 end
 
 constraints = choicemap((:y, ys))   # ys::Vector{Float64}, length n
-chain = nuts(linreg, (x, n), constraints; num_samples=500, num_warmup=500)
+chains = nuts(linreg, (x, n), constraints; num_samples=500, num_warmup=500)
+# a one-chain HMCChains: summarize(chains), predict, loo, ... all apply
 ```
 
 The broadcast form scores element-wise like the equivalent

@@ -113,7 +113,7 @@ end
         beta_true = 1.4
         ys = Float64[rand(rng, orderedlogistic(beta_true * (i - 5.5) / 3, ordl_cut)) for i = 1:n]
         cm = choicemap([(:y => i, ys[i]) for i = 1:n])
-        chain = nuts(ordl_model, (ordl_cut, n), cm; num_samples=400, num_warmup=400, rng=MersenneTwister(11))
+        chain = first(nuts(ordl_model, (ordl_cut, n), cm; num_samples=400, num_warmup=400, rng=MersenneTwister(11)))
         draws = chain.constrained_samples
         @test all(isfinite, draws)
         @test abs(ordl_mean(draws[1, :]) - beta_true) < 0.8

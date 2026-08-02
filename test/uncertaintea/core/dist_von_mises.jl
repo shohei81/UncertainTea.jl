@@ -102,7 +102,7 @@ end
         mu_true, kappa_true = 0.8, 4.0
         ys = Float64[rand(rng, vonmises(mu_true, kappa_true)) for _ = 1:n]
         cm = choicemap([(:y => i, ys[i]) for i = 1:n])
-        chain = nuts(vm_model, (n,), cm; num_samples=400, num_warmup=400, rng=MersenneTwister(11))
+        chain = first(nuts(vm_model, (n,), cm; num_samples=400, num_warmup=400, rng=MersenneTwister(11)))
         draws = chain.constrained_samples
         @test all(isfinite, draws)
         @test abs(vm_mean(draws[1, :]) - mu_true) < 0.3

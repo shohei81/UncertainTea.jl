@@ -30,10 +30,12 @@
 end
 
 """
-    hmc(model, args=(), constraints=choicemap(); num_samples, kwargs...) -> HMCChain
+    hmc(model, args=(), constraints=choicemap(); num_samples, kwargs...) -> HMCChains
 
 Run a single Hamiltonian Monte Carlo chain against `model` conditioned on
-`constraints`, returning an [`HMCChain`](@ref).
+`constraints`, returning a one-chain [`HMCChains`](@ref) — the same result type
+as [`hmc_chains`](@ref), so `summarize`, `rhat`, `ess`, `predict`, `loo`, and
+the export helpers all work directly on the result.
 
 Warmup adapts the step size (dual averaging to `target_accept`) and, optionally,
 the mass matrix. Key keyword arguments:
@@ -207,7 +209,7 @@ function hmc(
         end
     end
 
-    return HMCChain(
+    chain = HMCChain(
         :hmc,
         model,
         args,
@@ -230,13 +232,20 @@ function hmc(
         driver.mass_adaptation_windows,
         driver.metric_kind === :dense ? copy(driver.dense_metric.inverse_mass) : nothing,
     )
+    # Single-chain runs return the SAME result type as multi-chain runs (issue
+    # #337): a one-chain HMCChains, so every downstream consumer (summarize,
+    # rhat, ess, posterior_array, predict, loo, ...) works without special
+    # casing. The per-chain HMCChain stays reachable as `first(result)`.
+    return HMCChains(model, args, constraints, [chain])
 end
 
 """
-    nuts(model, args=(), constraints=choicemap(); num_samples, kwargs...) -> HMCChain
+    nuts(model, args=(), constraints=choicemap(); num_samples, kwargs...) -> HMCChains
 
 Run a single No-U-Turn Sampler chain against `model` conditioned on
-`constraints`, returning an [`HMCChain`](@ref). NUTS is the reference sampler:
+`constraints`, returning a one-chain [`HMCChains`](@ref) — the same result type
+as [`nuts_chains`](@ref), so `summarize`, `rhat`, `ess`, `predict`, `loo`, and
+the export helpers all work directly on the result. NUTS is the reference sampler:
 it builds a per-iteration trajectory that adapts its own length instead of using
 a fixed leapfrog-step count.
 
@@ -414,7 +423,7 @@ function nuts(
         end
     end
 
-    return HMCChain(
+    chain = HMCChain(
         :nuts,
         model,
         args,
@@ -437,4 +446,6 @@ function nuts(
         driver.mass_adaptation_windows,
         driver.metric_kind === :dense ? copy(driver.dense_metric.inverse_mass) : nothing,
     )
+    # One-chain HMCChains (issue #337): see the matching comment in `hmc`.
+    return HMCChains(model, args, constraints, [chain])
 end

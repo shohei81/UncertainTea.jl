@@ -313,7 +313,7 @@ end
         sample_var(v) = sum(abs2, v .- sample_mean(v)) / (length(v) - 1)
 
         for sampler in (hmc, nuts)
-            res = sampler(cdc_chain, (), cons; num_samples=4000, num_warmup=1000, rng=MersenneTwister(95))
+            res = first(sampler(cdc_chain, (), cons; num_samples=4000, num_warmup=1000, rng=MersenneTwister(95)))
             @test size(res.constrained_samples, 1) == 1
             mus = vec(res.constrained_samples[1, :])
             # posterior mean / variance match the conjugate closed form within
@@ -329,7 +329,7 @@ end
         layout = UncertainTea._resolve_signature_plan(cdc_chain, cons).plan.parameter_layout
         @test parametervaluecount(layout) == 2
 
-        res = nuts(cdc_chain, (), cons; num_samples=800, num_warmup=800, rng=MersenneTwister(7))
+        res = first(nuts(cdc_chain, (), cons; num_samples=800, num_warmup=800, rng=MersenneTwister(7)))
         @test size(res.constrained_samples, 1) == 2
         # every draw is finite in both latent coordinates.
         @test all(isfinite, res.constrained_samples)

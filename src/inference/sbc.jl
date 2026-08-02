@@ -280,14 +280,18 @@ function sbc(
             )
             first(batched.chains)
         else
-            nuts(
-                model,
-                args,
-                data;
-                num_samples=num_samples * thin,
-                num_warmup=num_warmup,
-                rng=rng,
-                nuts_kwargs...,
+            # `nuts` returns a one-chain HMCChains (issue #337); the rank
+            # statistic reads the single chain's draws.
+            only(
+                nuts(
+                    model,
+                    args,
+                    data;
+                    num_samples=num_samples * thin,
+                    num_warmup=num_warmup,
+                    rng=rng,
+                    nuts_kwargs...,
+                ).chains,
             )
         end
         draws = view(chain.constrained_samples, :, thin:thin:(num_samples*thin))

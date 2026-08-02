@@ -131,14 +131,14 @@ end
 
     # NUTS runs and produces finite, strictly positive constrained samples.
     trunc_obs = choicemap((:obs, 1.3f0))
-    trunc_chain = nuts(
+    trunc_chain = first(nuts(
         trunc_scale_model,
         (nothing,),
         trunc_obs;
         num_samples=100,
         num_warmup=100,
         rng=MersenneTwister(5),
-    )
+    ))
     @test size(trunc_chain.constrained_samples, 2) == 100
     @test all(isfinite, trunc_chain.constrained_samples)
     @test all(>(0.0), trunc_chain.constrained_samples)

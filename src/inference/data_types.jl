@@ -47,8 +47,10 @@ end
 
 A single sampled chain: the constrained and unconstrained draws plus per-draw
 diagnostics (acceptance, energy, divergences, tree depths / integration steps)
-and the adapted step size and mass matrix. Produced by [`hmc`](@ref) and
-[`nuts`](@ref), and held per-chain inside an [`HMCChains`](@ref).
+and the adapted step size and mass matrix. Held per-chain inside an
+[`HMCChains`](@ref) — every sampler entry point (including the single-chain
+[`hmc`](@ref) / [`nuts`](@ref), issue #337) returns `HMCChains`; index into it
+(`chains[1]`, `first(chains)`) to reach the per-chain diagnostics.
 """
 struct HMCChain
     sampler::Symbol
@@ -81,10 +83,11 @@ end
     HMCChains
 
 A collection of [`HMCChain`](@ref)s from the same model and conditioning, as
-returned by [`hmc_chains`](@ref), [`nuts_chains`](@ref), [`batched_nuts`](@ref),
-[`batched_hmc`](@ref), and [`batched_chees`](@ref). Pass it to
-[`summarize`](@ref), `rhat`, `ess`, and the export helpers (`posterior_array`,
-`to_arviz_dict`, `to_mcmcchains`).
+returned by [`hmc`](@ref), [`nuts`](@ref) (one chain), [`hmc_chains`](@ref),
+[`nuts_chains`](@ref), [`batched_nuts`](@ref), [`batched_hmc`](@ref), and
+[`batched_chees`](@ref). Pass it to [`summarize`](@ref), `rhat`, `ess`,
+`predict`, `loo`, and the export helpers (`posterior_array`, `to_arviz_dict`,
+`to_mcmcchains`).
 """
 struct HMCChains{A,C}
     model::TeaModel

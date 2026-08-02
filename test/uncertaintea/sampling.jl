@@ -1,122 +1,142 @@
 @testset "sampling" begin
-    gaussian_chain = hmc(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=250,
-        num_warmup=150,
-        step_size=0.25,
-        num_leapfrog_steps=8,
-        rng=MersenneTwister(29),
+    gaussian_chain = first(
+        hmc(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=250,
+            num_warmup=150,
+            step_size=0.25,
+            num_leapfrog_steps=8,
+            rng=MersenneTwister(29),
+        ),
     )
-    gaussian_baseline_chain = hmc(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=25,
-        num_warmup=0,
-        step_size=0.25,
-        num_leapfrog_steps=8,
-        rng=MersenneTwister(22),
+    gaussian_baseline_chain = first(
+        hmc(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=25,
+            num_warmup=0,
+            step_size=0.25,
+            num_leapfrog_steps=8,
+            rng=MersenneTwister(22),
+        ),
     )
-    gaussian_large_step_chain = hmc(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=20,
-        num_warmup=0,
-        step_size=16.0,
-        num_leapfrog_steps=4,
-        adapt_step_size=false,
-        adapt_mass_matrix=false,
-        find_reasonable_step_size=true,
-        rng=MersenneTwister(23),
+    gaussian_large_step_chain = first(
+        hmc(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=20,
+            num_warmup=0,
+            step_size=16.0,
+            num_leapfrog_steps=4,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            find_reasonable_step_size=true,
+            rng=MersenneTwister(23),
+        ),
     )
-    gaussian_small_step_chain = hmc(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=20,
-        num_warmup=0,
-        step_size=1e-6,
-        num_leapfrog_steps=4,
-        adapt_step_size=false,
-        adapt_mass_matrix=false,
-        find_reasonable_step_size=true,
-        rng=MersenneTwister(24),
+    gaussian_small_step_chain = first(
+        hmc(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=20,
+            num_warmup=0,
+            step_size=1e-6,
+            num_leapfrog_steps=4,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            find_reasonable_step_size=true,
+            rng=MersenneTwister(24),
+        ),
     )
-    gaussian_divergent_chain = hmc(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=20,
-        num_warmup=0,
-        step_size=2.0,
-        num_leapfrog_steps=8,
-        adapt_step_size=false,
-        adapt_mass_matrix=false,
-        find_reasonable_step_size=false,
-        divergence_threshold=1.0,
-        rng=MersenneTwister(31),
+    gaussian_divergent_chain = first(
+        hmc(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=20,
+            num_warmup=0,
+            step_size=2.0,
+            num_leapfrog_steps=8,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            find_reasonable_step_size=false,
+            divergence_threshold=1.0,
+            rng=MersenneTwister(31),
+        ),
     )
-    gaussian_windowed_mass_chain = hmc(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=20,
-        num_warmup=20,
-        step_size=0.2,
-        num_leapfrog_steps=6,
-        adapt_step_size=false,
-        adapt_mass_matrix=true,
-        mass_matrix_min_samples=3,
-        rng=MersenneTwister(36),
+    gaussian_windowed_mass_chain = first(
+        hmc(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=20,
+            num_warmup=20,
+            step_size=0.2,
+            num_leapfrog_steps=6,
+            adapt_step_size=false,
+            adapt_mass_matrix=true,
+            mass_matrix_min_samples=3,
+            rng=MersenneTwister(36),
+        ),
     )
-    gaussian_nuts_chain = nuts(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=160,
-        num_warmup=100,
-        step_size=0.2,
-        max_tree_depth=6,
-        rng=MersenneTwister(60),
+    gaussian_nuts_chain = first(
+        nuts(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=160,
+            num_warmup=100,
+            step_size=0.2,
+            max_tree_depth=6,
+            rng=MersenneTwister(60),
+        ),
     )
-    gaussian_nuts_baseline_chain = nuts(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=20,
-        num_warmup=0,
-        step_size=0.2,
-        max_tree_depth=5,
-        adapt_step_size=false,
-        adapt_mass_matrix=false,
-        rng=MersenneTwister(61),
+    gaussian_nuts_baseline_chain = first(
+        nuts(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=20,
+            num_warmup=0,
+            step_size=0.2,
+            max_tree_depth=5,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            rng=MersenneTwister(61),
+        ),
     )
-    gaussian_nuts_one_step_chain = nuts(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=16,
-        num_warmup=0,
-        step_size=0.2,
-        max_tree_depth=1,
-        adapt_step_size=false,
-        adapt_mass_matrix=false,
-        rng=MersenneTwister(64),
+    gaussian_nuts_one_step_chain = first(
+        nuts(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=16,
+            num_warmup=0,
+            step_size=0.2,
+            max_tree_depth=1,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            rng=MersenneTwister(64),
+        ),
     )
-    gaussian_nuts_one_step_chain_replay = nuts(
-        gaussian_mean,
-        (),
-        constraints;
-        num_samples=16,
-        num_warmup=0,
-        step_size=0.2,
-        max_tree_depth=1,
-        adapt_step_size=false,
-        adapt_mass_matrix=false,
-        rng=MersenneTwister(64),
+    gaussian_nuts_one_step_chain_replay = first(
+        nuts(
+            gaussian_mean,
+            (),
+            constraints;
+            num_samples=16,
+            num_warmup=0,
+            step_size=0.2,
+            max_tree_depth=1,
+            adapt_step_size=false,
+            adapt_mass_matrix=false,
+            rng=MersenneTwister(64),
+        ),
     )
     gaussian_multichain = hmc_chains(
         gaussian_mean,
@@ -604,16 +624,18 @@
     @test gaussian_chain.logjoint_values[1] ≈
           logjoint_unconstrained(gaussian_mean, gaussian_chain.unconstrained_samples[:, 1], (), constraints) atol=1e-6
 
-    positive_chain = hmc(
-        observed_positive_step,
-        (),
-        choicemap((:y, 1.2f0));
-        num_samples=120,
-        num_warmup=80,
-        step_size=0.12,
-        num_leapfrog_steps=10,
-        initial_params=positive_step_unconstrained,
-        rng=MersenneTwister(21),
+    positive_chain = first(
+        hmc(
+            observed_positive_step,
+            (),
+            choicemap((:y, 1.2f0));
+            num_samples=120,
+            num_warmup=80,
+            step_size=0.12,
+            num_leapfrog_steps=10,
+            initial_params=positive_step_unconstrained,
+            rng=MersenneTwister(21),
+        ),
     )
 
     @test length(positive_chain) == 120
@@ -681,7 +703,10 @@
         num_chains=2,
         num_samples=10,
     )
-    @test_throws ArgumentError rhat(HMCChains(gaussian_mean, (), constraints, [gaussian_baseline_chain]))
+    # single-chain diagnostics are supported (issue #337): rhat runs on the
+    # chain's two split halves instead of throwing
+    @test length(rhat(HMCChains(gaussian_mean, (), constraints, [gaussian_baseline_chain]))) == 1
+    @test_throws ArgumentError rhat(HMCChains(gaussian_mean, (), constraints, HMCChain[]))
     @test_throws ArgumentError ess(gaussian_multichain; space=:energy)
     @test_throws ArgumentError summarize(gaussian_multichain; quantiles=())
     @test_throws ArgumentError summarize(gaussian_multichain; quantiles=(-0.1, 0.5, 0.9))

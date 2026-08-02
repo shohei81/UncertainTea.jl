@@ -23,16 +23,18 @@
         rng=MersenneTwister(136),
     )
     for (chain_index, chain) in enumerate(threaded_nuts.chains)
-        reference = nuts(
-            iid_model,
-            (length(ys),),
-            repeated;
-            num_samples=multichain_kwargs.num_samples,
-            num_warmup=multichain_kwargs.num_warmup,
-            step_size=multichain_kwargs.step_size,
-            target_accept=multichain_kwargs.target_accept,
-            max_tree_depth=6,
-            rng=MersenneTwister(reference_seeds[chain_index]),
+        reference = first(
+            nuts(
+                iid_model,
+                (length(ys),),
+                repeated;
+                num_samples=multichain_kwargs.num_samples,
+                num_warmup=multichain_kwargs.num_warmup,
+                step_size=multichain_kwargs.step_size,
+                target_accept=multichain_kwargs.target_accept,
+                max_tree_depth=6,
+                rng=MersenneTwister(reference_seeds[chain_index]),
+            ),
         )
         @test chain.unconstrained_samples == reference.unconstrained_samples
         @test chain.constrained_samples == reference.constrained_samples
@@ -51,16 +53,18 @@
         rng=MersenneTwister(136),
     )
     for (chain_index, chain) in enumerate(threaded_hmc.chains)
-        reference = hmc(
-            gaussian_mean,
-            (),
-            constraints;
-            num_samples=multichain_kwargs.num_samples,
-            num_warmup=multichain_kwargs.num_warmup,
-            step_size=multichain_kwargs.step_size,
-            target_accept=multichain_kwargs.target_accept,
-            num_leapfrog_steps=6,
-            rng=MersenneTwister(reference_seeds[chain_index]),
+        reference = first(
+            hmc(
+                gaussian_mean,
+                (),
+                constraints;
+                num_samples=multichain_kwargs.num_samples,
+                num_warmup=multichain_kwargs.num_warmup,
+                step_size=multichain_kwargs.step_size,
+                target_accept=multichain_kwargs.target_accept,
+                num_leapfrog_steps=6,
+                rng=MersenneTwister(reference_seeds[chain_index]),
+            ),
         )
         @test chain.unconstrained_samples == reference.unconstrained_samples
         @test chain.constrained_samples == reference.constrained_samples

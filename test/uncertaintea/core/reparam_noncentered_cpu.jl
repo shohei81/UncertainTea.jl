@@ -219,14 +219,14 @@ end
         @test transform_to_unconstrained(ncc_arg_model, constrained, (2.0,)) ≈ z atol = 1e-12
         # the walk needs the model arguments
         @test_throws DimensionMismatch transform_to_constrained(ncc_arg_model, z)
-        chain = nuts(
+        chain = first(nuts(
             ncc_arg_model,
             (2.0,),
             ncc_constraints;
             num_samples=30,
             num_warmup=30,
             rng=MersenneTwister(4),
-        )
+        ))
         @test all(isfinite, chain.constrained_samples)
     end
 
@@ -262,29 +262,35 @@ end
         flagged_vs = Float64[]
         manual_vs = Float64[]
         for chain_seed = 1:6
-            centered = nuts(
-                ncc_funnel_centered,
-                (),
-                ncc_constraints;
-                num_samples=300,
-                num_warmup=200,
-                rng=MersenneTwister(600 + chain_seed),
+            centered = first(
+                nuts(
+                    ncc_funnel_centered,
+                    (),
+                    ncc_constraints;
+                    num_samples=300,
+                    num_warmup=200,
+                    rng=MersenneTwister(600 + chain_seed),
+                ),
             )
-            flagged = nuts(
-                ncc_funnel_flagged,
-                (),
-                ncc_constraints;
-                num_samples=300,
-                num_warmup=200,
-                rng=MersenneTwister(600 + chain_seed),
+            flagged = first(
+                nuts(
+                    ncc_funnel_flagged,
+                    (),
+                    ncc_constraints;
+                    num_samples=300,
+                    num_warmup=200,
+                    rng=MersenneTwister(600 + chain_seed),
+                ),
             )
-            manual = nuts(
-                ncc_funnel_manual,
-                (),
-                ncc_constraints;
-                num_samples=300,
-                num_warmup=200,
-                rng=MersenneTwister(600 + chain_seed),
+            manual = first(
+                nuts(
+                    ncc_funnel_manual,
+                    (),
+                    ncc_constraints;
+                    num_samples=300,
+                    num_warmup=200,
+                    rng=MersenneTwister(600 + chain_seed),
+                ),
             )
             total_centered += divergencerate(centered)
             total_flagged += divergencerate(flagged)
@@ -457,21 +463,25 @@ end
         total_centered = 0.0
         total_flagged = 0.0
         for chain_seed = 1:4
-            centered = nuts(
-                ncc_eight_schools_centered,
-                (),
-                eight_constraints;
-                num_samples=250,
-                num_warmup=200,
-                rng=MersenneTwister(800 + chain_seed),
+            centered = first(
+                nuts(
+                    ncc_eight_schools_centered,
+                    (),
+                    eight_constraints;
+                    num_samples=250,
+                    num_warmup=200,
+                    rng=MersenneTwister(800 + chain_seed),
+                ),
             )
-            flagged = nuts(
-                ncc_eight_schools_flagged,
-                (),
-                eight_constraints;
-                num_samples=250,
-                num_warmup=200,
-                rng=MersenneTwister(800 + chain_seed),
+            flagged = first(
+                nuts(
+                    ncc_eight_schools_flagged,
+                    (),
+                    eight_constraints;
+                    num_samples=250,
+                    num_warmup=200,
+                    rng=MersenneTwister(800 + chain_seed),
+                ),
             )
             total_centered += divergencerate(centered)
             total_flagged += divergencerate(flagged)

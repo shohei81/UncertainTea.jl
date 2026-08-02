@@ -133,14 +133,14 @@ end
 
     # Observing y = 2 should pull the posterior toward the +2 mode.
     mix_latent_obs = choicemap((:y, 2.0f0))
-    mix_latent_chain = nuts(
+    mix_latent_chain = first(nuts(
         mix_latent_model,
         (),
         mix_latent_obs;
         num_samples=150,
         num_warmup=150,
         rng=MersenneTwister(2024),
-    )
+    ))
     @test size(mix_latent_chain.constrained_samples, 2) == 150
     @test all(isfinite, mix_latent_chain.constrained_samples)
     @test mix_mean(vec(mix_latent_chain.constrained_samples)) > 1.0
@@ -171,14 +171,14 @@ end
 
     # NUTS runs finite with the weights flowing in as a differentiable simplex.
     mix_dir_obs = choicemap((:y, 0.7f0))
-    mix_dir_chain = nuts(
+    mix_dir_chain = first(nuts(
         mix_dirichlet_model,
         (),
         mix_dir_obs;
         num_samples=100,
         num_warmup=100,
         rng=MersenneTwister(23),
-    )
+    ))
     @test size(mix_dir_chain.constrained_samples, 2) == 100
     @test all(isfinite, mix_dir_chain.constrained_samples)
     for sample_index = 1:100

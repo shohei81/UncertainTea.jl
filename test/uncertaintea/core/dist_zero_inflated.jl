@@ -66,7 +66,7 @@ end
         p_true, lambda_true = 0.35, 3.0
         ys = Float64[rand(rng, zeroinflatedpoisson(p_true, lambda_true)) for _ = 1:n]
         cm = choicemap([(:y => i, ys[i]) for i = 1:n])
-        chain = nuts(zi_model, (n,), cm; num_samples=400, num_warmup=400, rng=MersenneTwister(11))
+        chain = first(nuts(zi_model, (n,), cm; num_samples=400, num_warmup=400, rng=MersenneTwister(11)))
         draws = chain.constrained_samples
         @test all(isfinite, draws)
         p_post = zi_mean(1 ./ (1 .+ exp.(-draws[1, :])))

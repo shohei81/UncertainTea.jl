@@ -184,7 +184,7 @@ end
     end
 
     @testset "creg_nuts_smoke" begin
-        chain = nuts(creg_model, (), creg_constraints; num_samples=40, num_warmup=40, rng=MersenneTwister(3))
+        chain = first(nuts(creg_model, (), creg_constraints; num_samples=40, num_warmup=40, rng=MersenneTwister(3)))
         @test all(isfinite, chain.constrained_samples)
         @test all(chain.constrained_samples[2, :] .> 0)
     end

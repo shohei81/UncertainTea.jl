@@ -137,21 +137,10 @@ function Base.show(io::IO, result::NestedSamplingResult)
     )
 end
 
-# Posterior predictive from nested-sampling draws: resample by the normalized
-# importance weights (systematic), then run the shared predictive kernel. Mirrors
-# the importance-sampling `predict` path.
-function predict(
-    model::TeaModel,
-    args::Tuple,
-    result::NestedSamplingResult;
-    num_draws::Int=size(result.constrained_samples, 2),
-    rng::AbstractRNG=Random.default_rng(),
-)
-    num_draws > 0 || throw(ArgumentError("predict requires num_draws > 0"))
-    ancestors = _systematic_resample_indices(result.normalized_weights, num_draws, rng)
-    columns = (view(result.constrained_samples, :, ancestor) for ancestor in ancestors)
-    return _predictive_from_param_columns(model, args, columns, rng)
-end
+# Posterior predictive from nested-sampling draws goes through the shared
+# `predict(model, args, result; ...)` interface method in result_interface.jl:
+# `constrained_draws(::NestedSamplingResult)` resamples by the normalized
+# importance weights (systematic), mirroring the importance-sampling path.
 
 # log(exp(a) + exp(b)) without overflow; -Inf-safe.
 function _ns_logaddexp(a::Float64, b::Float64)

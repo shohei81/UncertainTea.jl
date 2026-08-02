@@ -7,14 +7,14 @@
 
     warmup_driver_constraints = choicemap((:y, 0.3f0))
 
-    warmup_driver_hmc = hmc(
+    warmup_driver_hmc = first(hmc(
         warmup_driver_model,
         (),
         warmup_driver_constraints;
         num_samples=20,
         num_warmup=30,
         rng=MersenneTwister(101),
-    )
+    ))
     if adaptation_pins_exact
         @test warmup_driver_hmc.step_size ≈ 0.80242751762314313 atol = 1e-12
     else

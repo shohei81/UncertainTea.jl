@@ -78,14 +78,16 @@
 
     # End-to-end: use the MAP mode as the NUTS initialization and confirm sampling
     # produces finite draws.
-    map_nuts_chain = nuts(
-        map_gaussian_model,
-        (),
-        map_gaussian_constraints;
-        num_samples=50,
-        num_warmup=50,
-        initial_params=map_gaussian_result.unconstrained_mode,
-        rng=MersenneTwister(7),
+    map_nuts_chain = first(
+        nuts(
+            map_gaussian_model,
+            (),
+            map_gaussian_constraints;
+            num_samples=50,
+            num_warmup=50,
+            initial_params=map_gaussian_result.unconstrained_mode,
+            rng=MersenneTwister(7),
+        ),
     )
     @test all(isfinite, map_nuts_chain.unconstrained_samples)
     @test all(isfinite, map_nuts_chain.constrained_samples)
@@ -154,15 +156,17 @@
     # ------------------------------------------------------------------
     cb_events = NamedTuple[]
     cb_collector = info -> push!(cb_events, info)
-    cb_chain = nuts(
-        export_two_latent_model,
-        (),
-        export_constraints;
-        num_samples=20,
-        num_warmup=20,
-        callback=cb_collector,
-        callback_every=10,
-        rng=MersenneTwister(99),
+    cb_chain = first(
+        nuts(
+            export_two_latent_model,
+            (),
+            export_constraints;
+            num_samples=20,
+            num_warmup=20,
+            callback=cb_collector,
+            callback_every=10,
+            rng=MersenneTwister(99),
+        ),
     )
     # Warmup fires at 10, 20; sampling fires at 10, 20 -> exactly 4 invocations.
     @test length(cb_events) == 4
@@ -173,14 +177,16 @@
     @test all(e -> haskey(e, :step_size) && haskey(e, :divergences), cb_events)
 
     # Callbacks must not consume the RNG: same seed => bitwise-identical samples.
-    cb_baseline = nuts(
-        export_two_latent_model,
-        (),
-        export_constraints;
-        num_samples=20,
-        num_warmup=20,
-        callback=nothing,
-        rng=MersenneTwister(99),
+    cb_baseline = first(
+        nuts(
+            export_two_latent_model,
+            (),
+            export_constraints;
+            num_samples=20,
+            num_warmup=20,
+            callback=nothing,
+            rng=MersenneTwister(99),
+        ),
     )
     @test cb_chain.unconstrained_samples == cb_baseline.unconstrained_samples
 

@@ -72,7 +72,7 @@ end
         # closed-form GP regression posterior mean of f: K (K + sigma^2 I)^-1 y
         gpl_analytic = gpl_K * ((gpl_K + gpl_sig^2 * I) \ gpl_y)
 
-        gpl_chain = nuts(gpl_regression, (gpl_X,), gpl_cm; num_samples=800, num_warmup=800, rng=MersenneTwister(7))
+        gpl_chain = first(nuts(gpl_regression, (gpl_X,), gpl_cm; num_samples=800, num_warmup=800, rng=MersenneTwister(7)))
         gpl_draws = gpl_chain.constrained_samples          # rows 1..10 are f[1..10]
         @test all(isfinite, gpl_draws)
         gpl_fpost = [gpl_mean(gpl_draws[i, :]) for i = 1:gpl_n]
@@ -90,7 +90,7 @@ end
         gpl_ys = Float64[rand(gpl_rng) < 1 / (1 + exp(-ft)) ? 1.0 : 0.0 for ft in gpl_ftrue]
         gpl_cm = choicemap([(:y => i, gpl_ys[i]) for i = 1:gpl_n])
 
-        gpl_chain = nuts(gpl_classification, (gpl_X,), gpl_cm; num_samples=500, num_warmup=500, rng=MersenneTwister(7))
+        gpl_chain = first(nuts(gpl_classification, (gpl_X,), gpl_cm; num_samples=500, num_warmup=500, rng=MersenneTwister(7)))
         gpl_draws = gpl_chain.constrained_samples          # row 1 = logl, rows 2..11 = f
         @test all(isfinite, gpl_draws)
         gpl_fpost = [gpl_mean(gpl_draws[1+i, :]) for i = 1:gpl_n]
