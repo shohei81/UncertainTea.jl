@@ -2,6 +2,8 @@
 # (issue #291). CPU-reference only. Statistics is unavailable in the harness,
 # so use local helpers.
 
+using ForwardDiff: ForwardDiff
+
 ordl_mean(x) = sum(x) / length(x)
 
 @tea static function ordl_model(cutpoints, n)
@@ -35,6 +37,51 @@ end
         low = exp(UncertainTea.logpdf(orderedlogistic(-3.0, ordl_cut), 1))
         high = exp(UncertainTea.logpdf(orderedlogistic(3.0, ordl_cut), 1))
         @test low > high
+    end
+
+    @testset "tail accuracy vs BigFloat (issue #344)" begin
+        # eta far below the cutpoints used to cancel catastrophically in the
+        # middle categories (-Inf at eta <= -37, Inf gradient); compare every
+        # regime against a 256-bit BigFloat reference.
+        tail_cut = [0.0, 1.0]
+        ref = setprecision(BigFloat, 256) do
+            bsig(z) = inv(1 + exp(-z))
+            function blogp(eta, k)
+                e = BigFloat(eta)
+                p = if k == 1
+                    bsig(tail_cut[1] - e)
+                elseif k == 3
+                    1 - bsig(tail_cut[2] - e)
+                else
+                    bsig(tail_cut[2] - e) - bsig(tail_cut[1] - e)
+                end
+                return Float64(log(p))
+            end
+            Dict(
+                (eta, k) => blogp(eta, k) for
+                eta in (-50.0, -37.0, -36.0, -30.0, 0.0, 30.0, 37.0, 50.0), k in (1, 2, 3)
+            )
+        end
+        for ((eta, k), truth) in ref
+            got = UncertainTea.logpdf(orderedlogistic(eta, tail_cut), k)
+            @test isfinite(got)
+            @test isapprox(got, truth; rtol=1e-10, atol=1e-8)
+        end
+
+        # Gradient at the old blow-up point: finite and matching the analytic
+        # derivative of log P(y = 2) computed in BigFloat.
+        grad = ForwardDiff.derivative(
+            e -> UncertainTea.logpdf(orderedlogistic(e, tail_cut), 2), -37.0,
+        )
+        grad_ref = setprecision(BigFloat, 256) do
+            bsig(z) = inv(1 + exp(-z))
+            bpdf(z) = bsig(z) * (1 - bsig(z))
+            e = BigFloat(-37)
+            lo, hi = tail_cut
+            Float64((bpdf(lo - e) - bpdf(hi - e)) / (bsig(hi - e) - bsig(lo - e)))
+        end
+        @test isfinite(grad)
+        @test isapprox(grad, grad_ref; rtol=1e-10, atol=1e-8)
     end
 
     @testset "support and validation" begin
