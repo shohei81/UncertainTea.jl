@@ -635,6 +635,14 @@ function rhat(chains::HMCChains; space::Symbol=:constrained, method::Symbol=:spl
     return values
 end
 
+"""
+    ess(chains::HMCChains; space=:constrained) -> Vector{Float64}
+
+Per-parameter (bulk) effective sample size from the split chains, using the
+paired-autocorrelation estimator of Vehtari et al. (2021). `space` selects
+`:constrained` (default) or `:unconstrained` draws. See also `rhat` and
+`summarize` (which additionally reports tail ESS).
+"""
 function ess(chains::HMCChains; space::Symbol=:constrained)
     num_params, _ = _validate_hmc_diagnostics(chains, space)
     values = Vector{Float64}(undef, num_params)

@@ -1410,6 +1410,16 @@ function _stage_walk_step!(
     return nothing
 end
 
+"""
+    logjoint(model::TeaModel, params::AbstractVector, args=(), constraints=choicemap()) -> Float64
+
+Log joint density of `model` via the compiled execution plan: the latent
+choices (those NOT in `constraints`) take their values from the flat vector
+`params` — constrained-space values in the plan's parameter layout order (see
+`parameter_vector` / `initialparameters`) — while `constraints` fixes the
+observed choices. For the unconstrained-space counterpart used by the samplers
+see `logjoint_unconstrained`.
+"""
 function logjoint(
     model::TeaModel,
     params::AbstractVector,

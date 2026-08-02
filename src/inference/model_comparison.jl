@@ -225,6 +225,15 @@ function psis_loo(model::TeaModel, args::Tuple, constraints::ChoiceMap, chains)
     return psis_loo(pointwise_loglikelihood(model, args, constraints, chains))
 end
 
+"""
+    loo(model, args, constraints, chains) -> LOOResult
+    loo(ll::AbstractMatrix) -> LOOResult
+
+Leave-one-out cross-validation via Pareto-smoothed importance sampling; an
+alias for `psis_loo`. The four-argument form computes the pointwise
+log-likelihood matrix from posterior `chains` first; the matrix form takes an
+`S x N` (draws x observations) log-likelihood matrix directly.
+"""
 function loo(model::TeaModel, args::Tuple, constraints::ChoiceMap, chains)
     return psis_loo(pointwise_loglikelihood(model, args, constraints, chains))
 end

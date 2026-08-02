@@ -199,50 +199,109 @@ end
 # Builders normalize parameters through `float` so integer (or other non-float
 # real) literals reach the samplers as float storage (issue #73); `float` keeps
 # ForwardDiff Duals intact.
+
+"""
+    normal(mu, sigma)
+
+Normal (Gaussian) distribution with mean `mu` and standard deviation `sigma`.
+"""
 function normal(mu, sigma)
     promoted_mu, promoted_sigma = promote(float(mu), float(sigma))
     return NormalDist(promoted_mu, promoted_sigma)
 end
 
+"""
+    laplace(mu, scale)
+
+Laplace (double-exponential) distribution with location `mu` and scale `scale`
+(density ∝ exp(-|x - mu| / scale)).
+"""
 function laplace(mu, scale)
     promoted_mu, promoted_scale = promote(float(mu), float(scale))
     return LaplaceDist(promoted_mu, promoted_scale)
 end
 
+"""
+    exponential(rate)
+
+Exponential distribution with rate `rate` (mean `1 / rate`).
+"""
 function exponential(rate)
     return ExponentialDist(float(rate))
 end
 
+"""
+    gamma(shape, rate)
+
+Gamma distribution in the shape/rate parameterization (density ∝
+`x^(shape-1) * exp(-rate * x)`, mean `shape / rate`). Note: `rate`, not scale.
+"""
 function gamma(shape, rate)
     promoted_shape, promoted_rate = promote(float(shape), float(rate))
     return GammaDist(promoted_shape, promoted_rate)
 end
 
+"""
+    inversegamma(shape, scale)
+
+Inverse-gamma distribution with shape `shape` and scale `scale` (density ∝
+`x^(-shape-1) * exp(-scale / x)`).
+"""
 function inversegamma(shape, scale)
     promoted_shape, promoted_scale = promote(float(shape), float(scale))
     return InverseGammaDist(promoted_shape, promoted_scale)
 end
 
+"""
+    weibull(shape, scale)
+
+Weibull distribution with shape `shape` and scale `scale` (CDF
+`1 - exp(-(x / scale)^shape)`).
+"""
 function weibull(shape, scale)
     promoted_shape, promoted_scale = promote(float(shape), float(scale))
     return WeibullDist(promoted_shape, promoted_scale)
 end
 
+"""
+    beta(alpha, beta)
+
+Beta distribution on (0, 1) with shape parameters `alpha` and `beta` (density ∝
+`x^(alpha-1) * (1-x)^(beta-1)`).
+"""
 function beta(alpha, beta_parameter)
     promoted_alpha, promoted_beta = promote(float(alpha), float(beta_parameter))
     return BetaDist(promoted_alpha, promoted_beta)
 end
 
+"""
+    lognormal(mu, sigma)
+
+Log-normal distribution: `log(x)` is normal with mean `mu` and standard
+deviation `sigma` (so `mu`/`sigma` live on the log scale, not the data scale).
+"""
 function lognormal(mu, sigma)
     promoted_mu, promoted_sigma = promote(float(mu), float(sigma))
     return LogNormalDist(promoted_mu, promoted_sigma)
 end
 
+"""
+    studentt(nu, mu, sigma)
+
+Student's t distribution with `nu` degrees of freedom, location `mu`, and scale
+`sigma` (Stan's parameterization; `sigma` is the scale, not the standard
+deviation).
+"""
 function studentt(nu, mu, sigma)
     promoted_nu, promoted_mu, promoted_sigma = promote(float(nu), float(mu), float(sigma))
     return StudentTDist(promoted_nu, promoted_mu, promoted_sigma)
 end
 
+"""
+    cauchy(mu, sigma)
+
+Cauchy distribution with location `mu` and scale `sigma`.
+"""
 function cauchy(mu, sigma)
     promoted_mu, promoted_sigma = promote(float(mu), float(sigma))
     return CauchyDist(promoted_mu, promoted_sigma)
@@ -256,6 +315,11 @@ function halfcauchy(scale)
     return HalfCauchyDist(float(scale))
 end
 
+"""
+    uniform(lower, upper)
+
+Continuous uniform distribution on the interval `[lower, upper]`.
+"""
 function uniform(lower, upper)
     promoted_lower, promoted_upper = promote(float(lower), float(upper))
     return UniformDist(promoted_lower, promoted_upper)

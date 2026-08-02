@@ -28,11 +28,24 @@ struct TruncatedStudentTDist{T<:Real} <: AbstractTeaDistribution
     end
 end
 
+"""
+    truncatednormal(mu, sigma, lower, upper)
+
+Normal distribution with mean `mu` and standard deviation `sigma`, truncated
+(and renormalized) to the interval `[lower, upper]`. Requires `lower < upper`.
+"""
 function truncatednormal(mu, sigma, lower, upper)
     promoted_mu, promoted_sigma, promoted_lower, promoted_upper = promote(mu, sigma, lower, upper)
     return TruncatedNormalDist(promoted_mu, promoted_sigma, promoted_lower, promoted_upper)
 end
 
+"""
+    truncatedstudentt(nu, mu, sigma, lower, upper)
+
+Student's t distribution with `nu` degrees of freedom, location `mu`, and scale
+`sigma`, truncated (and renormalized) to the interval `[lower, upper]`.
+Requires `lower < upper`.
+"""
 function truncatedstudentt(nu, mu, sigma, lower, upper)
     promoted_nu, promoted_mu, promoted_sigma, promoted_lower, promoted_upper =
         promote(nu, mu, sigma, lower, upper)

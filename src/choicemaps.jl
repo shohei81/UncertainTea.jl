@@ -26,6 +26,16 @@ end
 
 ChoiceMap() = ChoiceMap(Pair{Address,Any}[])
 
+"""
+    choicemap(entries...) -> ChoiceMap
+
+Build a `ChoiceMap` from `(address, value)` entries — the container that fixes
+choice values, most commonly the observations passed to inference:
+`choicemap((:y, 0.3))`, `choicemap((:y => 1, 0.3), (:y => 2, -0.1))`. A single
+iterable of entries also works, e.g.
+`choicemap((:y => i, ys[i]) for i in eachindex(ys))`. `address => value` pairs
+are accepted in place of tuples.
+"""
 function choicemap(entries...)
     cm = ChoiceMap()
     if length(entries) == 1 && !_is_choice_entry(entries[1])
