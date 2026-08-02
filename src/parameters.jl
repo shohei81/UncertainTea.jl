@@ -623,16 +623,6 @@ function transform_to_unconstrained(model::TeaModel, params::AbstractVector, arg
     return unconstrained
 end
 
-function transform_to_constrained_with_logabsdet(
-    model::TeaModel,
-    params::AbstractVector,
-    args::Tuple,
-    constraints::ChoiceMap,
-)
-    resolved = _resolve_signature_plan(model, constraints)
-    return _transform_to_constrained_with_logabsdet(model, resolved, params, args, constraints)
-end
-
 function transform_to_unconstrained(
     model::TeaModel,
     params::AbstractVector,

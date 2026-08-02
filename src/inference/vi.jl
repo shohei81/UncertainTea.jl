@@ -274,10 +274,6 @@ function _lowrank_entropy_terms(log_scale::AbstractVector, factor::AbstractMatri
     return W / chol, W, logdet(chol)
 end
 
-function _fullrank_entropy(log_scale::AbstractVector)
-    return _gaussian_entropy(log_scale)
-end
-
 function _lowrank_entropy(log_scale::AbstractVector, factor::AbstractMatrix)
     _, _, logdet_M = _lowrank_entropy_terms(log_scale, factor)
     return _gaussian_entropy(log_scale) + 0.5 * logdet_M
@@ -431,24 +427,6 @@ function variational_covariance(result::ADVIResult; use_best::Bool=true)
         return cholesky_factor * transpose(cholesky_factor)
     end
     return Matrix(Diagonal(exp.(2.0 .* log_scale))) + factor * transpose(factor)
-end
-
-function _batched_transform_to_constrained!(
-    destination::AbstractMatrix,
-    model::TeaModel,
-    params::AbstractMatrix,
-)
-    size(destination, 2) == size(params, 2) ||
-        throw(
-            DimensionMismatch(
-                "expected constrained particle destination with $(size(params, 2)) columns, got $(size(destination, 2))",
-            ),
-        )
-
-    for particle_index in axes(params, 2)
-        _transform_to_constrained!(view(destination, :, particle_index), model, view(params, :, particle_index))
-    end
-    return destination
 end
 
 # Signature-aware column transform (#95 PR-6): the unconstrained columns hold

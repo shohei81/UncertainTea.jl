@@ -610,12 +610,6 @@ end
 
 # ---- truncated families -----------------------------------------------------------
 
-# Standard normal pdf with the infinite-bound guard (matches `_std_normal_pdf`).
-@inline function _device_std_normal_pdf(z::T) where {T}
-    isinf(z) && return zero(T)
-    return exp(-z * z / T(2)) * T(0.3989422804014327) # 1/sqrt(2*pi)
-end
-
 # log(erfc(x)) with an asymptotic fallback once erfc underflows (Float32 loses
 # erfc around x ~ 9.3, far before the CPU Float64 reference):
 # erfc(x) ~ exp(-x^2)/(x sqrt(pi)) * (1 - u/2 + 3u^2/4 - 15u^3/8), u = 1/x^2.

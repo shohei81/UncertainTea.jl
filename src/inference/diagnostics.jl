@@ -496,11 +496,6 @@ function _quantile(sorted_values::AbstractVector, probability::Float64)
     return (1 - weight) * sorted_values[lower] + weight * sorted_values[upper]
 end
 
-function _quantiles(values::AbstractVector, probabilities::AbstractVector{Float64})
-    sorted_values = sort(collect(values))
-    return Float64[_quantile(sorted_values, probability) for probability in probabilities]
-end
-
 function _split_chain_parameter_draws(chains::HMCChains, parameter_index::Int, space::Symbol)
     _, num_samples = _validate_hmc_diagnostics(chains, space)
     split_samples = fld(num_samples, 2)

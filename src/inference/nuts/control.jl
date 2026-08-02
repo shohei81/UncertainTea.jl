@@ -39,10 +39,6 @@ function _nuts_subtree_summary(
     )
 end
 
-function _copy_nuts_state(state::NUTSState)
-    return NUTSState(copy(state.position), copy(state.momentum), state.logjoint, copy(state.gradient))
-end
-
 function _copyto_nuts_state!(destination::NUTSState, source::NUTSState)
     copyto!(destination.position, source.position)
     copyto!(destination.momentum, source.momentum)

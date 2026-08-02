@@ -556,23 +556,6 @@ function _mean_acceptance_stat(
     return accept_count == 0 ? 0.0 : Float64(accept_sum) / accept_count
 end
 
-function _energy_errors!(
-    destination::AbstractVector,
-    proposed_energy::AbstractVector,
-    current_energy::AbstractVector,
-)
-    length(destination) == length(proposed_energy) == length(current_energy) ||
-        throw(
-            DimensionMismatch(
-                "expected energy-error inputs of matching length, got $(length(destination)), $(length(proposed_energy)), and $(length(current_energy))",
-            ),
-        )
-    for index in eachindex(destination)
-        destination[index] = proposed_energy[index] - current_energy[index]
-    end
-    return destination
-end
-
 function _position_moved(
     proposal_position::AbstractVector,
     current_position::AbstractVector,
@@ -647,11 +630,6 @@ function _finalize_batched_nuts_proposals!(
     )
     _batched_positions_moved!(workspace.control.accepted_step, workspace.proposal_position, position)
     return workspace
-end
-
-function _mean_acceptance_probability(accept_prob::AbstractVector)
-    isempty(accept_prob) && return 0.0
-    return sum(accept_prob) / length(accept_prob)
 end
 
 function _mean_batched_adaptation_probability(
