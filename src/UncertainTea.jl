@@ -61,6 +61,7 @@ export AbstractTeaDistribution, register_distribution, registered_distributions,
 # binomial is intentionally not exported: it would shadow Base.binomial for users.
 # Inside @tea models the name resolves to UncertainTea.binomial automatically.
 
+include("distributions/family_table.jl")
 include("ir.jl")
 include("core.jl")
 include("choicemaps.jl")

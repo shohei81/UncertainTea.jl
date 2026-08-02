@@ -25,49 +25,7 @@ function _tea_mode(mode_expr)
 end
 
 function _qualify_builtin_distribution(name)
-    if name in (
-        :normal,
-        :lognormal,
-        :laplace,
-        :exponential,
-        :gamma,
-        :inversegamma,
-        :weibull,
-        :beta,
-        :dirichlet,
-        :mvnormal,
-        :mvnormaldense,
-        :mvstudentt,
-        :mvstudenttdense,
-        :wishart,
-        :inversewishart,
-        :lkjcholesky,
-        :bernoulli,
-        :bernoullilogit,
-        :binomial,
-        :betabinomial,
-        :multinomial,
-        :discreteuniform,
-        :geometric,
-        :negativebinomial,
-        :poisson,
-        :studentt,
-        :categorical,
-        :truncatednormal,
-        :truncatedstudentt,
-        :mixture,
-        :iid,
-        :cauchy,
-        :halfnormal,
-        :halfcauchy,
-        :uniform,
-        :logistic,
-        :gumbel,
-        :pareto,
-        :frechet,
-        :rayleigh,
-        :inversegaussian,
-    )
+    if name in _MACRO_QUALIFIED_FAMILIES
         return _qualify(name)
     end
     # Registered user families: splice the builder VALUE captured at macro
@@ -81,19 +39,11 @@ end
 
 # Distribution families that may be dot-called as broadcast observations, e.g.
 # `{:y} ~ normal.(mu, sigma)`. Any known distribution family other than these is
-# rejected at macro time.
-const _BROADCAST_DISTRIBUTION_FAMILIES =
-    (:normal, :poisson, :bernoulli, :bernoullilogit, :exponential, :studentt)
+# rejected at macro time. (Derived from the family table; both consumed
+# membership-only, the broadcast list additionally joined into one error message.)
+const _BROADCAST_DISTRIBUTION_FAMILIES = _distribution_families(spec -> spec.broadcastable)
 
-const _KNOWN_DISTRIBUTION_FAMILIES = (
-    :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull,
-    :beta, :dirichlet, :mvnormal, :mvnormaldense, :mvstudentt, :mvstudenttdense,
-    :wishart, :inversewishart, :lkjcholesky, :bernoulli, :bernoullilogit, :binomial,
-    :betabinomial, :multinomial, :discreteuniform, :geometric,
-    :negativebinomial, :poisson, :studentt, :categorical, :truncatednormal, :truncatedstudentt, :mixture,
-    :cauchy, :halfnormal, :halfcauchy, :uniform, :logistic, :gumbel,
-    :pareto, :frechet, :rayleigh, :inversegaussian,
-)
+const _KNOWN_DISTRIBUTION_FAMILIES = _distribution_families(spec -> spec.known)
 
 # One shared error for every site that rejects the left-hand side of `~`: the
 # rejected expression plus the complete list of valid spellings, so the user
@@ -560,11 +510,7 @@ end
 function _supported_distribution_family(rhs)
     rhs isa Expr && rhs.head == :call && !isempty(rhs.args) && rhs.args[1] isa Symbol || return nothing
     family = rhs.args[1]
-    family in (
-        :normal, :lognormal, :laplace, :exponential, :gamma, :inversegamma, :weibull, :beta, :studentt,
-        :cauchy, :halfnormal, :halfcauchy, :logistic, :gumbel,
-        :frechet, :rayleigh, :inversegaussian,
-    ) && return family
+    family in _SCALAR_TRANSFORM_LATENT_FAMILIES && return family
     if family === :uniform
         isnothing(_uniform_static_bounds(rhs.args[2:end])) && throw(
             ArgumentError(
@@ -726,11 +672,12 @@ function _parameter_transform_expr(rhs, reparam::Symbol=:centered)
     family = _supported_distribution_family(rhs)
     isnothing(family) && throw(ArgumentError("unsupported parameter transform for $rhs"))
 
-    if family === :normal || family === :laplace ||
-       family === :cauchy || family === :logistic || family === :gumbel
+    if family in _IDENTITY_TRANSFORM_LATENT_FAMILIES
         return :($(_qualify(:IdentityTransform))())
-    elseif family === :halfnormal || family === :halfcauchy
+    elseif family in _LOG_TRANSFORM_LATENT_FAMILIES
         return :($(_qualify(:LogTransform))())
+    elseif family in _LOGIT_TRANSFORM_LATENT_FAMILIES
+        return :($(_qualify(:LogitTransform))())
     elseif family === :uniform
         bounds = _uniform_static_bounds(rhs.args[2:end])
         isnothing(bounds) && throw(ArgumentError("uniform parameter slots require literal (static) finite bounds"))
@@ -759,23 +706,15 @@ function _parameter_transform_expr(rhs, reparam::Symbol=:centered)
         size = _lkjcholesky_static_dim(rhs)
         isnothing(size) && throw(ArgumentError("lkjcholesky parameter slots require a literal integer dimension"))
         return :($(_qualify(:CholeskyCorrTransform))($size))
-    elseif family === :lognormal || family === :exponential || family === :gamma ||
-           family === :inversegamma || family === :weibull ||
-           family === :frechet || family === :rayleigh || family === :inversegaussian
-        return :($(_qualify(:LogTransform))())
     elseif family === :pareto
         xm = _pareto_static_lower(rhs.args[2:end])
         isnothing(xm) &&
             throw(ArgumentError("pareto parameter slots require a literal (static) positive lower bound x_m"))
         return :($(_qualify(:LowerBoundedTransform))($xm))
-    elseif family === :beta
-        return :($(_qualify(:LogitTransform))())
     elseif family === :dirichlet
         size = _dirichlet_static_size(rhs)
         isnothing(size) && throw(ArgumentError("dirichlet parameter slots require a statically known simplex size"))
         return :($(_qualify(:SimplexTransform))($size))
-    elseif family === :studentt
-        return :($(_qualify(:IdentityTransform))())
     elseif family === :truncatednormal || family === :truncatedstudentt
         bounds = _truncated_static_bounds(family, rhs.args[2:end])
         isnothing(bounds) && throw(ArgumentError("$family parameter slots require literal (static) bounds"))
