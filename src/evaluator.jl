@@ -682,8 +682,77 @@ function _resolve_signature_plan(@nospecialize(model::TeaModel), signature::Set{
     end
 end
 
-_resolve_signature_plan(model::TeaModel, constraints::ChoiceMap) =
-    _resolve_signature_plan(model, _conditioning_signature(model, constraints))
+# --- misconditioning guard (issue #310) --------------------------------------
+#
+# A constraint address that matches NO model choice is silently dropped by the
+# conditioning rule: the intended observation stays a latent and sampling
+# quietly targets the prior -- the worst silent failure a typo can produce
+# (`choicemap((:yy, 0.3))` against a model observing `:y`). Warn on the first
+# encounter of a conditioning signature; the check is static template matching
+# against the execution plan (no model execution), and running it only on the
+# signature-cache MISS keeps it off every hot path.
+
+# The model's static choice-address templates: one vector per choice, with
+# `Some(value)` for literal parts and `nothing` for dynamic (loop-index) parts.
+# Returns `nothing` when the plan contains shapes we cannot enumerate
+# statically (generative subcalls), so the guard skips rather than risking
+# false positives.
+function _choice_address_templates(@nospecialize(model::TeaModel))
+    templates = Vector{Vector{Union{Nothing,Some{Any}}}}()
+    ok = _collect_address_templates!(templates, executionplan(model).steps)
+    return ok ? templates : nothing
+end
+
+function _collect_address_templates!(templates, steps)
+    for step in steps
+        if step isa ChoicePlanStep
+            step.rhs isa GenerativeCallSpec && return false
+            parts = step.address.parts
+            template = Vector{Union{Nothing,Some{Any}}}(undef, length(parts))
+            for (index, part) in enumerate(parts)
+                template[index] = part isa AddressLiteralPart ? Some{Any}(part.value) : nothing
+            end
+            push!(templates, template)
+        elseif step isa LoopPlanStep
+            _collect_address_templates!(templates, step.body) || return false
+        end
+    end
+    return true
+end
+
+function _address_matches_template(address::Tuple, template)
+    length(address) == length(template) || return false
+    for (part, slot) in zip(address, template)
+        slot === nothing && continue                    # dynamic part matches anything
+        something(slot) == part || return false
+    end
+    return true
+end
+
+function _warn_unmatched_constraint_addresses(@nospecialize(model::TeaModel), constraints::ChoiceMap)
+    isempty(constraints.entries) && return nothing
+    templates = _choice_address_templates(model)
+    isnothing(templates) && return nothing
+    for entry in constraints.entries
+        address = first(entry)
+        address isa Tuple || continue
+        any(template -> _address_matches_template(address, template), templates) && continue
+        @warn "constraint address $(address) does not match any choice in model `$(model.name)` and will be IGNORED -- the intended observation (if any) stays a latent and sampling targets the prior. Check the address for typos; a loop observation is addressed as `(:y => i)`." _id =
+            Symbol(:uncertaintea_unmatched_constraint_, model.name, :_, hash(address)) maxlog = 1
+    end
+    return nothing
+end
+
+function _resolve_signature_plan(model::TeaModel, constraints::ChoiceMap)
+    signature = _conditioning_signature(model, constraints)
+    # first-encounter validation only: peek the memo unlocked (a benign race
+    # merely repeats the cheap static check)
+    cache = model.signature_cache[]
+    if isnothing(cache) || !haskey(cache::Dict{Set{Address},ResolvedSignaturePlan}, signature)
+        _warn_unmatched_constraint_addresses(model, constraints)
+    end
+    return _resolve_signature_plan(model, signature)
+end
 
 # The signature-specific parameter layout for one conditioning. The CPU
 # inference entry points size, initialize, and reconstruct against THIS layout
