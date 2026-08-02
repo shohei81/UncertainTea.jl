@@ -28,6 +28,8 @@
 # second run.
 
 using UncertainTea
+using UncertainTea.Inference
+using UncertainTea.Diagnostics
 using Random
 using JSON3
 using NPZ

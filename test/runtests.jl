@@ -2,6 +2,12 @@ using Test
 using Random
 using UncertainTea
 
+# Facade submodule exports (issue #329): fixtures.jl repeats these for
+# standalone core runs; sampling.jl relies on them via the shared include scope.
+using UncertainTea.Inference
+using UncertainTea.Diagnostics
+using UncertainTea.Device
+
 # Internal (unexported) names used across the suite (issue #283). fixtures.jl
 # repeats this for standalone core runs; sampling.jl relies on this import via the
 # shared include scope.

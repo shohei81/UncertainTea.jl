@@ -13,6 +13,12 @@ using Test
 using Random
 using UncertainTea
 
+# The public namespace is split into facade submodules (issue #329); pull their
+# exports in so every test file keeps using the historical unqualified names.
+using UncertainTea.Inference
+using UncertainTea.Diagnostics
+using UncertainTea.Device
+
 # Internal (unexported) names the white-box suite reaches for. They are qualified-
 # access-only in the public API (issue #283); import them explicitly here so the
 # core tests keep referring to them unqualified.
