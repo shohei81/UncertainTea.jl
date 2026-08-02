@@ -12,6 +12,8 @@
 const PRE_329_EXPORTS = Set{Symbol}([
     # posterior-draws interface (issue #337, exported from Diagnostics)
     :constrained_draws, :PosteriorDrawsResult,
+    # Distributions.jl adapter (issue #340, exported from the top level)
+    :wrap_distribution,
     # modeling language
     Symbol("@tea"), :ChoiceMap, :TeaModel, :TeaTrace, :choicemap, :generate, :assess, :logjoint,
     # density / parameter machinery

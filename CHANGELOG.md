@@ -18,6 +18,28 @@
 
 ### Added
 
+- **Distributions.jl adapter** (#340): the new `UncertainTeaDistributionsExt`
+  package extension (activated by loading Distributions.jl) makes any
+  Distributions.jl univariate distribution usable inside `@tea` models with
+  one line — `register_distribution(:skewnormal, Distributions.SkewNormal)`.
+  The latent-space transform is read off `Distributions.support` when the
+  support is a fixed property of the type (real / positive / unit-interval /
+  bounded), with an explicit `support` keyword for parameter-dependent
+  supports and observation-only use; discrete families register
+  observation-only. The underlying wrapper is exported as
+  `wrap_distribution`. Univariate only; runs on the CPU reference path like
+  every registered family.
+- **Tables.jl interface** (#340): `HMCChains` and `PredictiveDraws` are now
+  Tables.jl sources via the `UncertainTeaTablesExt` extension (activated by
+  loading Tables.jl, which DataFrames.jl does automatically), so
+  `DataFrame(chains)` works: wide layout with `chain`/`draw` columns plus one
+  column per parameter (`PredictiveDraws`: `draw` plus one column per
+  predictive address).
+- **"Working with results" docs** (#340): the inference docs now cover the
+  plotting route (`to_mcmcchains` → MCMCChains/StatsPlots recipes), tabular
+  access, and the JLD2 persistence pattern (save
+  `posterior_array`/`parameter_names`/`to_arviz_dict` output, which reloads
+  in a fresh session without the model closures that result structs embed).
 - **Posterior-draws interface** (#337): `constrained_draws(result; num_draws,
   rng) -> (draws, names)` — a `num_params x num_draws` constrained-space draw
   matrix plus display names — implemented by every inference result:

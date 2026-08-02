@@ -110,6 +110,7 @@ core_test_files = [
     ("map_laplace_approximation.jl", "inference"),
     ("mcmcchains_export.jl", "inference"),
     ("arviz_export.jl", "inference"),
+    ("ecosystem_adapters.jl", "inference"),
     ("advi_structured_guides.jl", "inference"),
     ("advi_flow_iwae.jl", "inference"),
     ("result_interface.jl", "inference"),

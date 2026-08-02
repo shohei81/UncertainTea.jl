@@ -57,7 +57,7 @@ export mvstudentt, mvstudenttdense
 export wishart, inversewishart
 export lkjcholesky, scale_cholesky
 export iid
-export AbstractTeaDistribution, register_distribution, registered_distributions
+export AbstractTeaDistribution, register_distribution, registered_distributions, wrap_distribution
 # binomial is intentionally not exported: it would shadow Base.binomial for users.
 # Inside @tea models the name resolves to UncertainTea.binomial automatically.
 
