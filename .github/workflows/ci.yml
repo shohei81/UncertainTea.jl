@@ -20,9 +20,13 @@ on:
       - "LICENSE"
 
 # A new push to the same PR/branch cancels the still-running older build.
+# Cancel superseded runs for PR pushes only. Push-to-main runs must always
+# finish: the heavy 1.12 shards (sampling/crosscheck/device) run ONLY on main,
+# and back-to-back merges were cancelling each other's runs (issue #330), so
+# those shards silently never completed.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   format:
