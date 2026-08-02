@@ -1,0 +1,48 @@
+# Enzyme reverse-mode extension suite (issue #333).
+#
+# test/enzyme/ lives in its own isolated environment because Enzyme is a
+# heavy, version-sensitive dependency that does not belong in the core test
+# matrix. But since #272 the reverse tier is reachable automatically from the
+# batched samplers, and the generated-scorer/Enzyme contract (see
+# src/evaluator.jl) is fragile: a CompatHelper Enzyme 0.13.x bump can break
+# users while the main CI stays green. This workflow keeps a canary on that
+# contract:
+#   - weekly schedule (catches new Enzyme releases without any repo change)
+#   - workflow_dispatch (manual runs)
+#   - pull_request, but ONLY for the fragile contract files
+#
+# Deliberately NOT a required check on main (see issue #333).
+name: enzyme (reverse-mode extension)
+
+on:
+  schedule:
+    # Weekly, Monday 03:17 UTC — off-peak, off the :00 thundering herd.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "ext/UncertainTeaEnzymeExt.jl"
+      - "test/enzyme/**"
+      - "src/generated_scorer.jl"
+      - ".github/workflows/enzyme.yml"
+
+concurrency:
+  group: enzyme-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  enzyme:
+    name: julia 1.12 / enzyme
+    runs-on: ubuntu-latest
+    # Enzyme compilation is slow (LLVM-level AD); give it generous headroom.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.12"
+      - uses: julia-actions/cache@v2
+      - name: Instantiate test/enzyme environment
+        run: julia --project=test/enzyme -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'
+      - name: Run Enzyme extension suite
+        run: julia --project=test/enzyme test/enzyme/runtests.jl
