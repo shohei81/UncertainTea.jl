@@ -467,7 +467,7 @@ function batched_chees(
             retried = _init_is_redrawable(initial_params) ? " after $init_max_retries re-draw(s)" : ""
             throw(
                 ArgumentError(
-                    "initial batched ChEES parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init_strategy=:uniform or supply finite initial_params",
+                    "initial batched ChEES parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init_strategy=:uniform or supply finite initial_params, or check the constraint values for NaN/Inf",
                 ),
             )
         end

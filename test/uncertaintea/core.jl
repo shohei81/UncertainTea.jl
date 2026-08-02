@@ -15,6 +15,7 @@ core_test_files = [
     ("dsl_static_model_semantics.jl", "dsl"),
     ("constraint_driven_conditioning.jl", "dsl"),
     ("misconditioning_warning.jl", "dsl"),
+    ("nan_observation_guard.jl", "dsl"),
     ("dsl_contract_guards.jl", "dsl"),
     ("error_messages.jl", "dsl"),
     ("batched_logjoint_and_gradient.jl", "dsl"),

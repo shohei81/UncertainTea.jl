@@ -118,9 +118,17 @@ function batched_hmc(
     )
     copyto!(current_gradient, gradient)
     all(isfinite, current_logjoint) ||
-        throw(ArgumentError("initial batched HMC parameters produced a non-finite unconstrained logjoint"))
+        throw(
+            ArgumentError(
+                "initial batched HMC parameters produced a non-finite unconstrained logjoint; supply finite initial_params, or check the constraint values for NaN/Inf",
+            ),
+        )
     all(isfinite, current_gradient) ||
-        throw(ArgumentError("initial batched HMC parameters produced a non-finite unconstrained gradient"))
+        throw(
+            ArgumentError(
+                "initial batched HMC parameters produced a non-finite unconstrained gradient; supply finite initial_params, or check the constraint values for NaN/Inf",
+            ),
+        )
 
     unconstrained_samples = Array{Float64}(undef, num_params, num_samples, num_chains)
     constrained_samples = Array{Float64}(undef, constrained_num_params, num_samples, num_chains)

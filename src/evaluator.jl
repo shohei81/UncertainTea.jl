@@ -761,7 +761,43 @@ function _warn_unmatched_constraint_addresses(@nospecialize(model::TeaModel), co
     return nothing
 end
 
+# --- NaN observation guard (issue #346) ---------------------------------------
+#
+# A NaN inside a constrained observation value makes `logjoint` (and every
+# gradient) silently NaN, flowing unnoticed into waic/psis_loo-style scoring,
+# while sampler init failures blame the parameters instead of the data. NaN in
+# observed data is ALWAYS a data bug (unlike Inf, which can legitimately score
+# -Inf where the support allows it), so throw at constraint-resolution time and
+# name the offending address. The scan is value-only (no model execution) and
+# is stamped on the ChoiceMap per `mutation_count`
+# (`nan_checked_mutation_count`), so the hot path pays one Int comparison per
+# evaluation — mirroring how the issue-#310 misconditioning warning stays off
+# the hot path.
+
+_constraint_value_has_nan(@nospecialize(value)) = false
+_constraint_value_has_nan(value::Real) = isnan(value)
+_constraint_value_has_nan(value::AbstractArray) = any(_constraint_value_has_nan, value)
+_constraint_value_has_nan(value::Tuple) = any(_constraint_value_has_nan, value)
+
+function _validate_constraint_values_not_nan(constraints::ChoiceMap)
+    constraints.nan_checked_mutation_count == constraints.mutation_count && return nothing
+    for entry in constraints.entries
+        if _constraint_value_has_nan(last(entry))
+            detail = last(entry) isa Union{AbstractArray,Tuple} ? "contains NaN" : "is NaN"
+            throw(
+                ArgumentError(
+                    "constraint value for observed choice `$(first(entry))` $detail — " *
+                    "check the data passed to choicemap",
+                ),
+            )
+        end
+    end
+    constraints.nan_checked_mutation_count = constraints.mutation_count
+    return nothing
+end
+
 function _resolve_signature_plan(model::TeaModel, constraints::ChoiceMap)
+    _validate_constraint_values_not_nan(constraints)
     signature = _conditioning_signature(model, constraints)
     # first-encounter validation only: peek the memo unlocked (a benign race
     # merely repeats the cheap static check)
@@ -1228,6 +1264,12 @@ function _stage_observations(
 )
     compiled = resolved.compiled
     compiled.stage_count == 0 && return nothing
+    # NaN guard (issue #346), stamped per mutation_count: batched paths resolve
+    # the plan against a representative column only, and gibbs re-stages after
+    # in-place mutation, so staging is the chokepoint that sees every column's
+    # actual values. Deliberately OUTSIDE the `try` below — the catch means
+    # "fall back to live lookups", not "swallow a data bug".
+    _validate_constraint_values_not_nan(constraints)
     mutation_count = constraints.mutation_count
     sites = [StagedObservationSite(Float64[], BitVector()) for _ = 1:compiled.stage_count]
     active = trues(compiled.stage_count)
