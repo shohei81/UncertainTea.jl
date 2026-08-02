@@ -57,7 +57,7 @@ end
         -> (draws::AbstractMatrix{Float64}, names::Vector{String})
 
 Uniform posterior-draws accessor implemented by every inference result (see
-[`PosteriorDrawsResult`](@ref)): `draws` is a `num_params x num_draws` matrix
+`PosteriorDrawsResult`): `draws` is a `num_params x num_draws` matrix
 of CONSTRAINED-space parameter vectors (columns are draws) and `names` are the
 per-parameter display names matching the row order (as in `parameter_names`).
 
@@ -297,7 +297,7 @@ parameter_names(chain::GibbsChain; kwargs...) = parameter_names(_gibbs_continuou
     predict(model, args=(); num_draws=1000, rng) -> PredictiveDraws
 
 Posterior predictive draws: for each posterior draw in `result` (any
-[`PosteriorDrawsResult`](@ref) — `HMCChains`, `GibbsChain`, `ADVIResult`,
+`PosteriorDrawsResult` — `HMCChains`, `GibbsChain`, `ADVIResult`,
 `PathfinderResult`, `SVGDResult`, `ImportanceSamplingResult`, `SIRResult`,
 `SMCResult`, `NestedSamplingResult`, `EllipticalSliceResult`, `LaplaceResult`,
 `MAPResult`), fix the latent parameters at that draw and re-sample the model's
