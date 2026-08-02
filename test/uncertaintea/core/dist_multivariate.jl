@@ -290,3 +290,28 @@ end
     @test mvt_mean(mvt_l11 .^ 2) > 0.5 * mvt_Sigma_true[1, 1]
     @test mvt_mean(mvt_l11 .^ 2) < 2.0 * mvt_Sigma_true[1, 1]
 end
+
+@testset "mvnormal with runtime mean/scale arguments (issue #309)" begin
+    # both arguments runtime-valued (no static size): used to CRASH macro
+    # expansion via `something(nothing, nothing)`; now a dynamic-size
+    # observation-only form
+    mvn309 = @tea static function mvn309_model(mu0, sig0)
+        tau ~ lognormal(0.0, 0.5)
+        {:y} ~ mvnormal(mu0, sig0)
+        return tau
+    end
+    mvn309_mu = [0.0, 1.0, -0.5]
+    mvn309_sig = [1.0, 0.8, 1.2]
+    mvn309_y = [0.3, 1.2, -0.4]
+    mvn309_cm = choicemap((:y, mvn309_y))
+    lj = logjoint(mvn309, [0.1], (mvn309_mu, mvn309_sig), mvn309_cm)
+    # matches the per-component diagonal normal sum plus the latent prior term
+    ref = sum(
+        UncertainTea.logpdf(normal(mvn309_mu[i], mvn309_sig[i]), mvn309_y[i]) for i = 1:3
+    )
+    lj_prior_only = logjoint(mvn309, [0.1], (mvn309_mu, mvn309_sig .* 2), mvn309_cm)
+    @test isfinite(lj)
+    @test lj != lj_prior_only     # the observation term responds to the scale
+    g = logjoint_gradient_unconstrained(mvn309, [0.1], (mvn309_mu, mvn309_sig), mvn309_cm)
+    @test all(isfinite, g)
+end
