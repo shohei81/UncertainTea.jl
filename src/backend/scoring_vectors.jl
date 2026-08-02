@@ -356,6 +356,30 @@ function _batched_broadcast_observed_values(
     return observed
 end
 
+# Cached broadcast observation staging (issue #311): the gradient cache's
+# constraints are fixed for its lifetime, so the per-column conversion/copy in
+# `_batched_broadcast_observed_values` (~770 B/observation/call) runs once per
+# step and is reused, revalidated by the ChoiceMap mutation count (gibbs-style
+# in-place mutation invalidates). Per-column constraint VECTORS are not cached
+# (no single cheap validity token); they keep the direct path.
+function _batched_broadcast_observed_values!(
+    cache,
+    env::BatchedPlanEnvironment{T},
+    step,
+    address_parts::Tuple,
+    constraints,
+) where {T}
+    constraints isa ChoiceMap || return _batched_broadcast_observed_values(env, address_parts, constraints)
+    token = constraints.mutation_count
+    entry = get(cache.observed_broadcast_values, step, nothing)
+    if entry isa Tuple{Int,Vector{Vector{T}}} && entry[1] == token
+        return entry[2]
+    end
+    observed = _batched_broadcast_observed_values(env, address_parts, constraints)
+    cache.observed_broadcast_values[step] = (token, observed)
+    return observed
+end
+
 function _broadcast_uniform_length(observed::AbstractVector{<:AbstractVector})
     isempty(observed) && return 0
     n = length(observed[1])

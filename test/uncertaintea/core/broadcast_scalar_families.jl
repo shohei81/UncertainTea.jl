@@ -121,3 +121,33 @@ end
         @test all(isfinite, posterior_array(chain))
     end
 end
+
+@testset "broadcast observation staging is cached per gradient cache (issue #311)" begin
+    bsc_x = collect(range(-1.0, 1.0; length=64))
+    @tea static function bsc_pois(x, n)
+        a ~ normal(0.0, 1.0)
+        b ~ normal(0.0, 1.0)
+        {:y} ~ poisson.(exp.(a .+ b .* x))
+        return a
+    end
+    bsc_ys = Float64.(rand(MersenneTwister(1), 0:6, 64))
+    bsc_cm = choicemap((:y, bsc_ys))
+    bsc_params = randn(MersenneTwister(2), 2, 8)
+    cache = UncertainTea.BatchedLogjointGradientCache(bsc_pois, bsc_params, (bsc_x, 64), bsc_cm; adtype=:forward)
+    g1 = copy(UncertainTea.batched_logjoint_gradient_unconstrained!(cache, bsc_params))
+    # cached staging matches the fresh un-cached reference exactly
+    gref = batched_logjoint_gradient_unconstrained(bsc_pois, bsc_params, (bsc_x, 64), bsc_cm)
+    @test g1 == gref
+    # the observation staging allocated once: warm calls no longer pay the
+    # O(n * batch) per-column conversion (~40KB at n=64 pre-cache)
+    a_warm = minimum(
+        (@allocated UncertainTea.batched_logjoint_gradient_unconstrained!(cache, bsc_params)) for _ = 1:3
+    )
+    @test a_warm < 20_000
+    # in-place constraint mutation invalidates the staged observations
+    UncertainTea._pushchoice!(bsc_cm, :y, vcat(bsc_ys[1:63], 99.0))
+    g_mut = copy(UncertainTea.batched_logjoint_gradient_unconstrained!(cache, bsc_params))
+    gref_mut = batched_logjoint_gradient_unconstrained(bsc_pois, bsc_params, (bsc_x, 64), bsc_cm)
+    @test g_mut == gref_mut
+    @test g_mut != g1
+end
