@@ -133,7 +133,7 @@ fragility lives in the same walk -- see Interactions.)
 ### 3. Observation staging and device lowering
 
 Device staging (`src/device/staging.jl`) and `device_lowering_report`
-(`src/device/plan.jl`) already consume `(args, constraints)`; they switch from
+(`src/device/plan/lowering.jl`) already consume `(args, constraints)`; they switch from
 "a step is observed iff it has no parameter slot" to "a step is observed iff its
 address is in the signature", which is the same source of truth the CPU layout
 now uses. The dense observed matrix and the latent slot spans are both derived

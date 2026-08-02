@@ -104,7 +104,7 @@ argument. PR-2 adds explicit kwarg parsing:
 
 ### Transforms as plan walks
 
-Two new internal entry points (parameters.jl + evaluator.jl), used only when
+Two new internal entry points (parameters.jl + evaluator/noncentered_walk.jl), used only when
 `has_dependent_transforms`:
 
 - **forward** `_transform_to_constrained_via_plan!(dest, model, params)`:
