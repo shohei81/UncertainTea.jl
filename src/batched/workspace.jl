@@ -102,6 +102,13 @@ struct BatchedBackendGradientCache{W,S,G,A,C}
     # few cached numbers; `nothing` records that the staged data cannot take
     # the closed form (so the O(observations) scan runs once, not per call).
     observed_loop_stats::IdDict{Any,Any}
+    # broadcast observation staging (issue #311): broadcast step -> (constraints
+    # mutation count, per-column dense Vector{Vector{T}}). The un-cached path
+    # converted and copied every column's full observation vector on EVERY
+    # gradient call (~770 B/observation/call); the cache's constraints are fixed
+    # for its lifetime, so one staging serves every call, revalidated by the
+    # mutation count.
+    observed_broadcast_values::IdDict{Any,Any}
 end
 
 function _backend_gradient_seed_rows(layout::ParameterLayout)

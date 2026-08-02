@@ -373,7 +373,7 @@ function _score_backend_step_and_gradient!(
     isnothing(step.binding_slot) ||
         throw(BatchedBackendFallback("batched backend gradient does not support broadcast normal bindings"))
     address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
-    observed = _batched_broadcast_observed_values(env, address_parts, constraints)
+    observed = _batched_broadcast_observed_values!(cache, env, step, address_parts, constraints)
     n = _broadcast_uniform_length(observed)
     mu_values = _batched_numeric_scratch!(env, 1)
     mu_gradients = _batched_backend_gradient_scratch!(cache, 1)
@@ -418,7 +418,7 @@ function _score_backend_step_and_gradient!(
     isnothing(step.binding_slot) ||
         throw(BatchedBackendFallback("batched backend gradient does not support broadcast $(F) bindings"))
     address_parts = _batched_backend_address_parts(env, step.address.parts, 1)
-    observed = _batched_broadcast_observed_values(env, address_parts, constraints)
+    observed = _batched_broadcast_observed_values!(cache, env, step, address_parts, constraints)
     n = _broadcast_uniform_length(observed)
     arg_count = length(step.arguments)
     arg_values = ntuple(k -> _batched_numeric_scratch!(env, k), arg_count)
