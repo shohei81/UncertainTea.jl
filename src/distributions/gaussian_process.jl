@@ -192,25 +192,6 @@ end
 _gp_rbf_covariance_kernel(inputs, lengthscale, variance, noise) =
     _gp_kernel_covariance(RBFKernel(lengthscale, variance), inputs, noise)
 
-function _gp_rbf_covariance(inputs::AbstractMatrix, lengthscale, variance, noise)
-    n = size(inputs, 2)
-    T = promote_type(eltype(inputs), _gp_lengthscale_eltype(lengthscale), typeof(variance), typeof(noise))
-    v2 = variance^2
-    diag_add = noise^2 + T(1e-8)
-    K = Matrix{T}(undef, n, n)
-    @inbounds for j = 1:n
-        for i = 1:n
-            d2 = zero(T)
-            for k in axes(inputs, 1)
-                dk = inputs[k, i] - inputs[k, j]
-                d2 += dk * dk * _gp_inv_two_l2(lengthscale, k)
-            end
-            K[i, j] = v2 * exp(-d2) + (i == j ? diag_add : zero(T))
-        end
-    end
-    return K
-end
-
 # ARD lengthscale sanity against the input dimension (shared by every kernel
 # that scales a distance per dimension)
 function _gp_check_ard_lengthscale(family::String, lengthscale, inputs::AbstractMatrix)

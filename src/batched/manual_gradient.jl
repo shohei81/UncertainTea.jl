@@ -950,16 +950,3 @@ function _eval_backend_numeric_expr_and_gradient!(
     end
     return values, gradients
 end
-
-function _set_numeric_binding!(
-    env::BatchedPlanEnvironment{T},
-    slot_gradients::Array{T,3},
-    slot::Int,
-    values::AbstractVector{T},
-    gradients::AbstractMatrix{T},
-) where {T<:AbstractFloat}
-    copyto!(view(env.numeric_values, slot, :), values)
-    _store_slot_gradient!(slot_gradients, slot, gradients)
-    env.assigned[slot] = true
-    return env
-end

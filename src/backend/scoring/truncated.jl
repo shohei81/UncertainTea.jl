@@ -2,15 +2,6 @@
 
 # --- truncated normal ---------------------------------------------------------
 
-# Standard normal pdf with an explicit guard so an infinite standardized bound
-# (from an unbounded truncation side) contributes a zero density, keeping the
-# normalizer-gradient terms finite.
-function _std_normal_pdf(z)
-    zz = float(z)
-    isinf(zz) && return zero(zz)
-    return exp(-zz * zz / 2) / sqrt(oftype(zz, 2) * pi)
-end
-
 # Scale positivity is exception-free (issue #98): a latent-driven sigma that
 # underflows scores NaN for that column, matching the device contract, so a
 # divergent trajectory invalidates only its own chain instead of aborting the

@@ -73,9 +73,3 @@ function _per_chain_parameter_statistics(chains::HMCChains, parameter_index::Int
     end
     return means, sds
 end
-
-# Display name for a parameter summary, matching the "binding @ address" form
-# used by the HMCSummary show methods.
-function _parameter_display_name(parameter::HMCParameterSummary)
-    return string(parameter.binding, " @ ", parameter.address)
-end
