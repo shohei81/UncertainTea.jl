@@ -782,7 +782,10 @@ function _mvnormal_static_size(arguments::Vector)
         mu_size == sigma_size || throw(ArgumentError("mvnormal requires mean and scale vectors with the same static length"))
         return mu_size
     end
-    return something(mu_size, sigma_size)
+    # both arguments runtime-valued: the size is dynamic (observation-only), the
+    # same `Some(nothing)` fallback the mvstudentt sizing uses -- a bare
+    # `something(nothing, nothing)` used to CRASH macro expansion (issue #309)
+    return something(mu_size, sigma_size, Some(nothing))
 end
 
 # Static dimension of `lkjcholesky(d, eta)`. The frontend enforces a literal
