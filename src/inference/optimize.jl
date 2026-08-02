@@ -178,11 +178,13 @@ function _lbfgs_maximize(
 end
 
 """
-    map_estimate(model, args=(), constraints=choicemap(); init=nothing, max_iters=500, g_tol=1e-8, history=10, rng) -> MAPResult
+    map_estimate(model, args=(), constraints=choicemap(); initial_params=nothing, max_iters=500, g_tol=1e-8, history=10, rng) -> MAPResult
 
 Maximum a posteriori estimate: maximize the unconstrained-space log joint with
 L-BFGS (memory `history`, at most `max_iters` iterations, gradient-norm
-tolerance `g_tol`). `init` seeds the optimizer (a random draw when `nothing`).
+tolerance `g_tol`). `initial_params` seeds the optimizer (a random draw when
+`nothing`). Gradients always use ForwardDiff; there is no `adtype` selection
+here (only the batched samplers accept `adtype`).
 Returns a `MAPResult` carrying the unconstrained and constrained modes, the
 objective value, and convergence information.
 """
@@ -190,13 +192,13 @@ function map_estimate(
     model::TeaModel,
     args::Tuple=(),
     constraints::ChoiceMap=choicemap();
-    init=nothing,
+    initial_params=nothing,
     max_iters::Int=500,
     g_tol::Float64=1e-8,
     history::Int=10,
     rng::AbstractRNG=Random.default_rng(),
 )
-    start = _resolve_unconstrained_point(model, args, constraints, init, rng, "init")
+    start = _resolve_unconstrained_point(model, args, constraints, initial_params, rng, "initial_params")
     seed = collect(float.(start))
 
     objective = theta -> logjoint_unconstrained(model, theta, args, constraints)

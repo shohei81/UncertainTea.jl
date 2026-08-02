@@ -823,7 +823,7 @@ end
         @test_throws ArgumentError sbc(
             gibbs_indicator_model;
             num_simulations=2,
-            num_posterior_draws=4,
+            num_samples=4,
             num_warmup=10,
             sampler=:gibbs,
             rng=MersenneTwister(84),
@@ -831,7 +831,7 @@ end
         gibbs_sbc_result = sbc(
             gibbs_indicator_model;
             num_simulations=40,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=60,
             sampler=:gibbs,
             observation_addresses=[(:y,)],

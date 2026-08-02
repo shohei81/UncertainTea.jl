@@ -230,7 +230,7 @@ function _svgd_guard_finite(gradient::AbstractMatrix)
         ArgumentError(
             "batched_svgd encountered a non-finite unconstrained log-density gradient; " *
             "SVGD assumes a differentiable target at every particle (try a different " *
-            "init, fewer particles, or a smaller learning_rate)",
+            "init_strategy, fewer particles, or a smaller learning_rate)",
         ),
     )
     return nothing
@@ -254,7 +254,7 @@ update is an Adam ascent.
 Keyword arguments:
 - `num_particles::Int=64`, `num_iterations::Int` (required).
 - `learning_rate::Real=0.1` -- the Adam master step.
-- `initial_params`, `init::Symbol=:prior` -- particle initialization, shared with
+- `initial_params`, `init_strategy::Symbol=:prior` -- particle initialization, shared with
   the batched samplers (`_initial_batched_hmc_positions`).
 - `bandwidth=nothing` -- `nothing` uses the median heuristic; a positive real
   fixes the RBF kernel scale `s`.
@@ -277,7 +277,7 @@ function batched_svgd(
     num_iterations::Int,
     learning_rate::Real=0.1,
     initial_params=nothing,
-    init::Symbol=:prior,
+    init_strategy::Symbol=:prior,
     bandwidth=nothing,
     beta1::Real=0.9,
     beta2::Real=0.999,
@@ -327,7 +327,7 @@ function batched_svgd(
         parameter_total,
         constrained_total,
         num_particles;
-        init=init,
+        init_strategy=init_strategy,
     )
 
     # Per-iteration gradient provider: host analytic/ForwardDiff gradient cache,

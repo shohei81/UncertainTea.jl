@@ -45,6 +45,9 @@ the mass matrix. Key keyword arguments:
 - `metric`: `:diag` (default) or `:dense` mass matrix.
 - `initial_params`, `rng`: initialization and randomness.
 
+Gradients always use ForwardDiff; there is no `adtype` selection here (only the
+batched samplers accept `adtype`).
+
 See also [`nuts`](@ref), [`hmc_chains`](@ref), and [`batched_hmc`](@ref).
 """
 function hmc(
@@ -236,11 +239,14 @@ a fixed leapfrog-step count.
 Key keyword arguments:
 
 - `num_samples` (required) and `num_warmup`.
-- `step_size`, `max_tree_depth`, `max_delta_energy`: trajectory controls.
+- `step_size`, `max_tree_depth`, `divergence_threshold`: trajectory controls.
 - `target_accept`, `adapt_step_size`, `adapt_mass_matrix`,
   `find_reasonable_step_size`: adaptation controls.
 - `metric`: `:diag` (default) or `:dense` mass matrix.
 - `initial_params`, `rng`.
+
+Gradients always use ForwardDiff; there is no `adtype` selection here (only the
+batched samplers accept `adtype`).
 
 See also [`hmc`](@ref), [`nuts_chains`](@ref), and [`batched_nuts`](@ref).
 """
@@ -257,7 +263,7 @@ function nuts(
     adapt_step_size::Bool=true,
     adapt_mass_matrix::Bool=true,
     find_reasonable_step_size::Bool=false,
-    max_delta_energy::Real=1000.0,
+    divergence_threshold::Real=1000.0,
     mass_matrix_regularization::Real=1e-3,
     mass_matrix_min_samples::Int=10,
     metric::Symbol=:diag,
@@ -276,7 +282,7 @@ function nuts(
         step_size,
         max_tree_depth,
         target_accept,
-        max_delta_energy,
+        divergence_threshold,
         mass_matrix_regularization,
         mass_matrix_min_samples,
     )
@@ -304,7 +310,7 @@ function nuts(
     total_iterations = num_warmup + num_samples
     nuts_step_size = Float64(step_size)
     nuts_target_accept = Float64(target_accept)
-    nuts_max_delta_energy = Float64(max_delta_energy)
+    nuts_divergence_threshold = Float64(divergence_threshold)
     inverse_mass_matrix = ones(num_params)
     if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
         nuts_step_size = _find_reasonable_step_size(
@@ -354,7 +360,7 @@ function nuts(
                 inverse_mass_matrix,
                 nuts_step_size,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 rng,
             )
 

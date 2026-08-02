@@ -823,10 +823,10 @@ function _clip_flat_gradient!(gradient::AbstractVector, gradient_clip::Real)
 end
 
 """
-    batched_advi(model, args=(), constraints=choicemap(); num_steps, num_particles=32, learning_rate=0.05, guide=:meanfield, elbo=:standard, kwargs...) -> ADVIResult
+    batched_advi(model, args=(), constraints=choicemap(); num_iterations, num_particles=32, learning_rate=0.05, guide=:meanfield, elbo=:standard, kwargs...) -> ADVIResult
 
 Automatic differentiation variational inference with `num_particles` particles
-per Adam step, run for `num_steps` steps. `guide` selects the variational
+per Adam step, run for `num_iterations` steps. `guide` selects the variational
 family: `:meanfield`, `:fullrank`, and `:lowrank` are Gaussian in unconstrained
 space, while `:flow` stacks affine coupling layers (RealNVP-style) on a
 mean-field base to capture nonlinear correlation and skew. `elbo=:standard`
@@ -839,7 +839,7 @@ function batched_advi(
     model::TeaModel,
     args::Tuple=(),
     constraints::ChoiceMap=choicemap();
-    num_steps::Int,
+    num_iterations::Int,
     num_particles::Int=32,
     learning_rate::Real=0.05,
     initial_params=nothing,
@@ -896,7 +896,7 @@ function batched_advi(
         device_precision = precision === nothing ? default_device_precision(backend) : precision
         return _run_device_batched_advi(
             model, args, constraints;
-            num_steps=num_steps,
+            num_iterations=num_iterations,
             num_particles=num_particles,
             learning_rate=learning_rate,
             initial_params=initial_params,
@@ -916,7 +916,7 @@ function batched_advi(
     layout = _conditioned_parameter_layout(model, constraints)
     parameter_total = parametercount(layout)
     parameter_total > 0 || throw(ArgumentError("batched_advi requires at least one parameterized latent choice"))
-    num_steps > 0 || throw(ArgumentError("batched_advi requires num_steps > 0"))
+    num_iterations > 0 || throw(ArgumentError("batched_advi requires num_iterations > 0"))
     num_particles > 0 || throw(ArgumentError("batched_advi requires num_particles > 0"))
     learning_rate > 0 || throw(ArgumentError("batched_advi requires learning_rate > 0"))
     0 <= beta1 < 1 || throw(ArgumentError("batched_advi requires 0 <= beta1 < 1"))
@@ -946,7 +946,7 @@ function batched_advi(
             constraints,
             location,
             log_scale;
-            num_steps=num_steps,
+            num_iterations=num_iterations,
             num_particles=num_particles,
             num_flow_layers=num_flow_layers,
             learning_rate=Float64(learning_rate),
@@ -1003,9 +1003,9 @@ function batched_advi(
     location_m2 = zeros(Float64, parameter_total)
     log_scale_m1 = zeros(Float64, parameter_total)
     log_scale_m2 = zeros(Float64, parameter_total)
-    elbo_history = Vector{Float64}(undef, num_steps)
-    standard_elbo_history = Vector{Float64}(undef, num_steps)
-    gradient_norm_history = Vector{Float64}(undef, num_steps)
+    elbo_history = Vector{Float64}(undef, num_iterations)
+    standard_elbo_history = Vector{Float64}(undef, num_iterations)
+    gradient_norm_history = Vector{Float64}(undef, num_iterations)
     particle_valid = Vector{Bool}(undef, num_particles)
     # IWAE bookkeeping: per-particle log-weights and their self-normalized
     # reparameterization-gradient coefficients (unused on the standard path).
@@ -1022,7 +1022,7 @@ function batched_advi(
     adam_epsilon_f64 = Float64(adam_epsilon)
     gradient_clip_f64 = Float64(gradient_clip)
 
-    for iteration = 1:num_steps
+    for iteration = 1:num_iterations
         if guide === :fullrank
             _draw_fullrank_particles!(particles, noise, location, log_scale, factor, rng)
         elseif guide === :lowrank
@@ -1187,7 +1187,7 @@ function batched_advi(
             adam_epsilon_f64,
         )
         isnothing(callback) || _invoke_progress_callback(
-            callback, callback_every, :step, iteration, num_steps, NaN, 0)
+            callback, callback_every, :step, iteration, num_iterations, NaN, 0)
     end
 
     return ADVIResult(
@@ -1229,7 +1229,7 @@ function _run_flow_advi(
     constraints::ChoiceMap,
     location::AbstractVector,
     log_scale::AbstractVector;
-    num_steps::Int,
+    num_iterations::Int,
     num_particles::Int,
     num_flow_layers::Int,
     learning_rate::Float64,
@@ -1264,14 +1264,14 @@ function _run_flow_advi(
     gradient = zero(params)
     first_moment = zero(params)
     second_moment = zero(params)
-    elbo_history = Vector{Float64}(undef, num_steps)
-    standard_elbo_history = Vector{Float64}(undef, num_steps)
-    gradient_norm_history = Vector{Float64}(undef, num_steps)
+    elbo_history = Vector{Float64}(undef, num_iterations)
+    standard_elbo_history = Vector{Float64}(undef, num_iterations)
+    gradient_norm_history = Vector{Float64}(undef, num_iterations)
     best_params = copy(params)
     best_elbo = -Inf
     base_normalizer = 0.5 * dim * log(2.0 * pi)
 
-    for iteration = 1:num_steps
+    for iteration = 1:num_iterations
         Random.randn!(rng, noise)
         for particle_index = 1:num_particles
             theta, logdet =
@@ -1372,7 +1372,7 @@ function _run_flow_advi(
             adam_epsilon,
         )
         isnothing(callback) ||
-            _invoke_progress_callback(callback, callback_every, :step, iteration, num_steps, NaN, 0)
+            _invoke_progress_callback(callback, callback_every, :step, iteration, num_iterations, NaN, 0)
     end
 
     best_flow = FlowGuide(dim, guide.num_layers, guide.passive, guide.active, copy(best_params))

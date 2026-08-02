@@ -58,7 +58,7 @@ Not ported (BlackJAX extras outside increment-2 scope): the opt-in `mass_matrix_
 - `_batched_hamiltonian!` / `_hamiltonian` — energies + MH ratio.
 - `_sample_batched_momentum!`, `_batched_acceptance_probability!`.
 - Shared dual-averaging + pooled diagonal mass (the `per_chain_adaptation=false` path in `_batched_hmc_*`); ChEES is inherently a shared-ensemble adaptation.
-- `_initial_batched_hmc_positions` (+ #162 retry / `init=:uniform`).
+- `_initial_batched_hmc_positions` (+ #162 retry / `init_strategy=:uniform`).
 - Device: `_device_nuts_leaf_*` kick/drift/Hamiltonian kernels already exist; the device ChEES loop needs no tree code (one sync/iteration + an O(C) host or device reduction for θ̄ and the ChEES gradient).
 
 ## Incremental plan (each an independent PR)

@@ -28,7 +28,7 @@ end
             advi_corr_model,
             (),
             advi_corr_constraints;
-            num_steps=2000,
+            num_iterations=2000,
             num_particles=64,
             learning_rate=0.02,
             guide=guide,
@@ -75,7 +75,7 @@ end
             advi_scale_corr_model,
             (),
             choicemap((:y, 0.8));
-            num_steps=400,
+            num_iterations=400,
             num_particles=32,
             learning_rate=0.05,
             guide=:fullrank,
@@ -91,14 +91,14 @@ end
             advi_corr_model,
             (),
             advi_corr_constraints;
-            num_steps=4,
+            num_iterations=4,
             guide=:bogus,
         )
         @test_throws ArgumentError batched_advi(
             advi_corr_model,
             (),
             advi_corr_constraints;
-            num_steps=4,
+            num_iterations=4,
             guide=:lowrank,
             lowrank_rank=0,
         )
@@ -106,7 +106,7 @@ end
             advi_corr_model,
             (),
             advi_corr_constraints;
-            num_steps=4,
+            num_iterations=4,
             guide=:lowrank,
             lowrank_rank=3,
         )
@@ -114,7 +114,7 @@ end
             advi_corr_model,
             (),
             advi_corr_constraints;
-            num_steps=4,
+            num_iterations=4,
             guide=:fullrank,
             backend=ADVIStructuredCPU(),
         )

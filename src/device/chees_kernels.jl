@@ -123,7 +123,7 @@ function _run_device_batched_chees(
     trajectory_adam_beta2::Real,
     trajectory_adam_epsilon::Real,
     initial_params,
-    init::Symbol,
+    init_strategy::Symbol,
     init_max_retries::Int,
     target_accept::Real,
     adapt_step_size::Bool,
@@ -171,7 +171,7 @@ function _run_device_batched_chees(
         num_params,
         constrained_num_params,
         num_chains;
-        init=init,
+        init_strategy=init_strategy,
     )
 
     # Build the device workspace first: this is where an unsupported model raises the
@@ -202,7 +202,7 @@ function _run_device_batched_chees(
             retried = _init_is_redrawable(initial_params) ? " after $init_max_retries re-draw(s)" : ""
             throw(
                 ArgumentError(
-                    "initial batched ChEES parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init=:uniform or supply finite initial_params",
+                    "initial batched ChEES parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init_strategy=:uniform or supply finite initial_params",
                 ),
             )
         end
@@ -214,7 +214,7 @@ function _run_device_batched_chees(
             batch_args,
             batch_constraints,
             initial_params,
-            init,
+            init_strategy,
             rng,
             num_params,
             constrained_num_params,

@@ -1,6 +1,6 @@
 # Initialization robustness for batched NUTS (issue #162): a non-finite
 # starting point is re-drawn instead of throwing outright (only for re-drawable
-# inits -- prior/uniform/Pathfinder), and `init=:uniform` offers the Stan/NumPyro
+# inits -- prior/uniform/Pathfinder), and `init_strategy=:uniform` offers the Stan/NumPyro
 # Uniform(-2, 2) unconstrained protocol.
 
 # Conjugate gaussian, always-finite everywhere.
@@ -40,7 +40,7 @@ initr_overflow_cm = choicemap((:y, 0.0))
     @testset "uniform_init_bounds" begin
         # Every unconstrained coordinate must land in [-2, 2) (open above).
         positions = UncertainTea._initial_batched_hmc_positions(
-            initr_gauss, (), initr_gauss_cm, nothing, MersenneTwister(3), 1, 1, 64; init=:uniform,
+            initr_gauss, (), initr_gauss_cm, nothing, MersenneTwister(3), 1, 1, 64; init_strategy=:uniform,
         )
         @test all(-2.0 .<= positions .< 2.0)
         # Not all identical -- the draw is actually random per chain/coordinate.
@@ -49,19 +49,19 @@ initr_overflow_cm = choicemap((:y, 0.0))
 
     @testset "prior_default_unchanged" begin
         # The default path (:prior) must consume the RNG and produce positions
-        # identically to the pre-#162 signature (no init kwarg).
+        # identically to the pre-#162 signature (no init_strategy kwarg).
         a = UncertainTea._initial_batched_hmc_positions(
             initr_gauss, (), initr_gauss_cm, nothing, MersenneTwister(7), 1, 1, 8,
         )
         b = UncertainTea._initial_batched_hmc_positions(
-            initr_gauss, (), initr_gauss_cm, nothing, MersenneTwister(7), 1, 1, 8; init=:prior,
+            initr_gauss, (), initr_gauss_cm, nothing, MersenneTwister(7), 1, 1, 8; init_strategy=:prior,
         )
         @test a == b
     end
 
     @testset "argument_validation" begin
         @test_throws ArgumentError batched_nuts(
-            initr_gauss, (), initr_gauss_cm; num_chains=2, num_samples=2, num_warmup=1, init=:bogus,
+            initr_gauss, (), initr_gauss_cm; num_chains=2, num_samples=2, num_warmup=1, init_strategy=:bogus,
         )
         @test_throws ArgumentError batched_nuts(
             initr_gauss, (), initr_gauss_cm; num_chains=2, num_samples=2, num_warmup=1, init_max_retries=-1,
@@ -98,7 +98,7 @@ initr_overflow_cm = choicemap((:y, 0.0))
         chains = batched_nuts(
             initr_gauss, (), initr_gauss_cm;
             num_chains=4, num_samples=20, num_warmup=20,
-            init=:uniform, rng=MersenneTwister(11),
+            init_strategy=:uniform, rng=MersenneTwister(11),
         )
         @test chains isa UncertainTea.HMCChains
     end

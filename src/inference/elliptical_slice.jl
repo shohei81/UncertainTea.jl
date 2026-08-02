@@ -18,7 +18,7 @@ end
 
 """
     elliptical_slice(loglikelihood, prior_scale_tril; num_samples, num_warmup=0,
-                     initial=nothing, rng=Random.default_rng())
+                     initial_params=nothing, rng=Random.default_rng())
 
 Elliptical slice sampling for a target `p(f) ∝ N(f; 0, L L') · exp(loglikelihood(f))`,
 where `prior_scale_tril` is the lower-triangular Cholesky factor `L` of the
@@ -34,7 +34,7 @@ function elliptical_slice(
     prior_scale_tril::AbstractMatrix;
     num_samples::Int,
     num_warmup::Int=0,
-    initial=nothing,
+    initial_params=nothing,
     rng::AbstractRNG=Random.default_rng(),
 )
     num_samples >= 1 || throw(ArgumentError("elliptical_slice requires num_samples >= 1"))
@@ -42,7 +42,7 @@ function elliptical_slice(
     n = size(prior_scale_tril, 1)
     size(prior_scale_tril, 2) == n ||
         throw(ArgumentError("elliptical_slice prior_scale_tril must be square"))
-    f = isnothing(initial) ? prior_scale_tril * randn(rng, n) : collect(float.(initial))
+    f = isnothing(initial_params) ? prior_scale_tril * randn(rng, n) : collect(float.(initial_params))
     length(f) == n || throw(
         ArgumentError("elliptical_slice initial state length $(length(f)) must match the prior dimension $n"),
     )

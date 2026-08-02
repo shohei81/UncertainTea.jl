@@ -60,7 +60,7 @@
         map_two_latent_model,
         (),
         map_two_latent_constraints;
-        init=[5.0, -5.0],
+        initial_params=[5.0, -5.0],
     )
     @test map_two_latent_result.converged
     @test map_two_latent_result.gradient_norm < 1e-6
@@ -203,7 +203,7 @@
         map_gaussian_model,
         (),
         map_gaussian_constraints;
-        num_steps=25,
+        num_iterations=25,
         callback=info -> push!(cb_advi_events, info),
         callback_every=10,
         rng=MersenneTwister(12),

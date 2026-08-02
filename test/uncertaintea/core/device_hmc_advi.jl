@@ -134,7 +134,7 @@ end
         devh_conjugate_gauss,
         (),
         constraints;
-        num_steps=300,
+        num_iterations=300,
         backend=backend,
         rng=MersenneTwister(46),
     )
@@ -179,7 +179,7 @@ end
     @test occursin("device_lowering_report", sprint(showerror, marg_error))
 
     advi_error = try
-        batched_advi(devh_unsupported_model, (), choicemap((:y, 0.4)); num_steps=10, backend=backend)
+        batched_advi(devh_unsupported_model, (), choicemap((:y, 0.4)); num_iterations=10, backend=backend)
         nothing
     catch err
         err
@@ -196,7 +196,7 @@ end
 @testset "devh_advi_nonfinite_gradient_guard" begin
     backend = CPU()
     kwargs = (
-        num_steps=1,
+        num_iterations=1,
         num_particles=2,
         initial_params=[0.0],
         initial_log_scale=-1000.0,
@@ -221,7 +221,7 @@ end
     backend = CPU()
     constraints = choicemap((:y, 0.3))
     seed = 20260721
-    common = (num_steps=25, num_particles=8, initial_params=[0.0], initial_log_scale=0.0)
+    common = (num_iterations=25, num_particles=8, initial_params=[0.0], initial_log_scale=0.0)
     cpu = batched_advi(devh_conjugate_gauss, (), constraints; common..., rng=MersenneTwister(seed))
     dev = batched_advi(devh_conjugate_gauss, (), constraints; common..., backend=backend, rng=MersenneTwister(seed))
     @test maximum(abs.(cpu.elbo_history .- dev.elbo_history)) < 1e-13

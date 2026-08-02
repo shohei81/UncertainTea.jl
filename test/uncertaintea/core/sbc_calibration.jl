@@ -75,13 +75,13 @@ end
         result = sbc(
             sbc_conjugate_model;
             num_simulations=60,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=40,
             rng=MersenneTwister(42),
         )
         @test size(result.ranks) == (1, 60)
         @test all(0 .<= result.ranks .<= 24)
-        @test result.num_posterior_draws == 24
+        @test result.num_samples == 24
         @test length(result.parameter_names) == 1
         @test occursin("mu", result.parameter_names[1])
         @test result.pvalues[1] > 0.01
@@ -101,7 +101,7 @@ end
         result = sbc(
             sbc_scale_model;
             num_simulations=128,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=80,
             thin=2,
             rng=MersenneTwister(7),
@@ -118,7 +118,7 @@ end
         result = sbc(
             sbc_conjugate_model;
             num_simulations=60,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=0,
             adapt_step_size=false,
             adapt_mass_matrix=false,
@@ -134,7 +134,7 @@ end
         explicit = sbc(
             sbc_conjugate_model;
             num_simulations=12,
-            num_posterior_draws=12,
+            num_samples=12,
             num_warmup=30,
             observation_addresses=[(:y,)],
             rng=MersenneTwister(3),
@@ -144,13 +144,13 @@ end
         @test_throws ArgumentError sbc(
             sbc_conjugate_model;
             num_simulations=0,
-            num_posterior_draws=8,
+            num_samples=8,
             num_warmup=10,
         )
         @test_throws ArgumentError sbc(
             sbc_conjugate_model;
             num_simulations=4,
-            num_posterior_draws=8,
+            num_samples=8,
             num_warmup=10,
             thin=0,
         )
@@ -162,7 +162,7 @@ end
             sbc_bounded_model,
             (4,);
             num_simulations=80,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=60,
             rng=MersenneTwister(11),
         )
@@ -179,7 +179,7 @@ end
             sbc_simplex_model,
             (6,);
             num_simulations=96,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=80,
             rng=MersenneTwister(12),
         )
@@ -197,7 +197,7 @@ end
             sbc_corr_model,
             (sbc_corr_zeros2, sbc_corr_ones2, 8);
             num_simulations=96,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=80,
             rng=MersenneTwister(13),
         )
@@ -218,7 +218,7 @@ end
             sbc_corr_model,
             (sbc_corr_zeros2, sbc_corr_ones2, 8);
             num_simulations=48,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=60,
             rng=MersenneTwister(21),
         )
@@ -243,7 +243,7 @@ end
             result = sbc(
                 sbc_bnuts_model;
                 num_simulations=200,
-                num_posterior_draws=63,
+                num_samples=63,
                 num_warmup=200,
                 thin=2,
                 sampler=:batched_nuts,
@@ -264,7 +264,7 @@ end
         @test_throws ArgumentError sbc(
             sbc_conjugate_model;
             num_simulations=4,
-            num_posterior_draws=8,
+            num_samples=8,
             num_warmup=10,
             sampler=:not_a_sampler,
         )
@@ -277,7 +277,7 @@ end
         host = sbc(
             sbc_conjugate_model;
             num_simulations=128,
-            num_posterior_draws=63,
+            num_samples=63,
             num_warmup=200,
             thin=2,
             execution=:batched,
@@ -293,7 +293,7 @@ end
             device = sbc(
                 sbc_conjugate_model;
                 num_simulations=128,
-                num_posterior_draws=63,
+                num_samples=63,
                 num_warmup=200,
                 thin=2,
                 execution=:batched,
@@ -313,7 +313,7 @@ end
             sbc_corr_model,
             (sbc_corr_zeros2, sbc_corr_ones2, 8);
             num_simulations=64,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=80,
             execution=:batched,
             rng=MersenneTwister(41),
@@ -328,7 +328,7 @@ end
         broken = sbc(
             sbc_conjugate_model;
             num_simulations=60,
-            num_posterior_draws=24,
+            num_samples=24,
             num_warmup=0,
             execution=:batched,
             adapt_step_size=false,
@@ -343,7 +343,7 @@ end
         @test_throws ArgumentError sbc(
             sbc_conjugate_model;
             num_simulations=8,
-            num_posterior_draws=8,
+            num_samples=8,
             num_warmup=8,
             execution=:batched,
             num_chains=4,
@@ -351,7 +351,7 @@ end
         @test_throws ArgumentError sbc(
             sbc_conjugate_model;
             num_simulations=8,
-            num_posterior_draws=8,
+            num_samples=8,
             num_warmup=8,
             execution=:batched,
             sampler=:chees,
@@ -359,7 +359,7 @@ end
         @test_throws ArgumentError sbc(
             sbc_conjugate_model;
             num_simulations=8,
-            num_posterior_draws=8,
+            num_samples=8,
             num_warmup=8,
             execution=:not_a_mode,
         )

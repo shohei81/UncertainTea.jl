@@ -464,7 +464,7 @@ end
     tree_proposal_logjoint, proposal_energy, proposal_energy_error,
     copy_left, copy_right, select_proposal, advanced, checkpoint,
     @Const(valid), @Const(proposed_energy), @Const(logjoint), @Const(current_energy),
-    @Const(sign), @Const(leaf_uniform), leaf_offset::Int, max_delta_energy,
+    @Const(sign), @Const(leaf_uniform), leaf_offset::Int, divergence_threshold,
 )
     b = @index(Global)
     T = eltype(log_weight)
@@ -499,7 +499,7 @@ end
                 @inbounds tree_right_logjoint[b] = lj
             end
             delta = @inbounds(proposed_energy[b]) - @inbounds(current_energy[b])
-            if !isfinite(delta) || delta > max_delta_energy
+            if !isfinite(delta) || delta > divergence_threshold
                 # Delta-energy divergence (still counts the step above).
                 @inbounds divergent[b] = 0x01
                 @inbounds active[b] = 0x00
@@ -1127,7 +1127,7 @@ end
 # Mirror `_advance_batched_nuts_subtree_cohort!`: host leaf-advance arithmetic +
 # device accept-copy / checkpoint / dyadic turning / frontier scatter. Returns
 # whether any chain is still expanding.
-function _device_advance_cohort_impl!(dws::DeviceNUTSWorkspace{T}, ws, max_delta_energy::Float64, rng::AbstractRNG) where {T}
+function _device_advance_cohort_impl!(dws::DeviceNUTSWorkspace{T}, ws, divergence_threshold::Float64, rng::AbstractRNG) where {T}
     be = dws.backend
     P = dws.num_params
     C = dws.num_chains
@@ -1163,7 +1163,7 @@ function _device_advance_cohort_impl!(dws::DeviceNUTSWorkspace{T}, ws, max_delta
         leaf = _advance_tree_leaf(
             ws.subtree_proposed_energy[c],
             ws.current_energy[c],
-            max_delta_energy,
+            divergence_threshold,
             ws.subtree_log_weight[c],
             rng,
         )
@@ -1332,7 +1332,7 @@ function _device_masked_nuts_doubling_round!(
     dws::DeviceNUTSWorkspace{T},
     ws,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     step_size,
     rng::AbstractRNG,
 ) where {T}
@@ -1357,7 +1357,7 @@ function _device_masked_nuts_doubling_round!(
     for _ = 1:(1<<round_depth)
         any_expanding || break
         _device_nuts_leaf!(dws, ws, step_size)
-        any_expanding = _device_advance_cohort_impl!(dws, ws, max_delta_energy, rng)
+        any_expanding = _device_advance_cohort_impl!(dws, ws, divergence_threshold, rng)
     end
 
     fill!(ws.subtree_active, false)
@@ -1443,7 +1443,7 @@ end
 # counter); the checkpoint/turning schedule is a pure function of it, so no download
 # is needed to drive it.
 function _device_advance_cohort_async!(
-    dws::DeviceNUTSWorkspace{T}, ws, max_delta_energy::Float64, leaf_index::Int,
+    dws::DeviceNUTSWorkspace{T}, ws, divergence_threshold::Float64, leaf_index::Int,
 ) where {T}
     be = dws.backend
     P = dws.num_params
@@ -1455,7 +1455,7 @@ function _device_advance_cohort_async!(
         dws.d_tree_proposal_logjoint, dws.d_proposal_energy, dws.d_proposal_energy_error,
         dws.d_copy_left, dws.d_copy_right, dws.d_select_proposal, dws.d_advanced, dws.d_checkpoint,
         dws.valid, dws.proposed_energy, dws.inner.totals_device, dws.d_current_energy,
-        dws.sign, dws.d_leaf_uniform, leaf_index * C, convert(T, max_delta_energy); ndrange=C,
+        dws.sign, dws.d_leaf_uniform, leaf_index * C, convert(T, divergence_threshold); ndrange=C,
     )
     # accept-copy: tree_current <- (q, p, grad) for advanced chains.
     _device_nuts_copy_columns!(be)(
@@ -1499,7 +1499,7 @@ function _device_masked_nuts_doubling_round_async!(
     dws::DeviceNUTSWorkspace{T},
     ws,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     step_size,
     rng::AbstractRNG,
 ) where {T}
@@ -1550,7 +1550,7 @@ function _device_masked_nuts_doubling_round_async!(
     # Enqueue every leaf of the round with NO host sync in between.
     for leaf_index = 0:(nleaves-1)
         _device_nuts_leaf_async!(dws, ws, step_size)
-        _device_advance_cohort_async!(dws, ws, max_delta_energy, leaf_index)
+        _device_advance_cohort_async!(dws, ws, divergence_threshold, leaf_index)
     end
 
     # ONE round-end sync + batched download of the subtree state the host merge reads.
@@ -1605,7 +1605,7 @@ function _device_batched_nuts_proposals_masked!(
     constraints,
     step_size,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 ) where {T}
     # init on host (one host gradient + RNG draws in the CPU masked path order).
@@ -1627,7 +1627,7 @@ function _device_batched_nuts_proposals_masked!(
     end
     _initialize_batched_nuts_continuations!(
         ws, model, position, current_logjoint, current_gradient,
-        init_mass, args, constraints, step_size, max_delta_energy, rng,
+        init_mass, args, constraints, step_size, divergence_threshold, rng,
     )
 
     # upload the continuation frontier + diagonal mass to the device.
@@ -1659,12 +1659,12 @@ function _device_batched_nuts_proposals_masked!(
     if dws.sync_per_leaf
         # Tier-1 order-preserving path (one host round-trip per leaf; keeps the
         # CPU()-Float64 bitwise oracle, `dnuts_device_vs_host_masked_exact`).
-        while _device_masked_nuts_doubling_round!(dws, ws, max_tree_depth, max_delta_energy, round_step, rng)
+        while _device_masked_nuts_doubling_round!(dws, ws, max_tree_depth, divergence_threshold, round_step, rng)
         end
     else
         # Tier-2 async path (pre-drawn round RNG + device-side accept/select; one
         # status batch per round). Statistically equivalent to the host masked path.
-        while _device_masked_nuts_doubling_round_async!(dws, ws, max_tree_depth, max_delta_energy, round_step, rng)
+        while _device_masked_nuts_doubling_round_async!(dws, ws, max_tree_depth, divergence_threshold, round_step, rng)
         end
     end
 

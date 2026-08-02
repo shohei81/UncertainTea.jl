@@ -292,8 +292,8 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         # very high precision -- a strong check that reverse actually engaged.
         # (Not bitwise: the ~1e-15 gradient difference accumulates over the Adam
         # steps, so compare with a tight tolerance rather than `==`.)
-        af = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:forward, rng=MersenneTwister(5))
-        ar = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:reverse, rng=MersenneTwister(5))
+        af = batched_advi(batched_big, (), cm; num_particles=16, num_iterations=150, adtype=:forward, rng=MersenneTwister(5))
+        ar = batched_advi(batched_big, (), cm; num_particles=16, num_iterations=150, adtype=:reverse, rng=MersenneTwister(5))
         @test af.location ≈ ar.location rtol = 1e-8
 
         sf = batched_svgd(batched_big, (), cm; num_particles=16, num_iterations=80, adtype=:forward, rng=MersenneTwister(6))

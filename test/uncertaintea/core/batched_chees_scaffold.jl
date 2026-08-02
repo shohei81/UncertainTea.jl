@@ -118,7 +118,7 @@
         )
         @test_throws ArgumentError batched_chees(
             chees_conjugate, (), chees_constraints;
-            num_chains=2, num_samples=10, init=:bogus,
+            num_chains=2, num_samples=10, init_strategy=:bogus,
         )
         # Device backend is increment 4 and not yet supported.
         @test_throws ArgumentError batched_chees(

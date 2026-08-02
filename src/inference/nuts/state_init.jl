@@ -82,7 +82,7 @@ function _initialize_nuts_first_step!(
     direction::Int,
     initial_hamiltonian::Float64,
     inverse_mass_matrix::Union{Vector{Float64},MassMetric},
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _initialize_nuts_continuation!(
@@ -112,7 +112,7 @@ function _initialize_nuts_first_step!(
     proposed_hamiltonian = _hamiltonian(proposed_state.logjoint, proposed_state.momentum, inverse_mass_matrix)
     delta_energy = proposed_hamiltonian - initial_hamiltonian
     continuation.integration_steps = 1
-    if !isfinite(delta_energy) || delta_energy > max_delta_energy
+    if !isfinite(delta_energy) || delta_energy > divergence_threshold
         continuation.divergent = true
         return (false, true)
     end
@@ -149,7 +149,7 @@ function _initialize_nuts_first_trajectory!(
     direction::Int,
     initial_hamiltonian::Float64,
     inverse_mass_matrix::Union{Vector{Float64},MassMetric},
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     return _initialize_nuts_first_step!(
@@ -160,7 +160,7 @@ function _initialize_nuts_first_trajectory!(
         direction,
         initial_hamiltonian,
         inverse_mass_matrix,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
 end
@@ -174,7 +174,7 @@ function _initialize_batched_nuts_first_step!(
     direction::Int,
     initial_hamiltonian::Float64,
     inverse_mass_matrix::AbstractVector{Float64},
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     continuation = workspace.column_continuation_states[chain_index]
@@ -218,7 +218,7 @@ function _initialize_batched_nuts_first_step!(
     delta_energy = workspace.continuation_proposed_energy[chain_index] - initial_hamiltonian
     workspace.continuation_delta_energy[chain_index] = delta_energy
     workspace.control.integration_steps[chain_index] = 1
-    if !isfinite(delta_energy) || delta_energy > max_delta_energy
+    if !isfinite(delta_energy) || delta_energy > divergence_threshold
         workspace.control.divergent_step[chain_index] = true
         return (false, true)
     end

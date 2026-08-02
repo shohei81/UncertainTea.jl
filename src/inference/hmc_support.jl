@@ -28,7 +28,7 @@ function _validate_nuts_arguments(
     step_size::Real,
     max_tree_depth::Int,
     target_accept::Real,
-    max_delta_energy::Real,
+    divergence_threshold::Real,
     mass_matrix_regularization::Real,
     mass_matrix_min_samples::Int,
 )
@@ -38,7 +38,7 @@ function _validate_nuts_arguments(
     step_size > 0 || throw(ArgumentError("NUTS requires step_size > 0"))
     max_tree_depth > 0 || throw(ArgumentError("NUTS requires max_tree_depth > 0"))
     0 < target_accept < 1 || throw(ArgumentError("NUTS requires 0 < target_accept < 1"))
-    max_delta_energy > 0 || throw(ArgumentError("NUTS requires max_delta_energy > 0"))
+    divergence_threshold > 0 || throw(ArgumentError("NUTS requires divergence_threshold > 0"))
     mass_matrix_regularization > 0 || throw(ArgumentError("NUTS requires mass_matrix_regularization > 0"))
     mass_matrix_min_samples > 0 || throw(ArgumentError("NUTS requires mass_matrix_min_samples > 0"))
     return nothing
@@ -88,7 +88,7 @@ function _validate_batched_nuts_arguments(
     step_size::Real,
     max_tree_depth::Int,
     target_accept::Real,
-    max_delta_energy::Real,
+    divergence_threshold::Real,
     mass_matrix_regularization::Real,
     mass_matrix_min_samples::Int,
     args,
@@ -102,7 +102,7 @@ function _validate_batched_nuts_arguments(
         step_size,
         max_tree_depth,
         target_accept,
-        max_delta_energy,
+        divergence_threshold,
         mass_matrix_regularization,
         mass_matrix_min_samples,
     )
@@ -190,7 +190,7 @@ function _initial_batched_hmc_positions(
     num_params::Int,
     constrained_num_params::Int,
     num_chains::Int;
-    init::Symbol=:prior,
+    init_strategy::Symbol=:prior,
 )
     batch_args = _validate_batched_args(model, args, num_chains)
     batch_constraints = _validate_batched_constraints(constraints, num_chains)
@@ -207,7 +207,7 @@ function _initial_batched_hmc_positions(
         batch_args,
         batch_constraints,
         initial_params,
-        init,
+        init_strategy,
         rng,
         num_params,
         constrained_num_params,
@@ -237,7 +237,7 @@ function _fill_batched_initial_positions!(
     batch_args,
     batch_constraints,
     initial_params,
-    init::Symbol,
+    init_strategy::Symbol,
     rng::AbstractRNG,
     num_params::Int,
     constrained_num_params::Int,
@@ -255,7 +255,7 @@ function _fill_batched_initial_positions!(
             _batched_args(batch_args, chain_index),
             _batched_constraints(batch_constraints, chain_index),
             chain_initial_params,
-            init,
+            init_strategy,
             num_params,
             chain_rng,
         )
@@ -263,10 +263,10 @@ function _fill_batched_initial_positions!(
     return positions
 end
 
-# One column's initial unconstrained position. `init=:uniform` draws each
+# One column's initial unconstrained position. `init_strategy=:uniform` draws each
 # unconstrained coordinate from Uniform(-2, 2) -- the Stan/NumPyro default
-# protocol -- but only when no explicit/Pathfinder init is supplied for the
-# chain; otherwise the requested init (prior draw, explicit params, or
+# protocol -- but only when no explicit/Pathfinder initialization is supplied for the
+# chain; otherwise the requested initialization (prior draw, explicit params, or
 # Pathfinder draw) is honored.
 function _draw_batched_initial_position_column(
     model::TeaModel,
@@ -274,11 +274,11 @@ function _draw_batched_initial_position_column(
     chain_args,
     chain_constraints,
     chain_initial_params,
-    init::Symbol,
+    init_strategy::Symbol,
     num_params::Int,
     chain_rng::AbstractRNG,
 )
-    if init === :uniform && isnothing(chain_initial_params)
+    if init_strategy === :uniform && isnothing(chain_initial_params)
         column = Vector{Float64}(undef, num_params)
         @inbounds for i = 1:num_params
             column[i] = 4.0 * rand(chain_rng) - 2.0
@@ -300,7 +300,7 @@ function _redraw_batched_initial_positions!(
     batch_args,
     batch_constraints,
     initial_params,
-    init::Symbol,
+    init_strategy::Symbol,
     rng::AbstractRNG,
     num_params::Int,
     constrained_num_params::Int,
@@ -315,7 +315,7 @@ function _redraw_batched_initial_positions!(
         batch_args,
         batch_constraints,
         initial_params,
-        init,
+        init_strategy,
         rng,
         num_params,
         constrained_num_params,
