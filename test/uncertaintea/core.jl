@@ -53,6 +53,7 @@ core_test_files = [
     ("elliptical_slice.jl", "inference"),
     ("prior_predictive_and_rank_rhat.jl", "inference"),
     ("transform_logit_saturation.jl", "dist"),
+    ("beta_logit_saturation.jl", "dist"),
     ("dist_integer_params.jl", "dist"),
     ("dist_count_logfactorial.jl", "dist"),
     ("dist_bernoulli.jl", "dist"),

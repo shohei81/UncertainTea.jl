@@ -23,7 +23,12 @@ function _accumulate_truncatednormal_gradient!(
         lower = lower_values[batch_index]
         upper = upper_values[batch_index]
         totals[batch_index] += _backend_truncatednormal_logpdf(mu, sigma, lower, upper, value)
-        (value < lower || value > upper) && continue
+        if value < lower || value > upper
+            # off-support latent (dynamic bounds): reject via the gradient too
+            # (issue #343)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
+            continue
+        end
         inv_sigma = 1 / sigma
         zx = (value - mu) * inv_sigma
         za = (lower - mu) * inv_sigma
@@ -130,7 +135,12 @@ function _accumulate_truncatedstudentt_gradient!(
         lower = lower_values[batch_index]
         upper = upper_values[batch_index]
         totals[batch_index] += _backend_truncatedstudentt_logpdf(nu, mu, sigma, lower, upper, value)
-        (value < lower || value > upper) && continue
+        if value < lower || value > upper
+            # off-support latent (dynamic bounds): reject via the gradient too
+            # (issue #343)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
+            continue
+        end
         inv_sigma = 1 / sigma
         zx = (value - mu) * inv_sigma
         za = (lower - mu) * inv_sigma

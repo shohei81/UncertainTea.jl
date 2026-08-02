@@ -1,5 +1,29 @@
 # Hand-derived analytic batched logjoint gradients: continuous scalar families (normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, beta, studentt).
 
+# Off-support value with a live derivative seed (issue #343): a latent flowing
+# through a saturating transform can land EXACTLY on the support boundary
+# (sigmoid(theta) rounds to 1.0 for theta >~ 36.74, exp(theta) underflows to
+# 0.0 below ~-745). The logpdf contribution is then -Inf, but the accumulate
+# loops used to skip the partials entirely, leaving only the finite transform
+# Jacobian term in the unconstrained gradient -- a silently wrong FINITE
+# gradient that leapfrog gradient guards never reject. Whenever the partials
+# are skipped for a value carrying derivative information, poison the affected
+# gradient rows with NaN so the -Inf logjoint and the gradient reject
+# together. Observed off-support values have an all-zero value-gradient seed
+# and keep the previous skip semantics (finite parameter partials dropped,
+# whole evaluation already scored -Inf).
+function _poison_offsupport_value_gradient!(
+    gradients::AbstractMatrix{T},
+    value_gradients::AbstractMatrix{T},
+    batch_index::Integer,
+) where {T<:AbstractFloat}
+    for parameter_index in axes(gradients, 1)
+        iszero(value_gradients[parameter_index, batch_index]) ||
+            (gradients[parameter_index, batch_index] = T(NaN))
+    end
+    return nothing
+end
+
 function _accumulate_normal_gradient!(
     totals::AbstractVector{T},
     gradients::AbstractMatrix{T},
@@ -42,6 +66,7 @@ function _accumulate_lognormal_gradient!(
         sigma = sigma_values[batch_index]
         totals[batch_index] += _backend_lognormal_logpdf(mu, sigma, value)
         if !(value > 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dmu, dsigma = _lognormal_logpdf_partials(mu, sigma, value)
@@ -68,6 +93,7 @@ function _accumulate_exponential_gradient!(
         rate = rate_values[batch_index]
         totals[batch_index] += _backend_exponential_logpdf(rate, value)
         if !(value >= 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, drate = _exponential_logpdf_partials(rate, value)
@@ -96,6 +122,7 @@ function _accumulate_gamma_gradient!(
         rate = rate_values[batch_index]
         totals[batch_index] += _backend_gamma_logpdf(shape, rate, value)
         if !(value > 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dshape, drate = _gamma_logpdf_partials(shape, rate, value)
@@ -125,6 +152,7 @@ function _accumulate_inversegamma_gradient!(
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_inversegamma_logpdf(shape, scale, value)
         if !(value > 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dshape, dscale = _inversegamma_logpdf_partials(shape, scale, value)
@@ -164,6 +192,10 @@ function _accumulate_weibull_gradient!(
                     gradients[parameter_index, batch_index] +=
                         dscale_boundary * scale_gradients[parameter_index, batch_index]
                 end
+            else
+                # non-finite boundary/off-support score: reject via the
+                # gradient too (issue #343)
+                _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             end
             continue
         end
@@ -194,6 +226,7 @@ function _accumulate_beta_gradient!(
         beta_parameter = beta_values[batch_index]
         totals[batch_index] += _backend_beta_logpdf(alpha, beta_parameter, value)
         if !(0 < value < 1)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dalpha, dbeta = _beta_logpdf_partials(alpha, beta_parameter, value)
@@ -666,6 +699,7 @@ function _accumulate_halfnormal_gradient!(
         sigma = sigma_values[batch_index]
         totals[batch_index] += _backend_halfnormal_logpdf(sigma, value)
         if value < 0
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dsigma = _halfnormal_logpdf_partials(sigma, value)
@@ -691,6 +725,7 @@ function _accumulate_halfcauchy_gradient!(
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_halfcauchy_logpdf(scale, value)
         if value < 0
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dscale = _halfcauchy_logpdf_partials(scale, value)
@@ -719,6 +754,7 @@ function _accumulate_uniform_gradient!(
         upper = upper_values[batch_index]
         totals[batch_index] += _backend_uniform_logpdf(lower, upper, value)
         if !(lower <= value <= upper)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         # d/dvalue is 0 on the open interval; the bound partials are the only
@@ -989,6 +1025,7 @@ function _accumulate_pareto_gradient!(
         alpha = alpha_values[batch_index]
         totals[batch_index] += _backend_pareto_logpdf(xm, alpha, value)
         if !(xm > 0 && alpha > 0 && value >= xm)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dxm, dalpha = _pareto_logpdf_partials(xm, alpha, value)
@@ -1018,6 +1055,7 @@ function _accumulate_frechet_gradient!(
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_frechet_logpdf(shape, scale, value)
         if !(shape > 0 && scale > 0 && value > 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dshape, dscale = _frechet_logpdf_partials(shape, scale, value)
@@ -1044,6 +1082,7 @@ function _accumulate_rayleigh_gradient!(
         scale = scale_values[batch_index]
         totals[batch_index] += _backend_rayleigh_logpdf(scale, value)
         if !(scale > 0 && value > 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dscale = _rayleigh_logpdf_partials(scale, value)
@@ -1072,6 +1111,7 @@ function _accumulate_inversegaussian_gradient!(
         lambda = lambda_values[batch_index]
         totals[batch_index] += _backend_inversegaussian_logpdf(mu, lambda, value)
         if !(mu > 0 && lambda > 0 && value > 0)
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
         dvalue, dmu, dlambda = _inversegaussian_logpdf_partials(mu, lambda, value)

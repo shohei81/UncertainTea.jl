@@ -28,6 +28,30 @@
 # `test/uncertaintea/core/scalar_kernel_partials.jl` pins every partials kernel
 # against ForwardDiff on the corresponding logpdf kernel.
 
+# --- off-support score (issue #343) -------------------------------------------
+#
+# A latent flowing through a saturating transform can land EXACTLY on the
+# support boundary in floating point: sigmoid(theta) rounds to 1.0 for
+# theta >~ 36.74 (Float64), exp(theta) underflows to 0.0 below ~-745. The logpdf
+# is then -Inf, but a plain `oftype(xx, -Inf)` return drops the ForwardDiff
+# partials: the density term contributes ZERO gradient while the transform's
+# (finite, exact since issue #105) log-abs-det term survives, so the
+# unconstrained gradient comes out finite and silently wrong -- exactly the
+# Jacobian derivative -- and gradient guards never fire. Off the support the
+# one-sided derivative toward the interior is unbounded, so return -Inf with
+# NaN in every partial channel that carries derivative information. Observed
+# off-support values (plain floats, or duals with all-zero partials) keep the
+# plain -Inf with clean zero partials, exactly as before.
+_offsupport_neginf(x::Real) = oftype(x, -Inf)
+
+function _offsupport_neginf(x::ForwardDiff.Dual{Tag,V,N}) where {Tag,V,N}
+    parts = ForwardDiff.partials(x)
+    poisoned = ForwardDiff.Partials{N,V}(
+        ntuple(i -> iszero(parts[i]) ? zero(V) : convert(V, NaN), Val(N)),
+    )
+    return ForwardDiff.Dual{Tag,V,N}(convert(V, -Inf), poisoned)
+end
+
 # --- logpdf kernels ----------------------------------------------------------
 
 function _backend_normal_logpdf(mu, sigma, x)
@@ -40,14 +64,14 @@ end
 function _backend_lognormal_logpdf(mu, sigma, x)
     xx, mu_, sigma_ = promote(x, mu, sigma)
     sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
+    xx > zero(xx) || return _offsupport_neginf(xx)
     return _backend_normal_logpdf(mu_, sigma_, log(xx)) - log(xx)
 end
 
 function _backend_exponential_logpdf(rate, x)
     xx, rate_ = promote(x, rate)
     rate_ > zero(rate_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return oftype(xx, -Inf)
+    xx >= zero(xx) || return _offsupport_neginf(xx)
     return log(rate_) - rate_ * xx
 end
 
@@ -55,7 +79,7 @@ function _backend_gamma_logpdf(shape, rate, x)
     xx, shape_, rate_ = promote(x, shape, rate)
     shape_ > zero(shape_) || return oftype(xx, NaN)
     rate_ > zero(rate_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
+    xx > zero(xx) || return _offsupport_neginf(xx)
     return shape_ * log(rate_) - loggamma(shape_) + (shape_ - one(shape_)) * log(xx) - rate_ * xx
 end
 
@@ -78,7 +102,7 @@ function _backend_inversegamma_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
     shape_ > zero(shape_) || return oftype(xx, NaN)
     scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
+    xx > zero(xx) || return _offsupport_neginf(xx)
     return shape_ * log(scale_) - loggamma(shape_) -
            (shape_ + one(shape_)) * log(xx) -
            scale_ / xx
@@ -88,14 +112,14 @@ function _backend_weibull_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
     shape_ > zero(shape_) || return oftype(xx, NaN)
     scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx < zero(xx) && return oftype(xx, -Inf)
+    xx < zero(xx) && return _offsupport_neginf(xx)
     if xx == zero(xx)
         if shape_ < one(shape_)
             return oftype(xx, Inf)
         elseif shape_ == one(shape_)
             return -log(scale_)
         end
-        return oftype(xx, -Inf)
+        return _offsupport_neginf(xx)
     end
     log_ratio = log(xx) - log(scale_)
     return log(shape_) + (shape_ - one(shape_)) * log(xx) -
@@ -106,7 +130,7 @@ function _backend_beta_logpdf(alpha, beta_parameter, x)
     xx, alpha_, beta_ = promote(x, alpha, beta_parameter)
     alpha_ > zero(alpha_) || return oftype(xx, NaN)
     beta_ > zero(beta_) || return oftype(xx, NaN)
-    zero(xx) < xx < one(xx) || return oftype(xx, -Inf)
+    zero(xx) < xx < one(xx) || return _offsupport_neginf(xx)
     return loggamma(alpha_ + beta_) - loggamma(alpha_) - loggamma(beta_) +
            (alpha_ - one(alpha_)) * log(xx) +
            (beta_ - one(beta_)) * log1p(-xx)
@@ -122,7 +146,7 @@ end
 function _backend_halfnormal_logpdf(sigma, x)
     xx, sigma_ = promote(x, sigma)
     sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return oftype(xx, -Inf)
+    xx >= zero(xx) || return _offsupport_neginf(xx)
     z = xx / sigma_
     return log(oftype(xx, 2)) - log(sigma_) - log(2 * oftype(xx, pi)) / 2 - z * z / 2
 end
@@ -130,7 +154,7 @@ end
 function _backend_halfcauchy_logpdf(scale, x)
     xx, scale_ = promote(x, scale)
     scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return oftype(xx, -Inf)
+    xx >= zero(xx) || return _offsupport_neginf(xx)
     z = xx / scale_
     return log(oftype(xx, 2)) - log(oftype(xx, pi)) - log(scale_) - log1p(z * z)
 end
@@ -138,7 +162,7 @@ end
 function _backend_uniform_logpdf(lower, upper, x)
     xx, lower_, upper_ = promote(x, lower, upper)
     upper_ > lower_ || return oftype(xx, NaN)
-    lower_ <= xx <= upper_ || return oftype(xx, -Inf)
+    lower_ <= xx <= upper_ || return _offsupport_neginf(xx)
     return -log(upper_ - lower_)
 end
 
@@ -160,14 +184,14 @@ end
 function _backend_pareto_logpdf(xm, alpha, x)
     xx, xm_, alpha_ = promote(x, xm, alpha)
     (xm_ > zero(xm_) && alpha_ > zero(alpha_)) || return oftype(xx, NaN)
-    xx >= xm_ || return oftype(xx, -Inf)
+    xx >= xm_ || return _offsupport_neginf(xx)
     return log(alpha_) + alpha_ * log(xm_) - (alpha_ + one(alpha_)) * log(xx)
 end
 
 function _backend_frechet_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
     (shape_ > zero(shape_) && scale_ > zero(scale_)) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
+    xx > zero(xx) || return _offsupport_neginf(xx)
     logz = log(xx) - log(scale_)
     return log(shape_) - log(scale_) - (one(shape_) + shape_) * logz - exp(-shape_ * logz)
 end
@@ -175,14 +199,14 @@ end
 function _backend_rayleigh_logpdf(scale, x)
     xx, scale_ = promote(x, scale)
     scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
+    xx > zero(xx) || return _offsupport_neginf(xx)
     return log(xx) - 2 * log(scale_) - xx * xx / (2 * scale_ * scale_)
 end
 
 function _backend_inversegaussian_logpdf(mu, lambda, x)
     xx, mu_, lambda_ = promote(x, mu, lambda)
     (mu_ > zero(mu_) && lambda_ > zero(lambda_)) || return oftype(xx, NaN)
-    xx > zero(xx) || return oftype(xx, -Inf)
+    xx > zero(xx) || return _offsupport_neginf(xx)
     d = xx - mu_
     return log(lambda_) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
            lambda_ * d * d / (2 * mu_ * mu_ * xx)
