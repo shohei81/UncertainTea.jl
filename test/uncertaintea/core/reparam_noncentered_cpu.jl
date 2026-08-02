@@ -549,7 +549,7 @@ end
         result = sbc(
             ncc_sbc_model;
             num_simulations=40,
-            num_posterior_draws=16,
+            num_samples=16,
             num_warmup=60,
             rng=MersenneTwister(9),
         )

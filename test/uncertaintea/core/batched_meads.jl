@@ -65,7 +65,7 @@
         @test_throws ArgumentError batched_meads(
             meads_conjugate, (), conj_constraints; num_chains=8, num_samples=0)
         @test_throws ArgumentError batched_meads(
-            meads_conjugate, (), conj_constraints; num_chains=8, num_samples=10, init=:bogus)
+            meads_conjugate, (), conj_constraints; num_chains=8, num_samples=10, init_strategy=:bogus)
     end
 
     @testset "conjugate recovery + continuous self-tuning" begin
@@ -146,7 +146,7 @@
         result = sbc(
             meads_sbc_model;
             num_simulations=150,
-            num_posterior_draws=63,
+            num_samples=63,
             num_warmup=200,
             thin=2,
             sampler=:meads,

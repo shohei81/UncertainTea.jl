@@ -185,7 +185,7 @@
         result = sbc(
             chees_sbc_model;
             num_simulations=200,
-            num_posterior_draws=63,
+            num_samples=63,
             num_warmup=200,
             thin=2,
             sampler=:chees,

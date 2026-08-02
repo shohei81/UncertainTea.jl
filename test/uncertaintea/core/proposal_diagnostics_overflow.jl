@@ -60,7 +60,7 @@
         (),
         overflow_constraints;
         num_particles=32,
-        num_steps=3,
+        num_iterations=3,
         initial_params=overflow_proposal_loc,
         initial_log_scale=overflow_proposal_log_scale,
         rng=MersenneTwister(223),

@@ -329,7 +329,7 @@ function batched_chees(
     trajectory_adam_beta2::Real=0.95,
     trajectory_adam_epsilon::Real=1e-8,
     initial_params=nothing,
-    init::Symbol=:prior,
+    init_strategy::Symbol=:prior,
     init_max_retries::Int=100,
     target_accept::Real=0.651,
     adapt_step_size::Bool=true,
@@ -345,8 +345,8 @@ function batched_chees(
     rng::AbstractRNG=Random.default_rng(),
     _trajectory_trace::Union{Nothing,AbstractVector{Float64}}=nothing,
 )
-    init in (:prior, :uniform) ||
-        throw(ArgumentError("batched_chees init must be :prior or :uniform, got $(repr(init))"))
+    init_strategy in (:prior, :uniform) ||
+        throw(ArgumentError("batched_chees init_strategy must be :prior or :uniform, got $(repr(init_strategy))"))
     init_max_retries >= 0 ||
         throw(ArgumentError("batched_chees init_max_retries must be >= 0, got $init_max_retries"))
     0.0 <= jitter_amount <= 1.0 ||
@@ -395,7 +395,7 @@ function batched_chees(
             trajectory_adam_beta2=trajectory_adam_beta2,
             trajectory_adam_epsilon=trajectory_adam_epsilon,
             initial_params=initial_params,
-            init=init,
+            init_strategy=init_strategy,
             init_max_retries=init_max_retries,
             target_accept=target_accept,
             adapt_step_size=adapt_step_size,
@@ -443,7 +443,7 @@ function batched_chees(
         num_params,
         constrained_num_params,
         num_chains;
-        init=init,
+        init_strategy=init_strategy,
     )
     inverse_mass_matrix = ones(num_params)
     workspace = BatchedHMCWorkspace(model, position, batch_args, batch_constraints, inverse_mass_matrix)
@@ -467,7 +467,7 @@ function batched_chees(
             retried = _init_is_redrawable(initial_params) ? " after $init_max_retries re-draw(s)" : ""
             throw(
                 ArgumentError(
-                    "initial batched ChEES parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init=:uniform or supply finite initial_params",
+                    "initial batched ChEES parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init_strategy=:uniform or supply finite initial_params",
                 ),
             )
         end
@@ -479,7 +479,7 @@ function batched_chees(
             batch_args,
             batch_constraints,
             initial_params,
-            init,
+            init_strategy,
             rng,
             num_params,
             constrained_num_params,

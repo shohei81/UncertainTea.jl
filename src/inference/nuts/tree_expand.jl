@@ -22,12 +22,12 @@ end
 function _advance_tree_leaf(
     proposed_energy::Float64,
     reference_energy::Float64,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     log_weight::Float64,
     rng::AbstractRNG,
 )
     delta_energy = proposed_energy - reference_energy
-    if !isfinite(delta_energy) || delta_energy > max_delta_energy
+    if !isfinite(delta_energy) || delta_energy > divergence_threshold
         return _NUTSLeafAdvance(true, delta_energy, 0.0, -Inf, log_weight, false)
     end
     accept_prob = min(1.0, exp(min(0.0, -delta_energy)))

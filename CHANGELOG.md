@@ -4,6 +4,30 @@
 
 ### Breaking
 
+- **Standardized sampler keyword arguments** (#338): the same concept now has
+  one name everywhere. No deprecation shims — old spellings raise a keyword
+  argument error.
+
+  | Function | Old kwarg | New kwarg |
+  | --- | --- | --- |
+  | `pathfinder` | `init` | `initial_params` |
+  | `map_estimate` (and via `laplace_approximation` forwarding) | `init` | `initial_params` |
+  | `elliptical_slice` | `initial` | `initial_params` |
+  | `batched_nuts`, `batched_chees`, `batched_meads`, `batched_svgd` | `init` (`:prior`/`:uniform`) | `init_strategy` |
+  | `sbc` (kwarg and `SBCResult` field) | `num_posterior_draws` | `num_samples` |
+  | `batched_advi` | `num_steps` | `num_iterations` |
+  | `nuts`, `nuts_chains`, `batched_nuts`, `gibbs` | `max_delta_energy` | `divergence_threshold` |
+
+  `initial_params` is now the initial point everywhere, `init_strategy` the
+  initialization-strategy Symbol on the batched samplers, `num_iterations` the
+  optimizer iteration count (matching `batched_svgd`), and
+  `divergence_threshold` the divergence cutoff (matching `hmc`/`batched_hmc`/
+  `batched_chees`/`batched_meads`). `num_draws` (predict/prior_predictive/
+  pathfinder) and `num_particles` (ADVI MC samples per step; SVGD particles)
+  are unchanged. The single-chain `nuts`/`hmc`, `pathfinder`, and
+  `map_estimate` docstrings now state that gradients always use ForwardDiff
+  (`adtype` selection exists only on the batched samplers).
+
 - **Namespaced public API** (#329): the flat export surface is reorganized
   into a minimal modeling-language top level plus three facade submodules.
   `using UncertainTea` now brings in only the `@tea` DSL, the trace/choicemap

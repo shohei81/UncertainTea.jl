@@ -430,7 +430,7 @@ end
         gpu_conjugate_gauss,
         (),
         constraints;
-        num_steps=300,
+        num_iterations=300,
         backend=backend,
         precision=Float32,
         rng=MersenneTwister(46),
