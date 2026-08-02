@@ -133,13 +133,15 @@
           export_chains.chains[1].unconstrained_samples[1, 7]
 
     export_dict = to_arviz_dict(export_chains)
-    @test Set(keys(export_dict)) == Set(["posterior", "sample_stats"])
+    @test Set(keys(export_dict)) == Set(["posterior", "sample_stats", "attrs"])
     export_posterior = export_dict["posterior"]
     @test Set(keys(export_posterior)) == Set(export_names)
     @test size(export_posterior[export_names[1]]) == (30, 2)
     export_stats = export_dict["sample_stats"]
-    @test Set(keys(export_stats)) ==
-          Set(["diverging", "energy", "tree_depth", "acceptance_rate", "lp"])
+    @test Set(keys(export_stats)) == Set([
+        "diverging", "energy", "tree_depth", "acceptance_rate", "lp",
+        "step_size", "n_steps",
+    ])
     @test size(export_stats["diverging"]) == (30, 2)
     @test export_stats["diverging"] isa Array{Bool,2}
     @test export_stats["lp"][3, 1] == export_chains.chains[1].logjoint_values[3]

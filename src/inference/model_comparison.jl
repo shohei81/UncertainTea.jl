@@ -232,6 +232,13 @@ log-likelihood matrix from an inference `result` first (anything implementing
 weighted particle results, ...; keyword arguments are forwarded to
 `constrained_draws`); the matrix form takes an `S x N` (draws x observations)
 log-likelihood matrix directly.
+
+`constraints` is required — it defines which choices are the observations that
+LOO leaves out. The same `(model, args, constraints, result)` argument list
+also drives [`predict`](@ref) and the log-likelihood-emitting form of
+[`to_arviz_dict`](@ref), so one triple covers the whole posterior workflow. A
+`result` that is not an inference result (or a log-likelihood matrix) fails
+with a `MethodError`.
 """
 loo(ll::AbstractMatrix) = psis_loo(ll)
 

@@ -294,6 +294,7 @@ parameter_names(chain::GibbsChain; kwargs...) = parameter_names(_gibbs_continuou
 
 """
     predict(model, args, result; num_draws=nothing, rng) -> PredictiveDraws
+    predict(model, args, constraints, result; num_draws=nothing, rng) -> PredictiveDraws
     predict(model, args=(); num_draws=1000, rng) -> PredictiveDraws
 
 Posterior predictive draws: for each posterior draw in `result` (any
@@ -307,6 +308,14 @@ to their importance weights first and `num_draws`/`rng` follow its semantics
 (`nothing` keeps every available draw). The form without a result runs the
 prior instead (unconstrained `generate` per draw, keeping all addresses).
 Returns `PredictiveDraws`; see also `prior_predictive`.
+
+The four-argument form accepts the same conditioning triple as [`loo`](@ref) /
+[`waic`](@ref) / [`pointwise_loglikelihood`](@ref), so the one argument list
+`(model, args, constraints, result)` drives the whole posterior workflow.
+`predict` does not need the observation values — they are exactly what it
+re-samples, and the observed/latent split is already fixed by how `result` was
+parameterized — so `constraints` only has to be the same choicemap the model
+was conditioned on; its values are unused.
 """
 function predict(
     model::TeaModel,
@@ -319,6 +328,22 @@ function predict(
     size(draws, 2) > 0 || throw(ArgumentError("predict requires at least one posterior draw"))
     columns = (view(draws, :, index) for index in axes(draws, 2))
     return _predictive_from_param_columns(model, args, columns, rng)
+end
+
+# Arity alignment with `loo`/`waic`/`pointwise_loglikelihood` (issue #339): the
+# `(model, args, constraints, result)` triple works verbatim. `constraints` is
+# accepted for signature symmetry only — predict re-samples the observation
+# addresses, whose split is fixed by `result`'s parameterization — so it
+# forwards to the three-argument form (which keeps per-result refinements such
+# as the GibbsChain discrete-site pinning via dispatch).
+function predict(
+    model::TeaModel,
+    args::Tuple,
+    constraints::ChoiceMap,
+    result::PosteriorDrawsResult;
+    kwargs...,
+)
+    return predict(model, args, result; kwargs...)
 end
 
 # GibbsChain refinement: pin each predictive draw's DISCRETE-site values to the
