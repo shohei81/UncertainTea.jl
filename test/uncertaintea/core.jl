@@ -104,6 +104,7 @@ core_test_files = [
     ("waic_psis_loo.jl", "inference"),
     ("pointwise_marginal_enum.jl", "inference"),
     ("map_laplace_approximation.jl", "inference"),
+    ("mcmcchains_export.jl", "inference"),
     ("advi_structured_guides.jl", "inference"),
     ("advi_flow_iwae.jl", "inference"),
     ("pathfinder_init.jl", "inference"),

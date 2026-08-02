@@ -121,8 +121,23 @@ end
 """
     to_mcmcchains(chains::HMCChains; space=:constrained)
 
-Convert `chains` into an `MCMCChains.Chains` object. Requires the optional
-`MCMCChains` dependency to be loaded (which activates the package extension).
+Convert `chains` into an `MCMCChains.Chains` object with the standard
+`iterations × parameters × chains` layout. Requires the optional `MCMCChains`
+dependency to be loaded (which activates the package extension).
+
+The `:parameters` section holds the posterior draws in the requested `space`
+(named as in [`parameter_names`](@ref)); the `:internals` section holds the
+per-draw sampler statistics `:lp`, `:diverging`, `:energy`, `:tree_depth`, and
+`:acceptance_rate` (the same quantities as the `"sample_stats"` group of
+[`to_arviz_dict`](@ref)).
+
+!!! note "Name collisions with MCMCChains"
+    `MCMCChains` also exports `summarize`, `ess`, and `rhat`, so after
+    `using UncertainTea, MCMCChains` the unqualified names are ambiguous and
+    raise an error. Call the UncertainTea versions qualified when both
+    packages are loaded, e.g. `UncertainTea.summarize(chains)`,
+    `UncertainTea.ess(chains)`, `UncertainTea.rhat(chains)` — or use the
+    MCMCChains versions on the converted `Chains` object.
 """
 function to_mcmcchains end
 
