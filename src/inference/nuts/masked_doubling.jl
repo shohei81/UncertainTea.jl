@@ -45,7 +45,7 @@ function _batched_nuts_proposals_masked!(
     constraints,
     step_size,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _initialize_batched_nuts_continuations!(
@@ -58,7 +58,7 @@ function _batched_nuts_proposals_masked!(
         args,
         constraints,
         step_size,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     while _masked_nuts_doubling_round!(
@@ -69,7 +69,7 @@ function _batched_nuts_proposals_masked!(
         constraints,
         step_size,
         max_tree_depth,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     end
@@ -85,7 +85,7 @@ function _masked_nuts_doubling_round!(
     constraints,
     step_size,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _reset_batched_nuts_subtree_scratch!(workspace)
@@ -121,7 +121,7 @@ function _masked_nuts_doubling_round!(
             workspace,
             expand_access,
             inverse_mass_matrix,
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
     end

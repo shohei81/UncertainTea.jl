@@ -240,7 +240,7 @@ single-chain HMC, but it now supports the same basic warmup structure:
 `batched_nuts` initialization is robust to non-finite starting points (issue
 #162):
 
-- `init=:prior` (default) draws each chain's start from the prior; `init=:uniform`
+- `init_strategy=:prior` (default) draws each chain's start from the prior; `init_strategy=:uniform`
   uses the Stan/NumPyro `Uniform(-2, 2)` protocol on the unconstrained scale
   (ship alongside the per-chain step-size adaptation above, which is the default)
 - a chain whose initial unconstrained logjoint or gradient is non-finite is

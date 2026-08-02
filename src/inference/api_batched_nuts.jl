@@ -7,10 +7,10 @@ layout that lowers to the device backend. Returns an [`HMCChains`](@ref).
 Key keyword arguments:
 
 - `num_chains`, `num_samples` (required), `num_warmup`.
-- `step_size`, `max_tree_depth`, `max_delta_energy`.
+- `step_size`, `max_tree_depth`, `divergence_threshold`.
 - `target_accept`, `adapt_step_size`, `adapt_mass_matrix`,
   `per_chain_adaptation` (per-chain step-size adaptation is the default).
-- `init` (`:prior` or `:uniform`), `init_max_retries`, `initial_params`.
+- `init_strategy` (`:prior` or `:uniform`), `init_max_retries`, `initial_params`.
 - `tree_strategy`: `:hybrid` (default), `:masked`, or `:persistent` (a
   device-only, one-launch-per-iteration tree kernel that requires `backend`).
 - `backend`, `precision`, `persistent_gradient`: pass a
@@ -29,14 +29,14 @@ function batched_nuts(
     step_size::Real=0.1,
     max_tree_depth::Int=10,
     initial_params=nothing,
-    init::Symbol=:prior,
+    init_strategy::Symbol=:prior,
     init_max_retries::Int=100,
     target_accept::Real=0.8,
     adapt_step_size::Bool=true,
     adapt_mass_matrix::Bool=true,
     per_chain_adaptation::Union{Nothing,Bool}=nothing,
     find_reasonable_step_size::Bool=false,
-    max_delta_energy::Real=1000.0,
+    divergence_threshold::Real=1000.0,
     mass_matrix_regularization::Real=1e-3,
     mass_matrix_min_samples::Int=10,
     callback=nothing,
@@ -65,8 +65,8 @@ function batched_nuts(
     # is built inside a device kernel, so it has no host fallback and REQUIRES a backend.
     !(tree_strategy === :persistent && backend === nothing) ||
         throw(ArgumentError("batched_nuts tree_strategy=:persistent requires a `backend` (it is a device-only path)"))
-    init in (:prior, :uniform) ||
-        throw(ArgumentError("batched_nuts init must be :prior or :uniform, got $(repr(init))"))
+    init_strategy in (:prior, :uniform) ||
+        throw(ArgumentError("batched_nuts init_strategy must be :prior or :uniform, got $(repr(init_strategy))"))
     init_max_retries >= 0 ||
         throw(ArgumentError("batched_nuts init_max_retries must be >= 0, got $init_max_retries"))
 
@@ -124,7 +124,7 @@ function batched_nuts(
         step_size,
         max_tree_depth,
         target_accept,
-        max_delta_energy,
+        divergence_threshold,
         mass_matrix_regularization,
         mass_matrix_min_samples,
         args,
@@ -155,7 +155,7 @@ function batched_nuts(
         num_params,
         constrained_num_params,
         num_chains;
-        init=init,
+        init_strategy=init_strategy,
     )
     workspace = BatchedNUTSWorkspace(model, position, batch_args, batch_constraints, max_tree_depth; adtype=adtype)
     current_logjoint = Vector{Float64}(undef, num_chains)
@@ -181,7 +181,7 @@ function batched_nuts(
             retried = _init_is_redrawable(initial_params) ? " after $init_max_retries re-draw(s)" : ""
             throw(
                 ArgumentError(
-                    "initial batched NUTS parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init=:uniform or supply finite initial_params, or check the constraint values for NaN/Inf",
+                    "initial batched NUTS parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init_strategy=:uniform or supply finite initial_params, or check the constraint values for NaN/Inf",
                 ),
             )
         end
@@ -193,7 +193,7 @@ function batched_nuts(
             batch_args,
             batch_constraints,
             initial_params,
-            init,
+            init_strategy,
             rng,
             num_params,
             constrained_num_params,
@@ -214,7 +214,7 @@ function batched_nuts(
     total_iterations = num_warmup + num_samples
     nuts_step_size = Float64(step_size)
     nuts_target_accept = Float64(target_accept)
-    nuts_max_delta_energy = Float64(max_delta_energy)
+    nuts_divergence_threshold = Float64(divergence_threshold)
 
     # Seed the warmup INITIAL diagonal inverse mass from the Pathfinder covariance
     # diagonal when a PathfinderResult is supplied (issue #162); otherwise the seed
@@ -255,7 +255,7 @@ function batched_nuts(
             total_iterations,
             nuts_step_size,
             nuts_target_accept,
-            nuts_max_delta_energy,
+            nuts_divergence_threshold,
             max_tree_depth,
             adapt_step_size,
             adapt_mass_matrix,
@@ -295,7 +295,7 @@ function batched_nuts(
             total_iterations,
             nuts_step_size,
             nuts_target_accept,
-            nuts_max_delta_energy,
+            nuts_divergence_threshold,
             max_tree_depth,
             adapt_step_size,
             adapt_mass_matrix,
@@ -324,7 +324,7 @@ function batched_nuts(
             batch_args,
             batch_constraints,
             nuts_step_size,
-            nuts_max_delta_energy,
+            nuts_divergence_threshold,
             rng,
         )
     end
@@ -347,7 +347,7 @@ function batched_nuts(
         current_gradient,
         batch_args,
         batch_constraints,
-        nuts_max_delta_energy,
+        nuts_divergence_threshold,
         rng,
     )
 
@@ -369,7 +369,7 @@ function batched_nuts(
                 batch_constraints,
                 nuts_step_size,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 iteration,
                 rng,
             )
@@ -385,7 +385,7 @@ function batched_nuts(
                 batch_constraints,
                 nuts_step_size,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 rng,
             )
         else
@@ -400,7 +400,7 @@ function batched_nuts(
                 batch_constraints,
                 nuts_step_size,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 rng,
             )
         end
@@ -543,7 +543,7 @@ function _batched_nuts_host_pooled!(
     total_iterations::Int,
     nuts_step_size::Float64,
     nuts_target_accept::Float64,
-    nuts_max_delta_energy::Float64,
+    nuts_divergence_threshold::Float64,
     max_tree_depth::Int,
     adapt_step_size::Bool,
     adapt_mass_matrix::Bool,
@@ -637,7 +637,7 @@ function _batched_nuts_host_pooled!(
                 batch_constraints,
                 driver.step_sizes,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 rng,
             )
         else
@@ -652,7 +652,7 @@ function _batched_nuts_host_pooled!(
                 batch_constraints,
                 driver.step_sizes,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 rng,
             )
         end
@@ -786,7 +786,7 @@ function _batched_nuts_device_per_chain!(
     total_iterations::Int,
     nuts_step_size::Float64,
     nuts_target_accept::Float64,
-    nuts_max_delta_energy::Float64,
+    nuts_divergence_threshold::Float64,
     max_tree_depth::Int,
     adapt_step_size::Bool,
     adapt_mass_matrix::Bool,
@@ -871,7 +871,7 @@ function _batched_nuts_device_per_chain!(
             batch_constraints,
             driver.step_sizes,
             max_tree_depth,
-            nuts_max_delta_energy,
+            nuts_divergence_threshold,
             iteration,
             rng,
         )

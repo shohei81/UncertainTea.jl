@@ -57,7 +57,7 @@ ess_mean(x) = sum(x) / length(x)
         L = Matrix{Float64}(I, 3, 3)
         @test_throws ArgumentError elliptical_slice(f -> 0.0, L; num_samples=0)
         @test_throws ArgumentError elliptical_slice(f -> 0.0, randn(3, 2); num_samples=5)
-        @test_throws ArgumentError elliptical_slice(f -> 0.0, L; num_samples=5, initial=[1.0, 2.0])
+        @test_throws ArgumentError elliptical_slice(f -> 0.0, L; num_samples=5, initial_params=[1.0, 2.0])
         @test_throws ArgumentError elliptical_slice(f -> -Inf, L; num_samples=5)
     end
 end

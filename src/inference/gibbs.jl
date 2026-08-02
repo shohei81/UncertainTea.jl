@@ -391,7 +391,7 @@ function gibbs(
     adapt_step_size::Bool=true,
     adapt_mass_matrix::Bool=true,
     find_reasonable_step_size::Bool=false,
-    max_delta_energy::Real=1000.0,
+    divergence_threshold::Real=1000.0,
     mass_matrix_regularization::Real=1e-3,
     mass_matrix_min_samples::Int=10,
     metric::Symbol=:diag,
@@ -419,7 +419,7 @@ function gibbs(
         step_size,
         max_tree_depth,
         target_accept,
-        max_delta_energy,
+        divergence_threshold,
         mass_matrix_regularization,
         mass_matrix_min_samples,
     )
@@ -516,7 +516,7 @@ function gibbs(
 
     nuts_step_size = Float64(step_size)
     nuts_target_accept = Float64(target_accept)
-    nuts_max_delta_energy = Float64(max_delta_energy)
+    nuts_divergence_threshold = Float64(divergence_threshold)
     if has_continuous
         # sampler-owned evaluation: Stan-style reject semantics (issue #157)
         gradient_cache = _logjoint_gradient_cache(model, position, args, merged; reject_invalid_parameters=true)
@@ -619,7 +619,7 @@ function gibbs(
                 inverse_mass_matrix,
                 nuts_step_size,
                 max_tree_depth,
-                nuts_max_delta_energy,
+                nuts_divergence_threshold,
                 rng,
             )
             if moved_step

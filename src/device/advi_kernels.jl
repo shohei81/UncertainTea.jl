@@ -47,7 +47,7 @@ function _run_device_batched_advi(
     model::TeaModel,
     args::Tuple,
     constraints::ChoiceMap;
-    num_steps::Int,
+    num_iterations::Int,
     num_particles::Int,
     learning_rate::Real,
     initial_params,
@@ -68,7 +68,7 @@ function _run_device_batched_advi(
     layout = _batched_signature_layout(model, constraints)
     parameter_total = parametercount(layout)
     parameter_total > 0 || throw(ArgumentError("batched_advi requires at least one parameterized latent choice"))
-    num_steps > 0 || throw(ArgumentError("batched_advi requires num_steps > 0"))
+    num_iterations > 0 || throw(ArgumentError("batched_advi requires num_iterations > 0"))
     num_particles > 0 || throw(ArgumentError("batched_advi requires num_particles > 0"))
     learning_rate > 0 || throw(ArgumentError("batched_advi requires learning_rate > 0"))
     0 <= beta1 < 1 || throw(ArgumentError("batched_advi requires 0 <= beta1 < 1"))
@@ -106,8 +106,8 @@ function _run_device_batched_advi(
     location_m2 = zeros(Float64, parameter_total)
     log_scale_m1 = zeros(Float64, parameter_total)
     log_scale_m2 = zeros(Float64, parameter_total)
-    elbo_history = Vector{Float64}(undef, num_steps)
-    gradient_norm_history = Vector{Float64}(undef, num_steps)
+    elbo_history = Vector{Float64}(undef, num_iterations)
+    gradient_norm_history = Vector{Float64}(undef, num_iterations)
     best_location = copy(location)
     best_log_scale = copy(log_scale)
     best_elbo = -Inf
@@ -118,7 +118,7 @@ function _run_device_batched_advi(
     adam_epsilon_f64 = Float64(adam_epsilon)
     gradient_clip_f64 = Float64(gradient_clip)
 
-    for iteration = 1:num_steps
+    for iteration = 1:num_iterations
         _draw_gaussian_particles!(particles, noise, location, log_scale, rng)
         particles_upload .= particles
         noise_upload .= noise
@@ -189,7 +189,7 @@ function _run_device_batched_advi(
             iteration, learning_rate_f64, beta1_f64, beta2_f64, adam_epsilon_f64,
         )
         isnothing(callback) || _invoke_progress_callback(
-            callback, callback_every, :step, iteration, num_steps, NaN, 0)
+            callback, callback_every, :step, iteration, num_iterations, NaN, 0)
     end
 
     return ADVIResult(

@@ -159,7 +159,7 @@ Key keyword arguments:
 - `num_folds` (default 4): the number of complementary folds; `num_chains` must be
   at least `2 * num_folds` (each fold needs >= 2 members for the ensemble
   statistics).
-- `init`, `initial_params`, `init_max_retries`: initialization, as `batched_nuts`.
+- `init_strategy`, `initial_params`, `init_max_retries`: initialization, as `batched_nuts`.
 - `divergence_threshold`.
 
 This is the CPU (host batched) reference; the fold reductions run on the host. See
@@ -176,7 +176,7 @@ function batched_meads(
     num_warmup::Int=0,
     num_folds::Int=4,
     initial_params=nothing,
-    init::Symbol=:prior,
+    init_strategy::Symbol=:prior,
     init_max_retries::Int=100,
     divergence_threshold::Real=1000.0,
     callback=nothing,
@@ -186,8 +186,8 @@ function batched_meads(
     rng::AbstractRNG=Random.default_rng(),
     _adapt_trace::Union{Nothing,AbstractVector}=nothing,
 )
-    init in (:prior, :uniform) ||
-        throw(ArgumentError("batched_meads init must be :prior or :uniform, got $(repr(init))"))
+    init_strategy in (:prior, :uniform) ||
+        throw(ArgumentError("batched_meads init_strategy must be :prior or :uniform, got $(repr(init_strategy))"))
     init_max_retries >= 0 ||
         throw(ArgumentError("batched_meads init_max_retries must be >= 0, got $init_max_retries"))
     num_folds >= 2 ||
@@ -226,7 +226,7 @@ function batched_meads(
         num_params,
         constrained_num_params,
         num_chains;
-        init=init,
+        init_strategy=init_strategy,
     )
     inverse_mass_matrix = ones(num_params)
     workspace = BatchedHMCWorkspace(model, position, batch_args, batch_constraints, inverse_mass_matrix)
@@ -249,7 +249,7 @@ function batched_meads(
             retried = _init_is_redrawable(initial_params) ? " after $init_max_retries re-draw(s)" : ""
             throw(
                 ArgumentError(
-                    "initial batched MEADS parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init=:uniform or supply finite initial_params, or check the constraint values for NaN/Inf",
+                    "initial batched MEADS parameters produced a non-finite unconstrained logjoint or gradient in $(length(bad_columns)) of $num_chains chain(s)$retried; try init_strategy=:uniform or supply finite initial_params, or check the constraint values for NaN/Inf",
                 ),
             )
         end
@@ -261,7 +261,7 @@ function batched_meads(
             batch_args,
             batch_constraints,
             initial_params,
-            init,
+            init_strategy,
             rng,
             num_params,
             constrained_num_params,

@@ -58,19 +58,19 @@ end
         small_cm = choicemap((:y, 0.5))
 
         for adtype in (:auto, :forward, :reverse)
-            r = batched_advi(adtype_small, (), small_cm; num_particles=8, num_steps=20, adtype=adtype, rng=MersenneTwister(1))
+            r = batched_advi(adtype_small, (), small_cm; num_particles=8, num_iterations=20, adtype=adtype, rng=MersenneTwister(1))
             @test all(isfinite, r.location)
             s = batched_svgd(adtype_small, (), small_cm; num_particles=8, num_iterations=15, adtype=adtype, rng=MersenneTwister(2))
             @test all(isfinite, s.constrained_particles)
         end
 
-        @test_throws ArgumentError batched_advi(adtype_small, (), small_cm; num_particles=4, num_steps=2, adtype=:bogus)
+        @test_throws ArgumentError batched_advi(adtype_small, (), small_cm; num_particles=4, num_iterations=2, adtype=:bogus)
         @test_throws ArgumentError batched_svgd(adtype_small, (), small_cm; num_particles=4, num_iterations=2, adtype=:bogus)
         @test_throws ArgumentError batched_smc(adtype_small, (), small_cm; num_particles=4, adtype=:bogus)
 
         # reverse is host-only: rejected with a device backend
         @test_throws ArgumentError batched_advi(
-            adtype_small, (), small_cm; num_particles=4, num_steps=2, adtype=:reverse, backend=CPU(),
+            adtype_small, (), small_cm; num_particles=4, num_iterations=2, adtype=:reverse, backend=CPU(),
         )
         @test_throws ArgumentError batched_svgd(
             adtype_small, (), small_cm; num_particles=4, num_iterations=2, adtype=:reverse, backend=CPU(),

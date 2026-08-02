@@ -23,7 +23,7 @@ Three facts from the reconnaissance shape the whole design:
 
 1. **The NUTS transition is already a standalone primitive.**
    `_nuts_proposal(target, position, logjoint, gradient, inverse_mass_matrix,
-   step_size, max_tree_depth, max_delta_energy, rng)` allocates its own tree
+   step_size, max_tree_depth, divergence_threshold, rng)` allocates its own tree
    workspace per call and persists nothing, so freezing a `WarmupDriver`'s
    step size and metric and calling it in a loop is fully supported.
 2. **Conditioning flows through a shared mutable `ChoiceMap`.**

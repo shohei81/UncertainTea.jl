@@ -7,7 +7,7 @@ function _build_nuts_subtree(
     direction::Int,
     depth::Int,
     initial_hamiltonian::Float64,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     current = subtree_workspace.current
@@ -43,7 +43,7 @@ function _build_nuts_subtree(
             inverse_mass_matrix,
         )
         summary.delta_energy = summary.proposed_energy - initial_hamiltonian
-        if !isfinite(summary.delta_energy) || summary.delta_energy > max_delta_energy
+        if !isfinite(summary.delta_energy) || summary.delta_energy > divergence_threshold
             summary.divergent = true
             break
         end
@@ -98,7 +98,7 @@ function _continue_nuts_proposal!(
     inverse_mass_matrix::Union{Vector{Float64},MassMetric},
     step_size::Float64,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     while _nuts_continuation_active(
@@ -117,7 +117,7 @@ function _continue_nuts_proposal!(
             direction,
             continuation.tree_depth,
             initial_hamiltonian,
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
         continuation.tree_depth += 1
@@ -186,7 +186,7 @@ function _continue_batched_nuts_proposal!(
     inverse_mass_matrix::Vector{Float64},
     step_size::Float64,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     continuation = workspace.column_continuation_states[chain_index]
@@ -206,7 +206,7 @@ function _continue_batched_nuts_proposal!(
             direction,
             workspace.control.tree_depths[chain_index],
             initial_hamiltonian,
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
         workspace.control.tree_depths[chain_index] += 1
@@ -285,7 +285,7 @@ function _continue_batched_nuts_batched_subtree!(
     constraints,
     step_size,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     max_tree_depth > 1 || return false
@@ -301,7 +301,7 @@ function _continue_batched_nuts_batched_subtree!(
         args,
         constraints,
         step_size,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     end
@@ -326,7 +326,7 @@ function _nuts_proposal(
     inverse_mass_matrix::Union{Vector{Float64},MassMetric},
     step_size::Float64,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     initial_momentum = _sample_momentum(rng, inverse_mass_matrix)
@@ -353,7 +353,7 @@ function _nuts_proposal(
         direction,
         initial_hamiltonian,
         inverse_mass_matrix,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     _continue_nuts_proposal!(
@@ -364,7 +364,7 @@ function _nuts_proposal(
         inverse_mass_matrix,
         step_size,
         max_tree_depth,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     accept_stat, proposed_energy, energy_error, moved = _nuts_proposal_summary(
@@ -391,7 +391,7 @@ function _nuts_proposal(
     inverse_mass_matrix::Union{Vector{Float64},MassMetric},
     step_size::Float64,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     return _nuts_proposal(
@@ -404,7 +404,7 @@ function _nuts_proposal(
         inverse_mass_matrix,
         step_size,
         max_tree_depth,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
 end
@@ -420,7 +420,7 @@ function _batched_nuts_proposals!(
     constraints,
     step_size,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     num_chains = size(position, 2)
@@ -434,7 +434,7 @@ function _batched_nuts_proposals!(
         args,
         constraints,
         step_size,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     while _continue_batched_nuts_batched_subtree!(
@@ -446,7 +446,7 @@ function _batched_nuts_proposals!(
         constraints,
         step_size,
         max_tree_depth,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     end
@@ -466,7 +466,7 @@ function _batched_nuts_proposals!(
             _chain_inverse_mass_vector(inverse_mass_matrix, chain_index),
             _chain_step_size(step_size, chain_index),
             max_tree_depth,
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
     end
@@ -531,7 +531,7 @@ function _initialize_batched_nuts_continuations!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     num_chains = size(position, 2)
@@ -592,7 +592,7 @@ function _initialize_batched_nuts_continuations!(
             workspace.control.step_direction[chain_index],
             workspace.current_energy[chain_index],
             _chain_inverse_mass(inverse_mass_matrix, chain_index),
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
         workspace.control.divergent_step[chain_index] = divergent

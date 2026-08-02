@@ -50,7 +50,7 @@ end
             advi_flow_corr_model,
             (),
             corr_constraints;
-            num_steps=2000,
+            num_iterations=2000,
             num_particles=48,
             learning_rate=0.025,
             guide=:flow,
@@ -72,7 +72,7 @@ end
             advi_flow_corr_model,
             (),
             corr_constraints;
-            num_steps=2000,
+            num_iterations=2000,
             num_particles=48,
             learning_rate=0.025,
             guide=:meanfield,
@@ -97,7 +97,7 @@ end
                 advi_flow_banana_model,
                 (),
                 banana_constraints;
-                num_steps=2000,
+                num_iterations=2000,
                 num_particles=48,
                 learning_rate=0.02,
                 guide=guide,
@@ -119,7 +119,7 @@ end
                 advi_iwae_funnel_model,
                 (),
                 funnel_constraints;
-                num_steps=1500,
+                num_iterations=1500,
                 num_particles=32,
                 learning_rate=0.02,
                 guide=:meanfield,
@@ -144,7 +144,7 @@ end
             advi_flow_corr_model,
             (),
             corr_constraints;
-            num_steps=1200,
+            num_iterations=1200,
             num_particles=32,
             learning_rate=0.03,
             guide=:meanfield,
@@ -161,7 +161,7 @@ end
             advi_flow_corr_model,
             (),
             corr_constraints;
-            num_steps=1500,
+            num_iterations=1500,
             num_particles=32,
             learning_rate=0.02,
             guide=:fullrank,
@@ -180,23 +180,23 @@ end
     @testset "determinism_under_seed" begin
         flow_a = batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=200, num_particles=32, guide=:flow, rng=MersenneTwister(3),
+            num_iterations=200, num_particles=32, guide=:flow, rng=MersenneTwister(3),
         )
         flow_b = batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=200, num_particles=32, guide=:flow, rng=MersenneTwister(3),
+            num_iterations=200, num_particles=32, guide=:flow, rng=MersenneTwister(3),
         )
         @test flow_a.elbo_history == flow_b.elbo_history
         @test flow_a.best_flow.params == flow_b.best_flow.params
 
         iwae_a = batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=200, num_particles=32, guide=:meanfield, elbo=:iwae,
+            num_iterations=200, num_particles=32, guide=:meanfield, elbo=:iwae,
             iwae_samples=4, rng=MersenneTwister(3),
         )
         iwae_b = batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=200, num_particles=32, guide=:meanfield, elbo=:iwae,
+            num_iterations=200, num_particles=32, guide=:meanfield, elbo=:iwae,
             iwae_samples=4, rng=MersenneTwister(3),
         )
         @test iwae_a.elbo_history == iwae_b.elbo_history
@@ -207,7 +207,7 @@ end
         # standard_elbo_history identical to elbo_history.
         result = batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=100, num_particles=32, guide=:meanfield, rng=MersenneTwister(3),
+            num_iterations=100, num_particles=32, guide=:meanfield, rng=MersenneTwister(3),
         )
         @test result.elbo === :standard
         @test result.iwae_samples == 1
@@ -218,22 +218,22 @@ end
     @testset "extension_argument_validation" begin
         @test_throws ArgumentError batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=4, guide=:meanfield, elbo=:bogus,
+            num_iterations=4, guide=:meanfield, elbo=:bogus,
         )
         # IWAE unsupported for the redundant lowrank reparameterization
         @test_throws ArgumentError batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=4, guide=:lowrank, elbo=:iwae,
+            num_iterations=4, guide=:lowrank, elbo=:iwae,
         )
         # iwae_samples must divide num_particles
         @test_throws ArgumentError batched_advi(
             advi_flow_corr_model, (), corr_constraints;
-            num_steps=4, num_particles=32, guide=:meanfield, elbo=:iwae, iwae_samples=5,
+            num_iterations=4, num_particles=32, guide=:meanfield, elbo=:iwae, iwae_samples=5,
         )
         # the flow guide needs at least two latent dimensions
         @test_throws ArgumentError batched_advi(
             gaussian_mean, (), constraints;
-            num_steps=4, guide=:flow,
+            num_iterations=4, guide=:flow,
         )
     end
 end

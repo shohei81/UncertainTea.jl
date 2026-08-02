@@ -2,7 +2,7 @@ function _advance_batched_nuts_subtree_cohort!(
     workspace::BatchedNUTSWorkspace,
     access::BatchedNUTSExpandKernelAccess,
     inverse_mass_matrix,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     any_active = false
@@ -39,7 +39,7 @@ function _advance_batched_nuts_subtree_cohort!(
         leaf = _advance_tree_leaf(
             access.proposed_energy[chain_index],
             access.current_energy[chain_index],
-            max_delta_energy,
+            divergence_threshold,
             access.log_weight[chain_index],
             rng,
         )
@@ -246,7 +246,7 @@ function _step_batched_nuts_subtree_scheduler!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     access = _batched_nuts_kernel_access(workspace)
@@ -263,7 +263,7 @@ function _step_batched_nuts_subtree_scheduler!(
             args,
             constraints,
             step_size,
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
     end
@@ -280,7 +280,7 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _batched_nuts_kernel_reload_control!(workspace, access)
@@ -297,7 +297,7 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _batched_nuts_kernel_leapfrog!(
@@ -322,7 +322,7 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _batched_nuts_kernel_hamiltonian!(access, inverse_mass_matrix)
@@ -339,14 +339,14 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     execution.any_active = _advance_batched_nuts_subtree_cohort!(
         workspace,
         access,
         inverse_mass_matrix,
-        max_delta_energy,
+        divergence_threshold,
         rng,
     )
     return nothing
@@ -362,7 +362,7 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     execution.any_active = _activate_batched_nuts_subtree_merge_cohort!(
@@ -382,7 +382,7 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     execution.any_active || return nothing
@@ -405,7 +405,7 @@ function _execute_batched_nuts_kernel_step!(
     args,
     constraints,
     step_size,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     rng::AbstractRNG,
 )
     _batched_nuts_kernel_transition_phase!(workspace, access, execution)

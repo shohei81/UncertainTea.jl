@@ -231,7 +231,7 @@ end
     plan, observed, observed_int, slots, trip_counts, loop_starts,
     inverse_mass, step,
     out_real, out_int, out_div, out_moved,
-    iteration::UInt32, max_tree_depth::Int, max_delta_energy::T, num_params::Int, ::Type{T},
+    iteration::UInt32, max_tree_depth::Int, divergence_threshold::T, num_params::Int, ::Type{T},
 ) where {T}
     chain = UInt32(b)
     h = @inbounds step[b]
@@ -312,7 +312,7 @@ end
         proposed_energy = _persist_kinetic(pmom, inverse_mass, b, num_params, T) - lj1
         delta = proposed_energy - initial_hamiltonian
         integration_steps = 1
-        if !isfinite(delta) || delta > max_delta_energy
+        if !isfinite(delta) || delta > divergence_threshold
             divergent = true
         else
             accept_prob = min(one(T), exp(min(zero(T), -delta)))
@@ -386,7 +386,7 @@ end
             sub_integration += 1
             proposed_energy = _persist_kinetic(pmom, inverse_mass, b, num_params, T) - ljc
             delta = proposed_energy - initial_hamiltonian
-            if !isfinite(delta) || delta > max_delta_energy
+            if !isfinite(delta) || delta > divergence_threshold
                 sub_divergent = true
                 break
             end
@@ -500,7 +500,7 @@ end
     plan, @Const(observed), @Const(observed_int), slots, @Const(trip_counts), @Const(loop_starts),
     @Const(inverse_mass), @Const(step),
     out_real, out_int, out_div, out_moved,
-    iteration::UInt32, max_tree_depth::Int, max_delta_energy, num_params::Int,
+    iteration::UInt32, max_tree_depth::Int, divergence_threshold, num_params::Int,
 )
     b = @index(Global)
     _persist_nuts_chain!(
@@ -511,7 +511,7 @@ end
         plan, observed, observed_int, slots, trip_counts, loop_starts,
         inverse_mass, step,
         out_real, out_int, out_div, out_moved,
-        iteration, max_tree_depth, convert(eltype(params), max_delta_energy), num_params, eltype(params),
+        iteration, max_tree_depth, convert(eltype(params), divergence_threshold), num_params, eltype(params),
     )
 end
 
@@ -687,7 +687,7 @@ function _device_persistent_nuts_proposals!(
     constraints,
     step_size,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     iteration::Integer,
     rng::AbstractRNG,
 ) where {T}
@@ -737,7 +737,7 @@ function _device_persistent_nuts_proposals!(
         inner.trip_counts_device, inner.loop_starts_device,
         dws.inverse_mass, dws.step,
         dws.out_real, dws.out_int, dws.out_div, dws.out_moved,
-        iteration_coord, Int(max_tree_depth), convert(T, max_delta_energy), P;
+        iteration_coord, Int(max_tree_depth), convert(T, divergence_threshold), P;
         ndrange=C,
     )
     KernelAbstractions.synchronize(be)
@@ -767,20 +767,20 @@ end
 # Philox iteration coordinate and ignores `rng` (the kernel draws its own randomness).
 function _device_nuts_proposals_dispatch!(
     dws::DeviceNUTSWorkspace, ws, model, position, current_logjoint, current_gradient,
-    inverse_mass_matrix, args, constraints, step_size, max_tree_depth, max_delta_energy, iteration, rng,
+    inverse_mass_matrix, args, constraints, step_size, max_tree_depth, divergence_threshold, iteration, rng,
 )
     return _device_batched_nuts_proposals_masked!(
         dws, ws, model, position, current_logjoint, current_gradient, inverse_mass_matrix,
-        args, constraints, step_size, max_tree_depth, max_delta_energy, rng,
+        args, constraints, step_size, max_tree_depth, divergence_threshold, rng,
     )
 end
 
 function _device_nuts_proposals_dispatch!(
     dws::DevicePersistentNUTSWorkspace, ws, model, position, current_logjoint, current_gradient,
-    inverse_mass_matrix, args, constraints, step_size, max_tree_depth, max_delta_energy, iteration, rng,
+    inverse_mass_matrix, args, constraints, step_size, max_tree_depth, divergence_threshold, iteration, rng,
 )
     return _device_persistent_nuts_proposals!(
         dws, ws, model, position, current_logjoint, current_gradient, inverse_mass_matrix,
-        args, constraints, step_size, max_tree_depth, max_delta_energy, iteration, rng,
+        args, constraints, step_size, max_tree_depth, divergence_threshold, iteration, rng,
     )
 end

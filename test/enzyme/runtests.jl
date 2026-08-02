@@ -1,7 +1,10 @@
 # Tests for the Enzyme reverse-mode extension `reverse_mode_gradient` (issue #268).
 #
-# NOT part of the package test target and NOT run in CI (Enzyme is heavy and
-# version-sensitive). See test/enzyme/Project.toml for setup instructions.
+# NOT part of the package test target (Enzyme is heavy and version-sensitive),
+# but covered by the dedicated .github/workflows/enzyme.yml workflow: weekly
+# schedule + workflow_dispatch + pull_request when the fragile contract files
+# (ext/UncertainTeaEnzymeExt.jl, test/enzyme/**, src/generated_scorer.jl)
+# change (issue #333). See test/enzyme/Project.toml for local setup.
 #
 # Loading Enzyme activates UncertainTeaEnzymeExt, which supplies the
 # `reverse_mode_gradient` method. Every case checks reverse-mode against the
@@ -289,8 +292,8 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         # very high precision -- a strong check that reverse actually engaged.
         # (Not bitwise: the ~1e-15 gradient difference accumulates over the Adam
         # steps, so compare with a tight tolerance rather than `==`.)
-        af = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:forward, rng=MersenneTwister(5))
-        ar = batched_advi(batched_big, (), cm; num_particles=16, num_steps=150, adtype=:reverse, rng=MersenneTwister(5))
+        af = batched_advi(batched_big, (), cm; num_particles=16, num_iterations=150, adtype=:forward, rng=MersenneTwister(5))
+        ar = batched_advi(batched_big, (), cm; num_particles=16, num_iterations=150, adtype=:reverse, rng=MersenneTwister(5))
         @test af.location ≈ ar.location rtol = 1e-8
 
         sf = batched_svgd(batched_big, (), cm; num_particles=16, num_iterations=80, adtype=:forward, rng=MersenneTwister(6))

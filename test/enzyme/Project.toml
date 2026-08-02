@@ -1,8 +1,10 @@
 name = "UncertainTeaEnzymeTests"
 
 # Isolated environment for the Enzyme reverse-mode extension (issue #268). NOT
-# part of the package test target and NOT run in CI: Enzyme is a heavy,
-# version-sensitive dependency, so it is kept out of the core test matrix.
+# part of the package test target: Enzyme is a heavy, version-sensitive
+# dependency, so it is kept out of the core test matrix. It runs in CI via the
+# dedicated .github/workflows/enzyme.yml workflow (weekly + on PRs touching
+# the fragile contract files; issue #333).
 #
 # Setup + run (from the repository root):
 #   julia --project=test/enzyme -e 'using Pkg; Pkg.develop(path="."); Pkg.instantiate()'

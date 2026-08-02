@@ -13,7 +13,7 @@
         mvnormal_vi_model,
         (),
         choicemap();
-        num_steps=60,
+        num_iterations=60,
         num_particles=24,
         learning_rate=0.05,
         initial_params=Float64[-1.0, -1.0],
@@ -24,7 +24,7 @@
         dirichlet_vi_model,
         (),
         choicemap();
-        num_steps=60,
+        num_iterations=60,
         num_particles=24,
         learning_rate=0.03,
         initial_params=Float64[0.2, 0.3, 0.5],

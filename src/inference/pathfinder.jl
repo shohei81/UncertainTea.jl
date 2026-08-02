@@ -217,7 +217,7 @@ end
 """
     pathfinder(model, args=(), constraints=choicemap();
                num_paths=1, num_draws=100, num_elbo_draws=25, history=6,
-               max_iters=200, g_tol=1e-6, init=nothing,
+               max_iters=200, g_tol=1e-6, initial_params=nothing,
                rng=Random.default_rng()) -> PathfinderResult
 
 Pathfinder variational initialization (Zhang et al. 2022): L-BFGS runs toward
@@ -227,7 +227,8 @@ Monte Carlo ELBO selects the best one. With `num_paths > 1`, the paths start
 from independent prior initializations and the returned `draws` pool the
 per-path draws by importance resampling against the equal mixture of the
 path Gaussians (Pareto smoothing of the weights is a possible refinement).
-Every returned draw has a finite log joint.
+Every returned draw has a finite log joint. Gradients always use ForwardDiff;
+there is no `adtype` selection here (only the batched samplers accept `adtype`).
 
 The result can be passed directly as `initial_params` to `hmc`/`nuts`/
 `nuts_chains`/`batched_hmc`/`batched_nuts`, which then start each chain from
@@ -243,7 +244,7 @@ function pathfinder(
     history::Int=6,
     max_iters::Int=200,
     g_tol::Float64=1e-6,
-    init=nothing,
+    initial_params=nothing,
     rng::AbstractRNG=Random.default_rng(),
 )
     num_paths > 0 || throw(ArgumentError("pathfinder requires num_paths > 0"))
@@ -253,7 +254,7 @@ function pathfinder(
         throw(ArgumentError("pathfinder requires at least one parameterized latent choice"))
 
     objective = theta -> logjoint_unconstrained(model, theta, args, constraints)
-    seed = _initial_hmc_position(model, args, constraints, init, rng)
+    seed = _initial_hmc_position(model, args, constraints, initial_params, rng)
     cache = _logjoint_gradient_cache(model, seed, args, constraints)
     gradient! = (g, x) -> copyto!(g, _logjoint_gradient!(cache, x))
 

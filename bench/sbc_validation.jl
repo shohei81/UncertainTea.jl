@@ -83,7 +83,7 @@ for (name, model, args) in SBC_BENCH_MODELS
         model,
         args;
         num_simulations=300,
-        num_posterior_draws=63,
+        num_samples=63,
         num_warmup=200,
         thin=2,
         rng=rng,
@@ -102,7 +102,7 @@ for strategy in (:masked, :persistent)
     result = sbc(
         sbc_bench_conjugate;
         num_simulations=300,
-        num_posterior_draws=63,
+        num_samples=63,
         num_warmup=200,
         thin=2,
         sampler=:batched_nuts,
@@ -129,7 +129,7 @@ for (label, kwargs) in (
     result = sbc(
         sbc_bench_conjugate;
         num_simulations=300,
-        num_posterior_draws=63,
+        num_samples=63,
         num_warmup=200,
         thin=2,
         execution=:batched,

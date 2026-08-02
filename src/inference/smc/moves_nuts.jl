@@ -212,7 +212,7 @@ function _expand_tempered_nuts_depth_cohort!(
     proposal_log_scale::AbstractVector,
     beta::Float64,
     step_size::Float64,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     initial_hamiltonian::AbstractVector,
     inverse_mass_matrix::AbstractVector,
     rng::AbstractRNG,
@@ -315,7 +315,7 @@ function _expand_tempered_nuts_depth_cohort!(
             leaf = _advance_tree_leaf(
                 proposed_energy,
                 initial_hamiltonian[particle_index],
-                max_delta_energy,
+                divergence_threshold,
                 subtree_log_weight[particle_index],
                 rng,
             )
@@ -489,7 +489,7 @@ function _batched_nuts_move!(
     beta::Float64,
     step_size::Float64,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     inverse_mass_matrix::AbstractVector,
     rng::AbstractRNG,
 )
@@ -608,7 +608,7 @@ function _batched_nuts_move!(
             directions[particle_index],
             current_hamiltonian[particle_index],
             inverse_mass,
-            max_delta_energy,
+            divergence_threshold,
             rng,
         )
     end
@@ -626,7 +626,7 @@ function _batched_nuts_move!(
             beta,
             step_size,
             max_tree_depth,
-            max_delta_energy,
+            divergence_threshold,
             current_hamiltonian,
             inverse_mass,
             rng,
@@ -672,7 +672,7 @@ function _batched_nuts_move!(
     beta::Float64,
     step_size::Float64,
     max_tree_depth::Int,
-    max_delta_energy::Float64,
+    divergence_threshold::Float64,
     inverse_mass_matrix::AbstractVector,
     rng::AbstractRNG,
 )
@@ -691,7 +691,7 @@ function _batched_nuts_move!(
         beta,
         step_size,
         max_tree_depth,
-        max_delta_energy,
+        divergence_threshold,
         inverse_mass_matrix,
         rng,
     )
