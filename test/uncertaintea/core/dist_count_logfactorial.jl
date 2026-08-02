@@ -109,3 +109,101 @@
         @test lf_grad_new ≈ lf_grad_old rtol = 1e-12
     end
 end
+
+# --- issue #345: extreme counts go through the stirlerr/saddle-point core -----
+#
+# Past ~1e8 counts the naive spellings difference ~n*log(n)-sized loggamma and
+# k*log(p) terms; the rounding swamped the O(1) result and even flipped its
+# sign (binomial(1e16, 0.5) at n/2 scored +35 against the true -18.65,
+# poisson(1e16) at k = lambda scored exactly 0.0). The kernels now switch to
+# R-dbinom-style stirlerr/bd0 saddle-point forms above
+# `_COUNT_SADDLE_THRESHOLD`; everything below keeps the historical exact path.
+# All references here are 256-bit BigFloat evaluations of the naive formula.
+@testset "dist_count_extreme_345" begin
+    setprecision(BigFloat, 256) do
+        cx_pois_ref =
+            (lambda, k) -> Float64(big(k) * log(big(lambda)) - big(lambda) - UncertainTea.loggamma(big(k) + 1))
+        cx_binom_ref =
+            (n, p, k) -> Float64(
+                UncertainTea.loggamma(big(n) + 1) - UncertainTea.loggamma(big(k) + 1) -
+                UncertainTea.loggamma(big(n) - big(k) + 1) +
+                big(k) * log(big(p)) + (big(n) - big(k)) * log1p(-big(p)),
+            )
+        cx_nb_ref =
+            (r, p, k) -> Float64(
+                UncertainTea.loggamma(big(k) + big(r)) - UncertainTea.loggamma(big(r)) -
+                UncertainTea.loggamma(big(k) + 1) + big(r) * log(big(p)) + big(k) * log1p(-big(p)),
+            )
+
+        # binomial(10^12..10^18, 0.5) at k = n/2 and in the tails: a log
+        # PROBABILITY, so <= 0, and tight against BigFloat
+        for cx_e in (12, 14, 16, 18)
+            cx_n = Int(10)^cx_e
+            cx_half = cx_n ÷ 2
+            cx_sigma = round(Int, sqrt(cx_n / 4))
+            for cx_k in (cx_half, cx_half + 3 * cx_sigma, cx_half - 7 * cx_sigma, 1, cx_n - 1)
+                cx_lp = UncertainTea.logpdf(UncertainTea.binomial(cx_n, 0.5), cx_k)
+                @test cx_lp <= 0
+                @test cx_lp ≈ cx_binom_ref(cx_n, 0.5, cx_k) rtol = 1e-8
+                @test UncertainTea._backend_binomial_logpdf(cx_n, 0.5, cx_k) == cx_lp
+            end
+            # the exact k = 0 / k = n tail identities survive at extreme n
+            @test UncertainTea.logpdf(UncertainTea.binomial(cx_n, 0.5), 0) ≈ cx_n * log1p(-0.5) rtol = 1e-12
+            @test UncertainTea.logpdf(UncertainTea.binomial(cx_n, 0.5), cx_n) ≈ cx_n * log(0.5) rtol = 1e-12
+        end
+
+        # an asymmetric p keeps the same accuracy
+        @test UncertainTea.logpdf(UncertainTea.binomial(Int(10)^14, 0.3), 3 * Int(10)^13) ≈
+              cx_binom_ref(Int(10)^14, 0.3, 3 * Int(10)^13) rtol = 1e-8
+
+        # poisson at k = lambda and a 5-sigma tail
+        for cx_lambda in (1.0e12, 1.0e16)
+            cx_k = Int(cx_lambda)
+            cx_lp = UncertainTea.logpdf(poisson(cx_lambda), cx_k)
+            @test cx_lp <= 0
+            @test cx_lp ≈ cx_pois_ref(cx_lambda, cx_k) rtol = 1e-8
+            cx_tail = cx_k + 5 * round(Int, sqrt(cx_lambda))
+            @test UncertainTea.logpdf(poisson(cx_lambda), cx_tail) ≈ cx_pois_ref(cx_lambda, cx_tail) rtol =
+                1e-8
+        end
+
+        # negativebinomial with the mass centered at 1e12 / 1e16 (p = r/(r+mean)),
+        # at k = mean and off-center
+        for cx_mean in (1.0e12, 1.0e16), cx_r in (2.5, 50.0)
+            cx_p = cx_r / (cx_r + cx_mean)
+            for cx_k in (round(Int, cx_mean), round(Int, 1.7 * cx_mean), round(Int, 0.2 * cx_mean))
+                cx_lp = UncertainTea.logpdf(negativebinomial(cx_r, cx_p), cx_k)
+                @test cx_lp <= 0
+                @test cx_lp ≈ cx_nb_ref(cx_r, cx_p, cx_k) rtol = 1e-8
+            end
+        end
+
+        # counts beyond typemax(Int): integer-valued floats score on the float
+        # path instead of throwing a raw InexactError
+        cx_huge = 1.0e19
+        @test UncertainTea._poisson_count(cx_huge) === 1.0e19
+        cx_huge_lp = UncertainTea.logpdf(poisson(cx_huge), cx_huge)
+        @test isfinite(cx_huge_lp) && cx_huge_lp <= 0
+        @test cx_huge_lp ≈ cx_pois_ref(cx_huge, BigInt(10)^19) rtol = 1e-8
+        # 1.5e19 is ALSO integer-valued at Float64 (exactly 15 * 10^18): it is
+        # a far-tail mass point -- finite and hugely negative, not -Inf
+        cx_far = UncertainTea.logpdf(poisson(cx_huge), 1.5e19)
+        @test isfinite(cx_far) && cx_far <= 0
+        @test cx_far ≈ cx_pois_ref(cx_huge, BigInt(15) * BigInt(10)^18) rtol = 1e-8
+        # non-integer floats keep scoring -Inf
+        @test UncertainTea.logpdf(poisson(cx_huge), 2.5) == -Inf
+        @test UncertainTea.logpdf(poisson(cx_huge), 1.0e10 + 0.5) == -Inf
+
+        # the log-binomial-coefficient helper itself is accurate on the
+        # entropy/stirlerr form for huge n
+        @test UncertainTea._logbinomial_like(0.5, Int(10)^12, Int(10)^12 ÷ 2) ≈ Float64(
+            UncertainTea.loggamma(big(10)^12 + 1) - 2 * UncertainTea.loggamma(big(5) * big(10)^11 + 1),
+        ) rtol = 1e-10
+    end
+
+    # below the threshold the historical exact path is untouched bit-for-bit
+    @test UncertainTea._backend_poisson_logpdf(3.25, 10_000) ==
+          10_000 * log(3.25) - 3.25 - UncertainTea.loggamma(10_001.0)
+    @test UncertainTea._logbinomial_like(0.3, 10^6, 10^6 ÷ 2) ==
+          UncertainTea.loggamma(10^6 + 1.0) - 2 * UncertainTea.loggamma(10^6 ÷ 2 + 1.0)
+end

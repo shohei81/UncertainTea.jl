@@ -297,3 +297,76 @@ end
         isapprox(Float64(a), b; rtol=2e-3, atol=1e-4) for (a, b) in zip(vec(latent_nu_g32), vec(latent_nu_fd))
     )
 end
+
+# --- issue #345: studentt at extreme nu + gamma at the exp-subnormal boundary -
+
+# The loggamma((nu+1)/2) - loggamma(nu/2) difference cancels at Float64 for
+# extreme nu (err 0.228 at nu = 1e14, wrong sign past 1e15); the constant now
+# switches to the Stirling-ratio asymptotic series above nu = 1e3. Pin the full
+# logpdf against 256-bit BigFloat across the warmup-excursion range.
+@testset "studentt_extreme_nu_345" begin
+    setprecision(BigFloat, 256) do
+        st345_ref =
+            (nu, x) -> Float64(
+                UncertainTea.loggamma((big(nu) + 1) / 2) - UncertainTea.loggamma(big(nu) / 2) -
+                (log(big(nu)) + log(big(pi))) / 2 -
+                (big(nu) + 1) / 2 * log1p(big(x)^2 / big(nu)),
+            )
+        for st345_nu in (1.0e6, 1.0e8, 1.0e12, 1.0e15, 1.0e16), st345_x in (0.0, 1.3, -2.7)
+            st345_expected = st345_ref(st345_nu, st345_x)
+            @test UncertainTea.logpdf(studentt(st345_nu, 0.0, 1.0), st345_x) ≈ st345_expected rtol = 1e-10
+            @test UncertainTea._backend_studentt_logpdf(st345_nu, 0.0, 1.0, st345_x) ≈ st345_expected rtol =
+                1e-10
+        end
+    end
+
+    # the analytic dnu helper must equal what ForwardDiff extracts from the
+    # value branch on both sides of the crossover (the batched analytic
+    # gradient and the single dual path share these)
+    for st345_nu in (999.0, 1000.0, 1.0e8, 1.0e15)
+        @test UncertainTea._studentt_log_constant_dnu(st345_nu) ≈
+              UncertainTea.ForwardDiff.derivative(UncertainTea._studentt_log_constant, st345_nu) rtol = 1e-8
+    end
+
+    # the exact and asymptotic branches agree at the crossover (no logpdf jump
+    # an integrator could see)
+    @test UncertainTea._studentt_log_constant(prevfloat(1000.0)) ≈
+          UncertainTea._studentt_log_constant(1000.0) atol = 1e-12
+
+    # the truncated-t density path reuses the same constant: light-tail
+    # normalizers stay finite and accurate at extreme nu
+    @test isfinite(UncertainTea._std_t_log_pdf(0.5, 1.0e15))
+end
+
+# exp(theta) lands in the subnormal range for theta in ~(-745.1, -708.4); the
+# surviving couple of mantissa bits made the gamma logpdf silently wrong by
+# O(1) (0.56 nats at theta = -745) with an Inf gradient. Boundary semantics
+# now: -Inf value with a non-finite (poisoned) gradient on the single AND
+# batched paths, consistent with the issue-#343 `_offsupport_neginf` machinery.
+@testset "gamma_exp_subnormal_boundary_345" begin
+    # observed subnormal values are boundary points
+    @test UncertainTea.logpdf(gamma(2.0, 1.0), 5.0e-324) == -Inf
+    @test UncertainTea.logpdf(gamma(2.0, 1.0), prevfloat(floatmin(Float64))) == -Inf
+    @test UncertainTea._backend_gamma_logpdf(0.5, 1.0, 1.0e-320) == -Inf
+    # the smallest NORMAL value still scores (finite, very negative)
+    @test isfinite(UncertainTea.logpdf(gamma(2.0, 1.0), floatmin(Float64)))
+
+    @tea static function g345_gamma_model()
+        x ~ gamma(2.0, 1.0)
+    end
+    for g345_theta in (-745.0, -720.0)
+        @test logjoint_unconstrained(g345_gamma_model, [g345_theta], ()) == -Inf
+        g345_g = logjoint_gradient_unconstrained(g345_gamma_model, [g345_theta], ())
+        @test !isfinite(g345_g[1])
+        @test batched_logjoint_unconstrained(g345_gamma_model, reshape([g345_theta], 1, 1), ())[1] == -Inf
+        g345_bg =
+            batched_logjoint_gradient_unconstrained(g345_gamma_model, reshape([g345_theta], 1, 1), ())
+        @test !isfinite(g345_bg[1, 1])
+    end
+
+    # just above the subnormal band everything stays finite and consistent
+    g345_ok = logjoint_unconstrained(g345_gamma_model, [-700.0], ())
+    @test isfinite(g345_ok)
+    g345_ok_g = logjoint_gradient_unconstrained(g345_gamma_model, [-700.0], ())
+    @test isfinite(g345_ok_g[1])
+end

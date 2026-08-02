@@ -121,7 +121,9 @@ function _accumulate_gamma_gradient!(
         shape = shape_values[batch_index]
         rate = rate_values[batch_index]
         totals[batch_index] += _backend_gamma_logpdf(shape, rate, value)
-        if !(value > 0)
+        # subnormal values are the exp-underflow boundary (issue #345): the
+        # kernel scores them -Inf, so poison alongside the exact-0.0 case
+        if !(value > 0) || issubnormal(value)
             _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
             continue
         end
