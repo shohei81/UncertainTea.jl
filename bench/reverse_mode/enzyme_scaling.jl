@@ -24,6 +24,7 @@
 #   julia --project=bench/reverse_mode bench/reverse_mode/enzyme_scaling.jl
 
 using UncertainTea, ForwardDiff, Enzyme, Random, LinearAlgebra, BenchmarkTools, Printf
+using UncertainTea.Inference
 const UT = UncertainTea
 
 # --- (1) pure high-P coupled logjoint --------------------------------------

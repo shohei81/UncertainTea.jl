@@ -1,3 +1,7 @@
+```@meta
+CurrentModule = UncertainTea
+```
+
 # Inference Overview
 
 UncertainTea ships a family of gradient-based and Monte Carlo samplers, plus
@@ -8,6 +12,16 @@ device kernels.
 
 This page is a map of the samplers and the batched/device architecture. The
 deeper design rationale lives in the [Design Notes](design-notes.md).
+
+The samplers and their result types live in the `UncertainTea.Inference`
+submodule, and the chain summaries / export helpers in
+`UncertainTea.Diagnostics` (see the [API Reference](api.md)):
+
+```julia
+using UncertainTea               # the modeling language
+using UncertainTea.Inference     # nuts_chains, batched_nuts, batched_advi, ...
+using UncertainTea.Diagnostics   # summarize, rhat, ess, posterior_array, ...
+```
 
 ## Single-chain and multi-chain samplers
 
@@ -96,8 +110,8 @@ backend; a package extension declares `Float32` as Metal's precision.
 Not every model lowers to the device subset. Use `backend_report` and
 `backend_execution_plan` to check support; unsupported models fall back to the
 CPU path. The low-level device density APIs (`device_batched_logjoint`,
-`device_batched_logjoint_gradient`, and their in-place variants) are exported for
-direct use.
+`device_batched_logjoint_gradient`, and their in-place variants) are exported
+from `UncertainTea.Device` for direct use.
 
 Because RNG stays host-side on the device HMC/NUTS paths, device results are
 statistically equivalent to — not bitwise identical to — the CPU path.

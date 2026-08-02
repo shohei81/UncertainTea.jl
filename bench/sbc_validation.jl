@@ -8,6 +8,8 @@
 # NUTS iterations per model; the defaults below take a few minutes.
 
 using UncertainTea
+using UncertainTea.Inference
+using UncertainTea.Diagnostics
 using Random
 using KernelAbstractions: CPU
 

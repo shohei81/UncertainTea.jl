@@ -9,6 +9,7 @@
 #   julia --project=. bench/nuts_masked_bench.jl
 
 using UncertainTea
+using UncertainTea.Inference
 using Random
 
 @tea static function nuts_bench_two_param()
