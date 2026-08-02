@@ -605,7 +605,8 @@ function _truncated_bound_transform(lower::Real, upper::Real)
     return IdentityTransform()
 end
 
-const _MIXTURE_REAL_LINE_FAMILIES = (:normal, :laplace, :studentt)
+# `_MIXTURE_REAL_LINE_FAMILIES` (the families eligible as latent mixture
+# components) is derived from the family table (distributions/family_table.jl).
 
 # Collect the callee symbols of a mixture's component constructor calls. `arguments`
 # is the full mixture argument list (first entry is the weights expression, the rest
@@ -642,11 +643,12 @@ function _parameter_transform(rhs::DistributionSpec)
         end
         return NoncenteredTransform()
     end
-    if rhs.family === :normal || rhs.family === :laplace || rhs.family === :studentt ||
-       rhs.family === :cauchy || rhs.family === :logistic || rhs.family === :gumbel
+    if rhs.family in _IDENTITY_TRANSFORM_LATENT_FAMILIES
         return IdentityTransform()
-    elseif rhs.family === :halfnormal || rhs.family === :halfcauchy
+    elseif rhs.family in _LOG_TRANSFORM_LATENT_FAMILIES
         return LogTransform()
+    elseif rhs.family in _LOGIT_TRANSFORM_LATENT_FAMILIES
+        return LogitTransform()
     elseif rhs.family === :uniform
         bounds = _uniform_static_bounds(rhs.arguments)
         isnothing(bounds) && return nothing
@@ -666,16 +668,10 @@ function _parameter_transform(rhs::DistributionSpec)
     elseif rhs.family === :wishart || rhs.family === :inversewishart
         size = _wishart_static_size(rhs.arguments)
         isnothing(size) || return CholeskyCovTransform(size)
-    elseif rhs.family === :lognormal || rhs.family === :exponential || rhs.family === :gamma ||
-           rhs.family === :inversegamma || rhs.family === :weibull ||
-           rhs.family === :frechet || rhs.family === :rayleigh || rhs.family === :inversegaussian
-        return LogTransform()
     elseif rhs.family === :pareto
         xm = _pareto_static_lower(rhs.arguments)
         isnothing(xm) && return nothing
         return LowerBoundedTransform(xm)
-    elseif rhs.family === :beta
-        return LogitTransform()
     elseif rhs.family === :dirichlet
         size = _dirichlet_static_size(rhs.arguments)
         isnothing(size) || return SimplexTransform(size)
@@ -719,15 +715,11 @@ function _iid_parameter_transform(arguments)
     family = _iid_base_family(arguments)
     size = _iid_static_size(arguments)
     (isnothing(family) || isnothing(size)) && return nothing
-    if family === :normal || family === :laplace || family === :studentt ||
-       family === :cauchy || family === :logistic || family === :gumbel
+    if family in _IDENTITY_TRANSFORM_LATENT_FAMILIES
         return VectorIdentityTransform(size)
-    elseif family === :lognormal || family === :exponential || family === :gamma ||
-           family === :inversegamma || family === :weibull ||
-           family === :halfnormal || family === :halfcauchy ||
-           family === :frechet || family === :rayleigh || family === :inversegaussian
+    elseif family in _LOG_TRANSFORM_LATENT_FAMILIES
         return VectorLogTransform(size)
-    elseif family === :beta
+    elseif family in _LOGIT_TRANSFORM_LATENT_FAMILIES
         return VectorLogitTransform(size)
     end
     return nothing

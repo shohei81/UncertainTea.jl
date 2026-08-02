@@ -12,6 +12,7 @@ include("fixtures.jl")
 core_test_files = [
     # (file, group)
     ("namespace_partition.jl", "dsl"),
+    ("family_table_consistency.jl", "dsl"),
     ("export_smoke.jl", "dsl"),
     ("dsl_static_model_semantics.jl", "dsl"),
     ("constraint_driven_conditioning.jl", "dsl"),

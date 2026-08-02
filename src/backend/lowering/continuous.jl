@@ -1,44 +1,9 @@
 # Lowering of static models to the backend expression IR: continuous scalar families (normal, lognormal, laplace, exponential, gamma, inversegamma, weibull, beta, studentt).
 
-const GPU_BACKEND_SUPPORTED_DISTRIBUTIONS = Symbol[
-    :normal,
-    :lognormal,
-    :laplace,
-    :exponential,
-    :gamma,
-    :inversegamma,
-    :weibull,
-    :beta,
-    :dirichlet,
-    :bernoulli,
-    :bernoullilogit,
-    :binomial,
-    :betabinomial,
-    :discreteuniform,
-    :geometric,
-    :negativebinomial,
-    :poisson,
-    :studentt,
-    :categorical,
-    :mvnormal,
-    :truncatednormal,
-    :truncatedstudentt,
-    :mixture,
-    :mvnormaldense,
-    :mvstudentt,
-    :mvstudenttdense,
-    :lkjcholesky,
-    :cauchy,
-    :halfnormal,
-    :halfcauchy,
-    :uniform,
-    :logistic,
-    :gumbel,
-    :pareto,
-    :frechet,
-    :rayleigh,
-    :inversegaussian,
-]
+# Derived from the family table (distributions/family_table.jl); the table's
+# row order preserves this list's historical order because the gradient
+# crosscheck suite seeds its RNG from `enumerate` over it.
+const GPU_BACKEND_SUPPORTED_DISTRIBUTIONS = collect(_distribution_families(spec -> spec.backend))
 
 struct BackendNormalChoicePlanStep{M<:AbstractBackendExpr,S<:AbstractBackendExpr,AD<:BackendAddressSpec} <:
        BackendChoicePlanStep

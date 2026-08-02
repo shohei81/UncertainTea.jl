@@ -16,56 +16,9 @@
 # family before defining models that use it (the same order Julia requires
 # for any function you call at top level).
 
-const BUILTIN_DISTRIBUTION_FAMILIES = (
-    :normal,
-    :lognormal,
-    :laplace,
-    :exponential,
-    :gamma,
-    :inversegamma,
-    :weibull,
-    :beta,
-    :dirichlet,
-    :bernoulli,
-    :bernoullilogit,
-    :binomial,
-    :betabinomial,
-    :multinomial,
-    :discreteuniform,
-    :geometric,
-    :negativebinomial,
-    :poisson,
-    :studentt,
-    :categorical,
-    :mvnormal,
-    :mvnormaldense,
-    :gaussianprocess,
-    :sparsegaussianprocess,
-    :hmm,
-    :orderedlogistic,
-    :zeroinflatedpoisson,
-    :zeroinflatednegativebinomial,
-    :vonmises,
-    :mvstudentt,
-    :mvstudenttdense,
-    :wishart,
-    :inversewishart,
-    :lkjcholesky,
-    :truncatednormal,
-    :truncatedstudentt,
-    :mixture,
-    :iid,
-    :cauchy,
-    :halfnormal,
-    :halfcauchy,
-    :uniform,
-    :logistic,
-    :gumbel,
-    :pareto,
-    :frechet,
-    :rayleigh,
-    :inversegaussian,
-)
+# Every row of the family table is a built-in family name (membership-only
+# consumers; see distributions/family_table.jl for the table itself).
+const BUILTIN_DISTRIBUTION_FAMILIES = _distribution_families(_ -> true)
 
 struct UserDistributionRegistration
     builder::Any
