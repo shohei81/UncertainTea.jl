@@ -1,7 +1,10 @@
 # Tests for the Enzyme reverse-mode extension `reverse_mode_gradient` (issue #268).
 #
-# NOT part of the package test target and NOT run in CI (Enzyme is heavy and
-# version-sensitive). See test/enzyme/Project.toml for setup instructions.
+# NOT part of the package test target (Enzyme is heavy and version-sensitive),
+# but covered by the dedicated .github/workflows/enzyme.yml workflow: weekly
+# schedule + workflow_dispatch + pull_request when the fragile contract files
+# (ext/UncertainTeaEnzymeExt.jl, test/enzyme/**, src/generated_scorer.jl)
+# change (issue #333). See test/enzyme/Project.toml for local setup.
 #
 # Loading Enzyme activates UncertainTeaEnzymeExt, which supplies the
 # `reverse_mode_gradient` method. Every case checks reverse-mode against the
