@@ -635,10 +635,29 @@ end
 # least Float64: at Float32 the two ~nu*log(nu)-sized loggammas lose their
 # O(log nu) difference to rounding (~0.03 absolute at nu = 1e5 -- issue #53).
 # The z-dependent terms have no such cancellation and stay at input precision.
+#
+# Even at Float64 the loggamma difference cancels for extreme nu (err 0.228 at
+# nu = 1e14, wrong sign past 1e15 -- issue #345), so above the crossover the
+# Stirling-ratio expansion loggamma(x + 1/2) - loggamma(x) = log(x)/2 - 1/(8x)
+# + 1/(192 x^3) - 1/(640 x^5) + O(x^-7) at x = nu/2 collapses the constant to
+#   -log(2 pi)/2 - 1/(4 nu) + 1/(24 nu^3) - 1/(20 nu^5) + O(nu^-7),
+# < 2 ulp relative for nu >= 100 and matching the exact form to ~4e-13 at the
+# nu = 1e3 crossover (empirical BigFloat study, issue #345; the exact form's
+# own rounding grows past 1e-12 relative beyond that). The branch compares
+# primal values, so ForwardDiff duals flow through the series arithmetic and
+# pick up its (accurate) nu-derivative.
+const _STUDENTT_ASYMPTOTIC_NU = 1.0e3
+
 function _studentt_log_constant(nu)
     nuf = float(nu)
     W = promote_type(typeof(nuf), Float64)
     nuw = W(nuf)
+    if nuw >= _STUDENTT_ASYMPTOTIC_NU
+        inv_nu = one(nuw) / nuw
+        inv_nu2 = inv_nu * inv_nu
+        series = inv_nu * (-1 / 4 + inv_nu2 * (1 / 24 - inv_nu2 * (1 / 20)))
+        return oftype(nuf, series - log(2 * W(pi)) / 2)
+    end
     return oftype(nuf, loggamma((nuw + one(nuw)) / 2) - loggamma(nuw / 2) - (log(nuw) + log(W(pi))) / 2)
 end
 
@@ -646,10 +665,20 @@ end
 # the same way: the digamma difference is ~1/nu against ~log(nu)-sized terms,
 # so the Float32 analytic gradient would otherwise disagree with the
 # Float64-widened value the ForwardDiff reference differentiates.
+#
+# Above the same crossover as `_studentt_log_constant` (issue #345) the
+# digamma difference cancels entirely at Float64 (the true derivative is
+# ~1/(4 nu^2) against ~log(nu)-sized digammas); use the term-by-term
+# derivative of the asymptotic series, 1/(4 nu^2) - 1/(8 nu^4) + 1/(4 nu^6),
+# which is exactly what ForwardDiff extracts from the value branch.
 function _studentt_log_constant_dnu(nu)
     nuf = float(nu)
     W = promote_type(typeof(nuf), Float64)
     nuw = W(nuf)
+    if nuw >= _STUDENTT_ASYMPTOTIC_NU
+        inv_nu2 = one(nuw) / (nuw * nuw)
+        return oftype(nuf, inv_nu2 * (1 / 4 + inv_nu2 * (-1 / 8 + inv_nu2 * (1 / 4))))
+    end
     return oftype(nuf, (digamma((nuw + one(nuw)) / 2) - digamma(nuw / 2) - one(nuw) / nuw) / 2)
 end
 
@@ -659,18 +688,15 @@ end
 # Float64: at Float32 the loggamma((nu+1)/2) - loggamma(nu/2) difference loses
 # ~0.05 to rounding for large nu, and the truncated gradient's cancellation
 # structure (-k + pdf/Z, two nearly equal hazards) amplifies that into
-# multiple-hundred-percent gradient errors.
+# multiple-hundred-percent gradient errors. The nu-only constant goes through
+# `_studentt_log_constant`, picking up its extreme-nu asymptotic branch
+# (issue #345).
 function _std_t_log_pdf(z, nu)
     zz = float(z)
     W = promote_type(typeof(zz), Float64)
     zw = W(zz)
     nuw = W(nu)
-    return oftype(
-        zz,
-        loggamma((nuw + one(nuw)) / 2) - loggamma(nuw / 2) -
-        (log(nuw) + log(W(pi))) / 2 -
-        (nuw + one(nuw)) * log1p((zw * zw) / nuw) / 2,
-    )
+    return oftype(zz, _studentt_log_constant(nuw) - (nuw + one(nuw)) * log1p((zw * zw) / nuw) / 2)
 end
 
 # Standard (unit-scale, zero-location) Student-t density with `nu` degrees of

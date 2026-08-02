@@ -52,6 +52,15 @@ function _offsupport_neginf(x::ForwardDiff.Dual{Tag,V,N}) where {Tag,V,N}
     return ForwardDiff.Dual{Tag,V,N}(convert(V, -Inf), poisoned)
 end
 
+# A positive value in the subnormal range (issue #345): exp(theta) lands there
+# for theta in ~(-745.1, -708.4) before underflowing to exactly 0.0, and the
+# few surviving mantissa bits make log(x) -- and hence the gamma density --
+# silently wrong by O(1) while the 1/x partials explode. Treat it as the same
+# boundary as exact 0.0. Branches on the primal value, so duals flow through.
+_positive_subnormal(x::AbstractFloat) = issubnormal(x)
+_positive_subnormal(x::Real) = issubnormal(float(x))
+_positive_subnormal(x::ForwardDiff.Dual) = _positive_subnormal(ForwardDiff.value(x))
+
 # --- logpdf kernels ----------------------------------------------------------
 
 function _backend_normal_logpdf(mu, sigma, x)
@@ -80,6 +89,10 @@ function _backend_gamma_logpdf(shape, rate, x)
     shape_ > zero(shape_) || return oftype(xx, NaN)
     rate_ > zero(rate_) || return oftype(xx, NaN)
     xx > zero(xx) || return _offsupport_neginf(xx)
+    # exp-subnormal boundary (issue #345): a subnormal value scores as the
+    # boundary (-Inf with poisoned partials), not a silently-wrong finite
+    # density built from log of a few mantissa bits
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     return shape_ * log(rate_) - loggamma(shape_) + (shape_ - one(shape_)) * log(xx) - rate_ * xx
 end
 
@@ -382,7 +395,8 @@ end
 # support classification helpers (_bernoulli_value, _poisson_count,
 # _binomial_trials, _categorical_index, _discrete_integer) and the
 # precision-careful data-term helpers (_logfactorial_like, _logbinomial_like,
-# _betabinomial_logpdf_core) live in distributions/discrete.jl.
+# _betabinomial_logpdf_core, and the issue-#345 extreme-count saddle-point core
+# _stirlerr/_bd0/_*_logpdf_saddle) live in distributions/discrete.jl.
 
 function _backend_bernoulli_logpdf(p, x)
     probability = p
@@ -406,6 +420,10 @@ function _backend_poisson_logpdf(lambda, x)
     lambda > zero(lambda) || throw(ArgumentError("poisson requires lambda > 0"))
     count = _poisson_count(x)
     isnothing(count) && return oftype(float(lambda), -Inf)
+    # extreme counts (issue #345): the naive spelling differences
+    # ~count*log(lambda)-sized terms whose rounding swamps (and can flip the
+    # sign of) the O(1) result; the saddle-point form never does
+    count >= _COUNT_SADDLE_THRESHOLD && return _poisson_logpdf_saddle(lambda, count)
     return count * log(lambda) - lambda - _logfactorial_like(lambda, count)
 end
 
@@ -435,6 +453,11 @@ function _backend_negativebinomial_logpdf(successes, probability, x)
     elseif probability_ == one(probability_)
         return oftype(probability_, -Inf)
     end
+    # extreme counts (issue #345): loggamma(count + r) - log(count!) and the
+    # count * log1p(-p) product all carry ~eps * count * log(count) rounding;
+    # the saddle-point form stays O(1)-accurate
+    count >= _COUNT_SADDLE_THRESHOLD &&
+        return _negativebinomial_logpdf_saddle(successes_, probability_, count)
     return loggamma(count + successes_) - loggamma(successes_) - _logfactorial_like(probability_, count) +
            successes_ * log(probability_) + count * log1p(-probability_)
 end
@@ -448,6 +471,12 @@ function _backend_binomial_logpdf(trials, probability, x)
     count = _poisson_count(x)
     isnothing(count) && return oftype(probability_, -Inf)
     count <= trial_count || return oftype(probability_, -Inf)
+    # extreme trial counts (issue #345): log C(n, k) and k log(p) are
+    # ~n log(n)-sized and nearly cancel; only the fused saddle-point form
+    # (which pairs them inside bd0 deviances) keeps the O(1) result -- the
+    # naive spelling scored binomial(1e16, 0.5) at n/2 as +35 (true -18.65)
+    trial_count >= _COUNT_SADDLE_THRESHOLD &&
+        return _binomial_logpdf_saddle(trial_count, probability_, count)
     log_combination = _logbinomial_like(probability_, trial_count, count)
     if count == 0 && count == trial_count
         return log_combination

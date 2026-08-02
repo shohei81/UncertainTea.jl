@@ -279,7 +279,12 @@ function _poisson_count(x)
         return x >= 0 ? Int(x) : nothing
     elseif x isa Real && isfinite(x)
         truncated = trunc(x)
-        return x >= zero(x) && x == truncated ? Int(truncated) : nothing
+        (x >= zero(x) && x == truncated) || return nothing
+        # Integer-valued floats beyond typemax(Int) stay on the float path
+        # (issue #345): they are valid probability-mass points and must score
+        # (the saddle-point kernels handle them), not throw InexactError.
+        truncated <= typemax(Int) || return float(truncated)
+        return Int(truncated)
     end
     return nothing
 end
@@ -313,10 +318,142 @@ function _logfactorial_like(value, n::Integer)
     return oftype(zero_like, loggamma(n + 1.0))
 end
 
+# Integer-valued float counts beyond typemax(Int) (issue #345): Stirling with
+# the same `_stirlerr` correction the saddle-point kernels use (loggamma(n + 1)
+# would be equally accurate; this spelling avoids the Int conversion the
+# `::Integer` method assumes).
+function _logfactorial_like(value, n::Real)
+    zero_like = log(one(value))
+    nf = Float64(n)
+    return oftype(zero_like, (nf + 0.5) * log(nf) - nf + log(2 * pi) / 2 + _stirlerr(nf))
+end
+
+# --- issue #345: stirlerr/saddle-point core for extreme counts ----------------
+#
+# For counts past ~1e8 the naive count-family spellings difference loggammas
+# (and count * log(lambda)-sized products) of magnitude ~n*log(n); their O(1)
+# result sinks under the eps * n * log(n) absolute rounding, and past ~1e15 the
+# logpdf even goes POSITIVE (binomial(1e16, 0.5) at n/2 scored +35 against the
+# true -18.65). Following R's dbinom/dpois (Loader's saddle-point algorithm),
+# split log(n!) into the exactly-computable Stirling part and the small
+# `stirlerr` correction, and fold the p/lambda terms into `_bd0` deviance terms
+# so no large intermediate is ever differenced. Kernels keep the exact
+# small-count path below `_COUNT_SADDLE_THRESHOLD` (bit-identical to the
+# historical results); the saddle path is accurate to ~2 ulp for every count
+# above it (empirical study against BigFloat, issue #345).
+const _COUNT_SADDLE_THRESHOLD = 100_000_000
+
+# stirlerr(n) = log(n!) - [n log n - n + log(2 pi n)/2]. Exact via loggamma
+# below 16 (also serves non-integer negativebinomial successes); the Stirling
+# series in 1/n^2 above (error < 1e-15 relative for n >= 16).
+function _stirlerr(n)
+    nf = float(n)
+    if nf < 16
+        return loggamma(nf + one(nf)) - (nf + oftype(nf, 0.5)) * log(nf) + nf -
+               log(2 * oftype(nf, pi)) / 2
+    end
+    inv_n2 = one(nf) / (nf * nf)
+    return evalpoly(inv_n2, (1 / 12, -1 / 360, 1 / 1260, -1 / 1680, 1 / 1188)) / nf
+end
+
+# Binomial deviance bd0(x, np) = x log(x/np) + np - x >= 0, stable where x and
+# np nearly cancel (R's bd0): for |x - np| < 0.1 (x + np) sum the series in
+# v = (x - np)/(x + np) until the primal stops moving; otherwise the direct
+# formula has no cancellation. AD-generic: np (and x for negativebinomial
+# successes) may carry ForwardDiff duals, whose partials converge at the same
+# v^2 rate as the primal.
+function _bd0(x, np)
+    xf, npf = promote(float(x), float(np))
+    if abs(xf - npf) < 0.1 * (xf + npf)
+        v = (xf - npf) / (xf + npf)
+        s = (xf - npf) * v
+        ej = 2 * xf * v
+        v2 = v * v
+        for j = 1:1000
+            ej *= v2
+            s_next = s + ej / (2 * j + 1)
+            s_next == s && return s_next
+            s = s_next
+        end
+        return s
+    end
+    return xf * log(xf / npf) + npf - xf
+end
+
+# R dpois_raw: log dpois(k; lambda) = -stirlerr(k) - bd0(k, lambda) -
+# log(2 pi k)/2 for k > 0.
+function _poisson_logpdf_saddle(lambda, count)
+    lambdaf = float(lambda)
+    kf = Float64(count)
+    return oftype(lambdaf, -_stirlerr(kf) - _bd0(kf, lambdaf) - log(2 * pi * kf) / 2)
+end
+
+# R dbinom_raw. `trials - count` is formed in the caller's exact (integer)
+# arithmetic before the float conversion, and the log(2 pi k (n-k) / n)
+# normalizer uses explicit logs -- log1p(-k/n) would hit -Inf when k/n rounds
+# to 1 (k = n - 1 at n >= 1e16).
+function _binomial_logpdf_saddle(trials, probability, count)
+    pf = float(probability)
+    if count == 0
+        probability == one(probability) && return oftype(pf, -Inf)
+        return oftype(pf, Float64(trials) * log1p(-pf))
+    elseif count == trials
+        probability == zero(probability) && return oftype(pf, -Inf)
+        return oftype(pf, Float64(trials) * log(pf))
+    end
+    (probability == zero(probability) || probability == one(probability)) &&
+        return oftype(pf, -Inf)
+    nf = Float64(trials)
+    kf = Float64(count)
+    mf = Float64(trials - count)
+    lc = _stirlerr(nf) - _stirlerr(kf) - _stirlerr(mf) -
+         _bd0(kf, nf * pf) - _bd0(mf, nf * (one(pf) - pf))
+    return oftype(pf, lc - (log(2 * pi) + log(kf) + log(mf) - log(nf)) / 2)
+end
+
+# R dnbinom: log dnbinom(k; r, p) = dbinom_raw(x = r, n = k + r, p, 1 - p) +
+# log(r / (r + k)). With n p = (r + k) r / (r + k) = r at k = mean, both bd0
+# terms stay near zero exactly where the mass concentrates.
+function _negativebinomial_logpdf_saddle(successes, probability, count)
+    pf = float(probability)
+    rf = float(successes)
+    kf = Float64(count)
+    nf = kf + rf
+    lc = _stirlerr(nf) - _stirlerr(rf) - _stirlerr(kf) -
+         _bd0(rf, nf * pf) - _bd0(kf, nf * (one(pf) - pf))
+    return oftype(pf, lc - (log(2 * pi) + log(rf) + log(kf) - log(nf)) / 2 + log(rf) - log(nf))
+end
+
 function _logbinomial_like(value, n::Integer, k::Integer)
+    if n >= _COUNT_SADDLE_THRESHOLD
+        return _logbinomial_like_saddle(value, n, k)
+    end
     return _logfactorial_like(value, n) -
            _logfactorial_like(value, k) -
            _logfactorial_like(value, n - k)
+end
+
+# Huge integer-valued float counts (issue #345) always take the saddle form.
+_logbinomial_like(value, n::Real, k::Real) = _logbinomial_like_saddle(value, n, k)
+
+# log C(n, k) in the entropy/stirlerr form: k log(n/k) + (n-k) log(n/(n-k)) +
+# log(n/(2 pi k (n-k)))/2 + stirlerr(n) - stirlerr(k) - stirlerr(n-k). No
+# ~n log(n)-sized intermediate is differenced, so the absolute error stays
+# ~eps * n * H(k/n) instead of ~eps * n * log(n). (The full binomial logpdf
+# additionally needs the bd0 pairing with the p-terms -- the kernel handles
+# that; this helper serves direct log-binomial-coefficient uses.)
+function _logbinomial_like_saddle(value, n, k)
+    zero_like = log(one(value))
+    (k == 0 || k == n) && return zero_like
+    nf = Float64(n)
+    kf = Float64(k)
+    mf = Float64(n - k)
+    return oftype(
+        zero_like,
+        kf * log(nf / kf) + mf * log(nf / mf) +
+        (log(nf) - log(2 * pi) - log(kf) - log(mf)) / 2 +
+        _stirlerr(nf) - _stirlerr(kf) - _stirlerr(mf),
+    )
 end
 
 logpdf(dist::BinomialDist, x) = _backend_binomial_logpdf(dist.trials, dist.p, x)
