@@ -69,15 +69,65 @@ function posterior_array(chains::HMCChains; space::Symbol=:constrained)
     return result
 end
 
-"""
-    to_arviz_dict(chains::HMCChains) -> Dict{String,Any}
+# Layout handling for `to_arviz_dict` (issue #339): every group matrix is built
+# `(num_samples, num_chains)` internally; `:chain_draw` transposes it on the way
+# out to match the Python `az.from_dict` `(chain, draw)` convention.
+function _validate_arviz_layout(layout::Symbol)
+    layout in (:draw_chain, :chain_draw) || throw(
+        ArgumentError(
+            "to_arviz_dict layout must be :draw_chain or :chain_draw, got $(repr(layout))",
+        ),
+    )
+    return layout
+end
 
-Return an ArviZ-style nested dictionary with a `"posterior"` group (one
-`(num_samples, num_chains)` matrix per constrained parameter) and a
-`"sample_stats"` group (`"diverging"`, `"energy"`, `"tree_depth"`,
-`"acceptance_rate"`, `"lp"`).
+_arviz_layout_matrix(matrix::AbstractMatrix, layout::Symbol) =
+    layout === :chain_draw ? permutedims(matrix) : matrix
+
+# Display name of an observation address, matching the flattened parameter
+# naming convention: a single-part address keeps its name (e.g. "y"), a
+# multi-part address gets bracketed trailing parts (e.g. `(:y, 3)` -> "y[3]").
+_observation_display_name(address::Tuple) =
+    length(address) == 1 ? string(address[1]) :
+    string(address[1], "[", join(address[2:end], ","), "]")
+_observation_display_name(address) = string(address)
+
 """
-function to_arviz_dict(chains::HMCChains)
+    to_arviz_dict(chains::HMCChains; layout=:draw_chain) -> Dict{String,Any}
+    to_arviz_dict(model, args, constraints, chains::HMCChains; layout=:draw_chain)
+        -> Dict{String,Any}
+
+Return an ArviZ-style nested dictionary with:
+
+- a `"posterior"` group: one matrix per constrained parameter. Vector-valued
+  parameters are flattened to per-component keys following the same convention
+  as [`parameter_names`](@ref) (e.g. a length-3 `v` becomes `"v[1]"`, `"v[2]"`,
+  `"v[3]"`); re-assembling them into a single array with a coordinate
+  dimension is future work.
+- a `"sample_stats"` group: `"diverging"`, `"energy"`, `"tree_depth"`,
+  `"acceptance_rate"`, `"lp"`, `"step_size"` (the chain's adapted step size,
+  constant across its draws), and `"n_steps"` (per-draw leapfrog integration
+  steps).
+- an `"attrs"` entry recording `"layout"` and the producing package, so a
+  round-trip through NPZ/JSON keeps the axis convention explicit.
+
+The four-argument form (same conditioning triple as [`loo`](@ref) /
+[`pointwise_loglikelihood`](@ref)) additionally emits a `"log_likelihood"`
+group: one matrix per observation address (named like `"y[1]"`), computed via
+[`pointwise_loglikelihood`](@ref) in [`observation_addresses`](@ref) order —
+the group `az.loo` / `az.compare` need.
+
+`layout` selects the matrix axis order for every group:
+
+- `:draw_chain` (default): `(num_samples, num_chains)`, the Julia
+  InferenceObjects convention.
+- `:chain_draw`: `(num_chains, num_samples)`, the Python `az.from_dict`
+  convention. Use this when handing the dictionary to Python ArviZ — with the
+  default layout a 2-chain x 1000-draw run would silently round-trip as 1000
+  chains x 2 draws.
+"""
+function to_arviz_dict(chains::HMCChains; layout::Symbol=:draw_chain)
+    _validate_arviz_layout(layout)
     isempty(chains.chains) && throw(ArgumentError("to_arviz_dict requires at least one chain"))
     names = parameter_names(chains; space=:constrained)
     draws = posterior_array(chains; space=:constrained)
@@ -85,7 +135,7 @@ function to_arviz_dict(chains::HMCChains)
 
     posterior = Dict{String,Any}()
     for p = 1:num_params
-        posterior[names[p]] = Array{Float64,2}(draws[:, :, p])
+        posterior[names[p]] = _arviz_layout_matrix(Array{Float64,2}(draws[:, :, p]), layout)
     end
 
     diverging = Array{Bool,2}(undef, num_samples, num_chains)
@@ -93,6 +143,8 @@ function to_arviz_dict(chains::HMCChains)
     tree_depth = Array{Float64,2}(undef, num_samples, num_chains)
     acceptance_rate = Array{Float64,2}(undef, num_samples, num_chains)
     lp = Array{Float64,2}(undef, num_samples, num_chains)
+    step_size = Array{Float64,2}(undef, num_samples, num_chains)
+    n_steps = Array{Int,2}(undef, num_samples, num_chains)
     for (chain_index, chain) in enumerate(chains.chains)
         for s = 1:num_samples
             diverging[s, chain_index] = chain.divergent[s]
@@ -100,18 +152,62 @@ function to_arviz_dict(chains::HMCChains)
             tree_depth[s, chain_index] = chain.tree_depths[s]
             acceptance_rate[s, chain_index] = chain.acceptance_stats[s]
             lp[s, chain_index] = chain.logjoint_values[s]
+            step_size[s, chain_index] = chain.step_size
+            n_steps[s, chain_index] = chain.integration_steps[s]
         end
     end
 
     sample_stats = Dict{String,Any}(
-        "diverging" => diverging,
-        "energy" => energy,
-        "tree_depth" => tree_depth,
-        "acceptance_rate" => acceptance_rate,
-        "lp" => lp,
+        "diverging" => _arviz_layout_matrix(diverging, layout),
+        "energy" => _arviz_layout_matrix(energy, layout),
+        "tree_depth" => _arviz_layout_matrix(tree_depth, layout),
+        "acceptance_rate" => _arviz_layout_matrix(acceptance_rate, layout),
+        "lp" => _arviz_layout_matrix(lp, layout),
+        "step_size" => _arviz_layout_matrix(step_size, layout),
+        "n_steps" => _arviz_layout_matrix(n_steps, layout),
     )
 
-    return Dict{String,Any}("posterior" => posterior, "sample_stats" => sample_stats)
+    attrs = Dict{String,Any}(
+        "layout" => String(layout),
+        "inference_library" => "UncertainTea",
+        "inference_library_version" => string(pkgversion(UncertainTea)),
+    )
+
+    return Dict{String,Any}(
+        "posterior" => posterior,
+        "sample_stats" => sample_stats,
+        "attrs" => attrs,
+    )
+end
+
+function to_arviz_dict(
+    model::TeaModel,
+    args::Tuple,
+    constraints::ChoiceMap,
+    chains::HMCChains;
+    layout::Symbol=:draw_chain,
+)
+    result = to_arviz_dict(chains; layout=layout)
+    num_samples = numsamples(chains)
+    num_chains = nchains(chains)
+    addresses = observation_addresses(model, args, constraints)
+    # Rows are the pooled draws of `constrained_draws` (chain-major: chain 1's
+    # draws, then chain 2's, ...), so a column reshapes straight into the
+    # `(num_samples, num_chains)` posterior-group shape.
+    ll = pointwise_loglikelihood(model, args, constraints, chains)
+    size(ll, 1) == num_samples * num_chains || throw(
+        DimensionMismatch(
+            "pointwise log-likelihood has $(size(ll, 1)) draws, expected " *
+            "$(num_samples * num_chains) ($(num_samples) samples x $(num_chains) chains)",
+        ),
+    )
+    log_likelihood = Dict{String,Any}()
+    for (column, address) in enumerate(addresses)
+        matrix = reshape(ll[:, column], num_samples, num_chains)
+        log_likelihood[_observation_display_name(address)] = _arviz_layout_matrix(matrix, layout)
+    end
+    result["log_likelihood"] = log_likelihood
+    return result
 end
 
 # Canonical package-extension pattern: the core declares the function with no
