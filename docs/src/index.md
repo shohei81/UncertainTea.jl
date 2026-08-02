@@ -11,7 +11,7 @@ is available today; the device backend (KernelAbstractions kernels with a Metal
 extension) is under active development.
 
 !!! warning "Experimental"
-    UncertainTea `0.1.0` is an experimental release. The static DSL, CPU
+    UncertainTea `0.2.0` is an experimental release. The static DSL, CPU
     evaluation path, and several inference algorithms are implemented. APIs and
     model restrictions may change as the static IR and backend contract
     continue to converge.

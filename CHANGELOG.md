@@ -1,0 +1,82 @@
+# Changelog
+
+## v0.2.0 (unreleased → pending registration)
+
+A large feature release. Breaking only in the export surface (see the first
+entry); model code written against v0.1.0 runs unchanged.
+
+### Breaking
+
+- **Curated public API** (#284): ~43 compiler-internal types (IR specs,
+  execution-plan steps, transforms, mode singletons, lowering-introspection
+  helpers) are no longer exported. They remain reachable qualified
+  (`UncertainTea.ExecutionPlan`, …) with no semver guarantee. The exported
+  surface — the `@tea` DSL, samplers, distributions, diagnostics, result
+  types — is the supported public API rendered at `docs/src/api.md`.
+
+### Reverse-mode AD (Enzyme)
+
+- `reverse_mode_gradient(f, x)` and `reverse_mode_gradient(model, params,
+  args, constraints)` via the optional Enzyme package extension: `O(1)`-in-P
+  gradients for the models the analytic path does not fuse (#269–#271).
+- Guarded-automatic gradient-backend selection on the batched samplers:
+  `adtype=:auto` (default) engages reverse mode when it is safe and
+  beneficial; `:forward`/`:reverse` override. Measured 24.8× faster
+  `batched_nuts` on a P=60 non-analytic model (#272, #278).
+- GP/HMM hyperparameter models and broadcast GLMs take the reverse-mode path
+  via static whole-vector observation staging (#301); Int counts and Bool
+  labels stage exactly (#319).
+
+### Modeling
+
+- Vectorized non-Gaussian observations: `{:y} ~ poisson.(exp.(a .+ b .* x))`
+  and friends (bernoulli, bernoullilogit, exponential, studentt) lower to a
+  backend-native dense step with analytic gradients (#300). Dotted function
+  calls (`exp.(...)`) now work in broadcast arguments and compiled
+  deterministic expressions.
+- Gaussian processes: `gaussianprocess` marginal likelihood with isotropic or
+  ARD lengthscales (#266, #274); kernel specifications `rbf_kernel`,
+  `matern32_kernel`, `matern52_kernel`, `periodic_kernel`, and
+  `kernel_sum`/`kernel_product` composition (#302); `gp_cholesky` for direct
+  latent-function inference under non-Gaussian likelihoods (#280);
+  `sparsegaussianprocess` FITC inducing-point approximation, `O(NM²+M³)`
+  (#282).
+- New distributions: `hmm` (Gaussian-emission hidden Markov models via the
+  forward algorithm, #267), `orderedlogistic` (#303), `zeroinflatedpoisson` /
+  `zeroinflatednegativebinomial` (#304), `vonmises` with an AD-generic
+  `log I₀` (#305).
+- Automatic marginalization of enumerable discrete latents
+  (Rao-Blackwellization, #265).
+- Eight new fast-path math primitives: `sin`, `cos`, `tan`, `tanh`, `sinh`,
+  `cosh`, `atan`, `expm1` — with analytic chain rules and device dual rules
+  (#299).
+
+### Inference & diagnostics
+
+- `elliptical_slice`: gradient-free, tuning-free sampler for latents with a
+  multivariate-Gaussian prior — the natural companion to `gp_cholesky` (#306).
+- `prior_predictive` for prior workflow checks; `rhat(chains; method=:rank)`
+  rank-normalized split-R̂ (Vehtari et al. 2021) (#307).
+
+### Fixes & robustness
+
+- Warn on constraint addresses that match no model choice (silent
+  misconditioning, #320).
+- Fix `mvnormal` macro-expansion crash with runtime mean/scale arguments
+  (#318).
+- Broadcast observation staging cached per gradient cache (~5× less warm-call
+  allocation on broadcast GLMs, #321).
+
+### Internal
+
+- Single-source scalar distribution kernels: each family declares logpdf +
+  analytic partials once; the CPU reference, backend scoring, and batched
+  gradients consume the one declaration, and the device kernels are pinned to
+  it by a per-family parity test (#296–#298).
+
+## v0.1.0
+
+Initial registered release: the static `@tea` DSL with constraint-driven
+conditioning, CPU/batched/Metal-device inference (NUTS/HMC/ChEES/MEADS, ADVI,
+SVGD, SMC, gibbs, pathfinder, nested sampling), a broad distribution library,
+and diagnostics (split-R̂, ESS, MCSE, WAIC, PSIS-LOO, SBC).

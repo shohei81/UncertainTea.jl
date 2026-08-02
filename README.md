@@ -14,7 +14,7 @@ extension) is under active development.
 
 ## Status
 
-UncertainTea `0.1.0` is an experimental release.
+UncertainTea `0.2.0` is an experimental release.
 
 - The static DSL, CPU evaluation path, and several inference algorithms are
   implemented.
@@ -127,6 +127,7 @@ user-defined families via `register_distribution` (`AbstractTeaDistribution`).
 
 ## Documentation
 
+- **[Rendered documentation site](https://shohei81.github.io/UncertainTea.jl/)** — getting started, inference guide, executable examples, API reference
 - [Documentation index](docs/README.md)
 - [Research notes](docs/research.md)
 - [Architecture direction](docs/architecture.md)
