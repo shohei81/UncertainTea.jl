@@ -41,6 +41,8 @@ makedocs(;
         "Examples" => [
             "Eight Schools (Non-centered)" => "generated/eight_schools.md",
             "Logistic Regression (GLM)" => "generated/logistic_regression.md",
+            "Poisson GLM (broadcast)" => "generated/poisson_glm.md",
+            "Gaussian Process Regression" => "generated/gp_regression.md",
             "ChEES-HMC (adaptive)" => "generated/chees_hmc.md",
         ],
         "API Reference" => "api.md",
