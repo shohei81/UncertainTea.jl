@@ -522,7 +522,11 @@ function gibbs(
         gradient_cache = _logjoint_gradient_cache(model, position, args, merged; reject_invalid_parameters=true)
         current_gradient = copy(_logjoint_gradient!(gradient_cache, position))
         all(isfinite, current_gradient) ||
-            throw(ArgumentError("initial gibbs state produced a non-finite unconstrained gradient"))
+            throw(
+                ArgumentError(
+                    "initial gibbs state produced a non-finite unconstrained gradient; supply finite initial_params (and initial_discrete), or check the constraint values for NaN/Inf",
+                ),
+            )
         inverse_mass_matrix = ones(num_params)
         if find_reasonable_step_size || (num_warmup > 0 && adapt_step_size)
             nuts_step_size = _find_reasonable_step_size(

@@ -11,7 +11,17 @@ mutable struct ChoiceMap
     # ChoiceMap lookups when it no longer holds (gibbs mutates its merged
     # constraints in place between gradient evaluations).
     mutation_count::Int
+    # NaN observation guard stamp (issue #346): the `mutation_count` value the
+    # constraint values were last scanned for NaN at (see
+    # `_validate_constraint_values_not_nan` in evaluator.jl). Initialized to a
+    # value no live `mutation_count` can hold so a fresh map is always scanned
+    # once; the scan re-runs only after a mutation, keeping the per-evaluation
+    # cost at one Int comparison.
+    nan_checked_mutation_count::Int
 end
+
+ChoiceMap(entries::Vector{Pair{Address,Any}}, index_by_address::Dict{Address,Int}, mutation_count::Int) =
+    ChoiceMap(entries, index_by_address, mutation_count, mutation_count - 1)
 
 ChoiceMap(entries::Vector{Pair{Address,Any}}, index_by_address::Dict{Address,Int}) =
     ChoiceMap(entries, index_by_address, 0)

@@ -87,7 +87,11 @@ function hmc(
     position = _initial_hmc_position(model, args, constraints, initial_params, rng)
     current_logjoint = logjoint_unconstrained(model, position, args, constraints)
     isfinite(current_logjoint) ||
-        throw(ArgumentError("initial HMC parameters produced a non-finite unconstrained logjoint"))
+        throw(
+            ArgumentError(
+                "initial HMC parameters produced a non-finite unconstrained logjoint; supply finite initial_params, or check the constraint values for NaN/Inf",
+            ),
+        )
     # sampler-owned evaluation: Stan-style reject semantics (issue #157)
     gradient_cache = _logjoint_gradient_cache(model, position, args, constraints; reject_invalid_parameters=true)
 
@@ -284,12 +288,20 @@ function nuts(
     position = _initial_hmc_position(model, args, constraints, initial_params, rng)
     current_logjoint = logjoint_unconstrained(model, position, args, constraints)
     isfinite(current_logjoint) ||
-        throw(ArgumentError("initial NUTS parameters produced a non-finite unconstrained logjoint"))
+        throw(
+            ArgumentError(
+                "initial NUTS parameters produced a non-finite unconstrained logjoint; supply finite initial_params, or check the constraint values for NaN/Inf",
+            ),
+        )
     # sampler-owned evaluation: Stan-style reject semantics (issue #157)
     gradient_cache = _logjoint_gradient_cache(model, position, args, constraints; reject_invalid_parameters=true)
     current_gradient = copy(_logjoint_gradient!(gradient_cache, position))
     all(isfinite, current_gradient) ||
-        throw(ArgumentError("initial NUTS parameters produced a non-finite unconstrained gradient"))
+        throw(
+            ArgumentError(
+                "initial NUTS parameters produced a non-finite unconstrained gradient; supply finite initial_params, or check the constraint values for NaN/Inf",
+            ),
+        )
 
     unconstrained_samples = Matrix{Float64}(undef, num_params, num_samples)
     constrained_samples = Matrix{Float64}(undef, constrained_num_params, num_samples)
