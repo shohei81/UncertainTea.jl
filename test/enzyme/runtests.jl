@@ -9,6 +9,8 @@
 
 using Random, Test, LinearAlgebra
 using UncertainTea
+using UncertainTea.Inference
+using UncertainTea.Diagnostics
 const UT = UncertainTea
 using ForwardDiff
 using Enzyme   # activates UncertainTeaEnzymeExt

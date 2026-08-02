@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- **Namespaced public API** (#329): the flat export surface is reorganized
+  into a minimal modeling-language top level plus three facade submodules.
+  `using UncertainTea` now brings in only the `@tea` DSL, the trace/choicemap
+  types, `generate`/`assess`/`logjoint`, and the distribution constructors;
+  everything else moved to `UncertainTea.Inference` (samplers, fitters, result
+  types/accessors, density and parameter machinery),
+  `UncertainTea.Diagnostics` (chain summaries, convergence checks, draw
+  export, model comparison, predictive checks), and `UncertainTea.Device`
+  (the KernelAbstractions device density APIs). Every name is still defined in
+  (and reachable qualified from) the parent module — `UncertainTea.nuts`
+  keeps working — only unqualified use after `using UncertainTea` changes.
+
+  Migration: add the submodule `using`s next to `using UncertainTea`.
+
+  | Before (unqualified via `using UncertainTea`) | Now import with |
+  | --- | --- |
+  | `nuts`, `hmc_chains`, `batched_nuts`, `batched_advi`, `pathfinder`, `gibbs`, `sbc`, `map_estimate`, … and their result types; `logjoint_unconstrained`, `batched_logjoint*`, `parameter_vector`, `transform_to_*`, `reverse_mode_gradient`, … | `using UncertainTea.Inference` |
+  | `summarize`, `rhat`, `ess`, `check_diagnostics`, `posterior_array`, `to_arviz_dict`, `to_mcmcchains`, `waic`, `psis_loo`, `loo`, `predict`, `prior_predictive`, … | `using UncertainTea.Diagnostics` |
+  | `device_batched_logjoint*`, `device_lowering_report`, `DeviceBatchedWorkspace`, `DeviceExecutionPlan`, `DeviceHMCWorkspace` | `using UncertainTea.Device` |
+  | `@tea`, `choicemap`, `generate`, `assess`, `logjoint`, distribution constructors (`normal`, …), `register_distribution`, … | unchanged — `using UncertainTea` |
+
 ## v0.2.0 (unreleased → pending registration)
 
 A large feature release. Breaking only in the export surface (see the first
