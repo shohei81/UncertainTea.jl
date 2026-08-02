@@ -153,6 +153,41 @@ latent function gradient-free — see
 These join the scalar and multivariate families listed in
 [Getting Started](getting-started.md#distributions).
 
+## Using Distributions.jl families
+
+Any [Distributions.jl](https://github.com/JuliaStats/Distributions.jl)
+**univariate** distribution can join `@tea` models with one line: loading
+`Distributions` activates the `UncertainTeaDistributionsExt` extension, which
+adds a positional [`register_distribution`](@ref) method that wraps the
+distribution for you:
+
+```julia
+using UncertainTea
+import Distributions
+
+register_distribution(:skewnormal, Distributions.SkewNormal)
+
+@tea static function robust_location()
+    mu ~ skewnormal(0.0, 1.0, 4.0)   # latent: works with NUTS/HMC
+    {:y} ~ skewnormal(mu, 1.0, 4.0)  # observed: works for anything univariate
+    return mu
+end
+```
+
+Latent use needs the unconstrained transform, which is read off
+`Distributions.support` automatically when the support is a fixed property of
+the type (real line, positive half-line, unit interval, other fixed bounds).
+When it depends on the parameters (e.g. `Uniform`), pass it explicitly:
+`register_distribution(:myuniform, Distributions.Uniform; support=(0.0, 1.0))`
+— or `support=:none` for observation-only use. Discrete families register
+observation-only automatically. See [`wrap_distribution`](@ref) for the full
+support-mapping rules and the honest limitations (univariate only; CPU
+reference path; latent use requires a ForwardDiff-differentiable `logpdf`).
+
+For densities Distributions.jl does not provide, the kwarg form
+`register_distribution(family; builder, transform)` accepts any hand-written
+`AbstractTeaDistribution` — see its docstring.
+
 ## Gradients and AD selection
 
 Compiled static models get gradients from a tiered strategy, chosen per model

@@ -165,3 +165,79 @@ the wider Julia and Python ecosystems.
 
 See the [Eight Schools example](generated/eight_schools.md) for a full run with
 real posterior output.
+
+## Working with results
+
+### Plotting
+
+The plotting route goes through [`to_mcmcchains`](@ref): loading `MCMCChains`
+activates UncertainTea's package extension, and `MCMCChains.Chains` objects
+carry [StatsPlots](https://github.com/JuliaPlots/StatsPlots.jl) recipes for
+trace plots, densities, autocorrelation, corner plots, and more:
+
+```julia
+using UncertainTea, UncertainTea.Inference
+import MCMCChains
+using StatsPlots
+
+chains = nuts_chains(model, args, constraints; num_chains=4)
+mc = to_mcmcchains(chains)
+
+plot(mc)             # trace + density per parameter
+autocorplot(mc)
+corner(mc)
+```
+
+The `:internals` section of the converted object carries the per-draw sampler
+statistics (`:lp`, `:diverging`, `:energy`, `:tree_depth`,
+`:acceptance_rate`), so e.g. `plot(mc[:, [:lp], :])` shows the log-density
+trace. Note the qualified-call caveat in the [`to_mcmcchains`](@ref)
+docstring: `MCMCChains` also exports `summarize`/`ess`/`rhat`, so call the
+UncertainTea versions qualified once both packages are loaded.
+
+### Tabular access (Tables.jl / DataFrames.jl)
+
+`HMCChains` and `PredictiveDraws` implement the
+[Tables.jl](https://github.com/JuliaData/Tables.jl) interface (loading
+`Tables` — which `DataFrames` does automatically — activates the
+`UncertainTeaTablesExt` extension), so they slot into any Tables.jl sink:
+
+```julia
+using DataFrames
+
+df = DataFrame(chains)     # chain, draw, then one column per parameter
+pp = DataFrame(predict(model, args, chains; num_draws=200))  # draw + one column per address
+```
+
+The chains table is wide and chain-major (chain 1's draws in order, then
+chain 2's, ...), with parameter columns named as in
+[`parameter_names`](@ref) (vector latents flatten to `v[1]`, `v[2]`, ...).
+
+### Persisting results across sessions (JLD2)
+
+Result structs such as `HMCChains` embed the model, and a `@tea` model
+contains compiled closures — which JLD2 stores **by name only**. Saving the
+whole result works within a session, but reloading in a fresh session cannot
+reconstruct the model and yields a warning plus an unusable stub. Persist the
+**draws and names** instead of the result struct:
+
+```julia
+using JLD2
+
+jldsave("fit.jld2";
+    draws=posterior_array(chains),          # (num_samples, num_chains, num_params)
+    names=parameter_names(chains),
+    stats=to_arviz_dict(chains)["sample_stats"],  # optional: per-draw sampler stats
+)
+
+# fresh session — no model definition needed:
+using JLD2
+fit = load("fit.jld2")
+fit["draws"], fit["names"]
+```
+
+Everything saved this way is plain arrays/strings/dicts, so it reloads
+without UncertainTea installed at all. To resume model-coupled workflows
+(`predict`, `loo`, `summarize`), re-run the `@tea` definition in the new
+session and pair it with the reloaded draws; for archival interchange,
+`to_arviz_dict` output round-trips through NPZ/JSON to Python ArviZ.
