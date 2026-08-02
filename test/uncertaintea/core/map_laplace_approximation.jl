@@ -143,10 +143,11 @@
     @test export_stats["lp"][3, 1] == export_chains.chains[1].logjoint_values[3]
     @test export_stats["lp"][10, 2] == export_chains.chains[2].logjoint_values[10]
 
-    # MCMCChains extension is not loaded in the test environment: the core
-    # declares `to_mcmcchains` as a method-less function stub.
+    # The core declares `to_mcmcchains` method-less; the UncertainTeaMCMCChainsExt
+    # extension adds the ::HMCChains method once MCMCChains is loaded (which
+    # mcmcchains_export.jl does, so the method count here depends on include
+    # order — the functional coverage lives in that file).
     @test to_mcmcchains isa Function
-    @test length(methods(to_mcmcchains)) == 0
 
     # ------------------------------------------------------------------
     # PR: progress callbacks (zero-overhead when nothing; RNG untouched).
