@@ -74,6 +74,16 @@ Per-chain step-size adaptation is the default across the batched samplers, which
 avoids stranding chains whose initial curvature a single shared step size never
 fits.
 
+### Gradient backend selection (`adtype`)
+
+The batched samplers accept `adtype=:auto | :forward | :reverse` to choose how
+log-joint gradients are computed when no analytic backend gradient applies:
+`:auto` (default) picks Enzyme reverse-mode for models with a generated scorer
+and ≥ 24 parameters and ForwardDiff otherwise, `:reverse` prefers reverse-mode
+whenever the model supports it (host-only), and `:forward` forces ForwardDiff.
+See [Modeling — Gradients and AD selection](modeling.md#gradients-and-ad-selection)
+for the full tiering.
+
 ## The device backend
 
 Passing a `backend` (a `KernelAbstractions.Backend`) to the batched samplers
@@ -118,13 +128,24 @@ statistically equivalent to — not bitwise identical to — the CPU path.
   `marginalize=:enumerate`); validated for correctness in low dimension —
   `:rwmh` mixing, hence evidence quality, degrades as dimension grows and needs a
   longer `num_walk`.
+- [`elliptical_slice`](@ref) — elliptical slice sampling (Murray, Adams &
+  MacKay 2010) for targets `p(f) ∝ N(f; 0, LL') · exp(loglik(f))`: gradient-free
+  and tuning-free, the standard tool for latent Gaussian-process functions
+  under non-Gaussian likelihoods. Pair it with `gp_cholesky` for the prior
+  factor — see [Modeling — Gaussian processes](modeling.md#gaussian-processes).
 - Model comparison and predictive helpers: `waic`, `psis_loo` / `loo`,
-  `pointwise_loglikelihood`, and `predict`.
+  `pointwise_loglikelihood`, and `predict`, plus [`prior_predictive`](@ref)
+  for the prior-workflow check before conditioning (does the model generate
+  data on the right scale?).
 
 ## Diagnostics and export
 
 `summarize`, `rhat`, `ess`, `check_diagnostics`, and `has_warnings` report
-convergence and sampling health. `posterior_array`, `parameter_names`,
+convergence and sampling health. `rhat(chains; method=:rank)` computes the
+rank-normalized split-R̂ of Vehtari et al. (2021) — the max of the bulk and
+tail-sensitive folded statistics, robust to heavy tails and nonlinear scale,
+now the standard in Stan/ArviZ (`method=:split`, the default, is the classical
+split-chain statistic). `posterior_array`, `parameter_names`,
 `to_arviz_dict`, and `to_mcmcchains` (via the MCMCChains extension) hand draws to
 the wider Julia and Python ecosystems.
 

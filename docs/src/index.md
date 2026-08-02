@@ -20,6 +20,10 @@ extension) is under active development.
 
 - Gen-like modeling with `@tea` and `@tea static`, tilde syntax, explicit and
   hierarchical addresses, and external conditioning via `choicemap`.
+- Vectorized `family.(...)` observations for GLM likelihoods, a
+  Gaussian-process suite (dense, sparse/FITC, and latent, with composable
+  kernels), and structured families like `hmm` and `orderedlogistic` — see
+  [Modeling](modeling.md).
 - Static model introspection through `modelspec`, `parameterlayout`,
   `executionplan`, and backend reports.
 - CPU reference evaluation with `generate`, `assess`, `logjoint`, unconstrained
@@ -79,6 +83,8 @@ println(summary.parameters[1].mean)   # posterior mean of mu
 ## Where to go next
 
 - [Getting Started](getting-started.md) — the `@tea` DSL and static semantics.
+- [Modeling](modeling.md) — GLM observations, Gaussian processes, and the
+  structured distributions.
 - [Inference Overview](inference.md) — samplers, batching, and the device path.
 - [Eight Schools example](generated/eight_schools.md) — a runnable hierarchical
   model with real posterior output.

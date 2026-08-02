@@ -90,6 +90,14 @@ periodic_kernel(lengthscale, variance, period) = PeriodicKernel(lengthscale, var
 kernel_sum(a::AbstractGPKernel, b::AbstractGPKernel) = SumKernel(a, b)
 kernel_product(a::AbstractGPKernel, b::AbstractGPKernel) = ProductKernel(a, b)
 
+# The shared docstring above only binds to the first definition; attach it to
+# the rest of the kernel constructors so `@ref` links and `?` lookups resolve.
+@doc (@doc rbf_kernel) matern32_kernel
+@doc (@doc rbf_kernel) matern52_kernel
+@doc (@doc rbf_kernel) periodic_kernel
+@doc (@doc rbf_kernel) kernel_sum
+@doc (@doc rbf_kernel) kernel_product
+
 # lengthscale-scaled squared distance sum_d ((a_d - b_d) / l_d)^2
 @inline function _gp_scaled_sqdist(lengthscale, a, i, b, j)
     d2 = zero(promote_type(eltype(a), eltype(b), _gp_lengthscale_eltype(lengthscale)))
