@@ -4,7 +4,7 @@ mutable struct ChoiceMap
     entries::Vector{Pair{Address,Any}}
     index_by_address::Dict{Address,Int}
     # Monotonic mutation counter (issue #145): the dense observation staging in
-    # evaluator.jl snapshots constrained values at gradient-cache construction
+    # evaluator/staging.jl snapshots constrained values at gradient-cache construction
     # and assumes the constraints stay immutable for the cache's lifetime. Every
     # `_pushchoice!` bumps this counter (insert AND value replacement), so the
     # staged scorer can verify the assumption in O(1) and fall back to live
@@ -13,7 +13,7 @@ mutable struct ChoiceMap
     mutation_count::Int
     # NaN observation guard stamp (issue #346): the `mutation_count` value the
     # constraint values were last scanned for NaN at (see
-    # `_validate_constraint_values_not_nan` in evaluator.jl). Initialized to a
+    # `_validate_constraint_values_not_nan` in evaluator/signature.jl). Initialized to a
     # value no live `mutation_count` can hold so a fresh map is always scanned
     # once; the scan re-runs only after a mutation, keeping the per-evaluation
     # cost at one Int comparison.

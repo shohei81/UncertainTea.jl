@@ -13,7 +13,7 @@
 #
 # The `device` flag is recorded here for the same reason but is not yet a
 # derivation source: device lowerability lives in `_lower_device_step!`
-# method dispatch (device/plan.jl), which stage 2 of #331 will generate from
+# method dispatch (device/plan/lowering.jl), which stage 2 of #331 will generate from
 # this table. test/uncertaintea/core/family_table_consistency.jl pins the
 # memberships and the coherence invariants between the flags.
 #
@@ -57,7 +57,7 @@ struct DistributionFamilySpec
     # (`GPU_BACKEND_SUPPORTED_DISTRIBUTIONS`)
     backend::Bool
     # lowered by the Metal device plan (has a `_lower_device_step!` wrapper
-    # in device/plan.jl); recorded, not yet derived (see header)
+    # in device/plan/lowering.jl); recorded, not yet derived (see header)
     device::Bool
 end
 

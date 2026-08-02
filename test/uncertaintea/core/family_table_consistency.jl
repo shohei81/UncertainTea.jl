@@ -82,7 +82,7 @@
     ]
 
     # device-lowerable families (recorded in the table; the actual gate is
-    # `_lower_device_step!` dispatch in device/plan.jl until #331 stage 2
+    # `_lower_device_step!` dispatch in device/plan/lowering.jl until #331 stage 2
     # generates those wrappers from the table): backend minus the four
     # families without device wrappers
     famtab_device = Set(spec.family for spec in famtab if spec.device)

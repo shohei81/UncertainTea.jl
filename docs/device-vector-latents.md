@@ -14,7 +14,7 @@ Three independent walls, from the bottom up:
    `value_source::Int32` — `> 0` means "read ONE unconstrained parameter row and
    apply ONE scalar transform code" (`Identity`/`Log`/`Logit`), `< 0` means
    "read ONE staged observation row". `_device_choice_value_source`
-   (src/device/plan.jl) rejects `slot.value_length != 1 || slot.dimension != 1`,
+   (src/device/plan/lowering.jl) rejects `slot.value_length != 1 || slot.dimension != 1`,
    and `_device_transform_code` rejects every vector transform.
 2. **Device staging emits one observation row per choice.**
    `_stage_observed_row!` (src/device/staging.jl) resolves observations through
