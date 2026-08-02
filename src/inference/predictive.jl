@@ -107,6 +107,18 @@ function prior_predictive(
 end
 
 # Posterior predictive from pooled HMC/NUTS chains.
+"""
+    predict(model, args, result; num_draws, rng) -> PredictiveDraws
+    predict(model, args=(); num_draws=1000, rng) -> PredictiveDraws
+
+Posterior predictive draws: for each posterior draw in `result` (an
+`HMCChains`, `ImportanceSamplingResult`, `SIRResult`, `SMCResult`, or
+`NestedSamplingResult`), fix the latent parameters at that draw and re-sample
+the model's remaining choices — the observation addresses. Weighted results
+are resampled in proportion to their importance weights first. The form
+without a result runs the prior instead (unconstrained `generate` per draw,
+keeping all addresses). Returns `PredictiveDraws`; see also `prior_predictive`.
+"""
 function predict(
     model::TeaModel,
     args::Tuple,

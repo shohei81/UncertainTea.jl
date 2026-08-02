@@ -177,6 +177,15 @@ function _lbfgs_maximize(
     return (x, fx, g, gnorm, iteration, converged)
 end
 
+"""
+    map_estimate(model, args=(), constraints=choicemap(); init=nothing, max_iters=500, g_tol=1e-8, history=10, rng) -> MAPResult
+
+Maximum a posteriori estimate: maximize the unconstrained-space log joint with
+L-BFGS (memory `history`, at most `max_iters` iterations, gradient-norm
+tolerance `g_tol`). `init` seeds the optimizer (a random draw when `nothing`).
+Returns a `MAPResult` carrying the unconstrained and constrained modes, the
+objective value, and convergence information.
+"""
 function map_estimate(
     model::TeaModel,
     args::Tuple=(),
@@ -201,6 +210,14 @@ function map_estimate(
     return MAPResult(mode, constrained, fx, converged, iterations, gnorm)
 end
 
+"""
+    laplace_approximation(model, args=(), constraints=choicemap(); kwargs...) -> LaplaceResult
+
+Laplace (Gaussian) approximation of the posterior in unconstrained space: find
+the mode with `map_estimate` (keyword arguments are forwarded), then set the
+covariance to the inverse of the negative Hessian at the mode. Returns a
+`LaplaceResult`; draw samples from it with `rand(rng, result, n)`.
+"""
 function laplace_approximation(
     model::TeaModel,
     args::Tuple=(),

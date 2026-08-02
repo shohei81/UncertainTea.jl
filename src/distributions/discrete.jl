@@ -81,14 +81,32 @@ end
 # Builders normalize parameters through `float` so integer (or other non-float
 # real) literals reach the samplers as float storage (issue #73); `float` keeps
 # ForwardDiff Duals intact.
+"""
+    bernoulli(p)
+
+Bernoulli distribution over `{0, 1}` with success probability `p`.
+"""
 function bernoulli(p)
     return BernoulliDist(float(p))
 end
 
+"""
+    geometric(p)
+
+Geometric distribution over `0, 1, 2, ...`: the number of failures before the
+first success in Bernoulli trials with success probability `p`.
+"""
 function geometric(p)
     return GeometricDist(float(p))
 end
 
+"""
+    bernoullilogit(eta)
+
+Bernoulli distribution parameterized on the logit scale: success probability
+`logistic(eta) = 1 / (1 + exp(-eta))`, evaluated in a numerically stable way
+(no manual clamping needed).
+"""
 function bernoullilogit(eta)
     return BernoulliLogitDist(float(eta))
 end
@@ -115,11 +133,25 @@ function binomial(trials, p)
     return BinomialDist(count, float(p))
 end
 
+"""
+    negativebinomial(successes, p)
+
+Negative binomial distribution over `0, 1, 2, ...`: the number of failures
+before `successes` successes in Bernoulli trials with success probability `p`.
+`successes` may be non-integer (the Polya/gamma-Poisson generalization).
+"""
 function negativebinomial(successes, p)
     promoted_successes, promoted_probability = promote(float(successes), float(p))
     return NegativeBinomialDist(promoted_successes, promoted_probability)
 end
 
+"""
+    categorical(probabilities)
+    categorical(p1, p2, ...)
+
+Categorical distribution over the integer categories `1:K`, where `K` is the
+number of probabilities supplied (as a vector or as separate arguments).
+"""
 function categorical(probabilities::AbstractVector)
     promoted = map(float, collect(probabilities))
     return CategoricalDist(promoted)
@@ -130,6 +162,11 @@ function categorical(probabilities::Vararg{Real})
     return CategoricalDist(promoted)
 end
 
+"""
+    poisson(lambda)
+
+Poisson distribution over `0, 1, 2, ...` with mean (rate) `lambda`.
+"""
 function poisson(lambda)
     return PoissonDist(float(lambda))
 end

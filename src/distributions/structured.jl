@@ -346,6 +346,18 @@ function Random.rand(rng::AbstractRNG, dist::BroadcastScalarDist{F}) where {F}
     ]
 end
 
+"""
+    iid(base, n)
+
+Vector of `n` independent draws from the `base` distribution under a single
+address: `theta ~ iid(normal(mu, tau), 8)` inside a `@tea` model gives a
+length-8 vector choice. In static models the count `n` must be a literal
+integer at macro-expansion time (the plan needs the shape). For the
+location-scale bases `normal`, `studentt`, and `laplace`,
+`theta ~ iid(normal(mu, tau), 8, reparam=:noncentered)` samples standardized
+coordinates and rescales — the standard fix for funnel geometries in
+hierarchical models.
+"""
 function iid(base::AbstractTeaDistribution, n::Integer)
     n >= 1 || throw(ArgumentError("iid requires n >= 1"))
     return IIDDist(base, Int(n))
@@ -363,6 +375,13 @@ struct IIDDist{D<:AbstractTeaDistribution} <: AbstractTeaDistribution
     end
 end
 
+"""
+    dirichlet(alpha)
+    dirichlet(a1, a2, ...)
+
+Dirichlet distribution over probability vectors (the simplex) with
+concentration parameters `alpha` (a vector, or separate positive arguments).
+"""
 function dirichlet(alpha::AbstractVector)
     promoted = map(float, collect(alpha))
     return DirichletDist(promoted)
@@ -390,6 +409,13 @@ function _mvnormal_promoted_type(vectors...)
     return float(promoted_type)
 end
 
+"""
+    mvnormal(mu, sigma)
+
+Multivariate normal with independent components: mean vector `mu` and
+per-component standard deviations `sigma` (a diagonal covariance). For a full
+covariance use `mvnormaldense`.
+"""
 function mvnormal(mu, sigma)
     mu_values = _mvnormal_vector(mu)
     sigma_values = _mvnormal_vector(sigma)
@@ -403,6 +429,13 @@ function mvnormal(mu, sigma)
     )
 end
 
+"""
+    mvnormaldense(mu, scale_tril)
+
+Multivariate normal with mean vector `mu` and dense covariance given by its
+lower-triangular Cholesky factor `scale_tril` (covariance `L * L'` with
+`L = scale_tril`).
+"""
 function mvnormaldense(mu, scale_tril)
     (mu isa AbstractVector || mu isa Tuple) ||
         throw(ArgumentError("mvnormaldense requires a vector-like mean argument"))
@@ -523,6 +556,14 @@ end
 # evaluator's materialization of a vector-literal weights argument, issue #75)
 # to the promoted element type, mirroring `mvnormaldense` and `scale_cholesky`;
 # heterogeneous weights are then promoted to a common Real type.
+"""
+    mixture(weights, components...)
+
+Finite mixture of distributions with the component indicator marginalized out:
+`mixture([0.3, 0.7], normal(-2.0, 1.0), normal(2.0, 1.0))`. `weights` must be
+nonnegative and sum to 1, with one weight per component; the log-density is the
+log-sum-exp over the weighted component log-densities.
+"""
 function mixture(weights, components...)
     isempty(components) && throw(ArgumentError("mixture requires at least one component"))
     weight_values = map(identity, collect(weights))

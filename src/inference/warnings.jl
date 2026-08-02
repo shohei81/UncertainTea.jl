@@ -26,6 +26,15 @@ end
 # Default threshold below which a chain's E-BFMI counts as a warning.
 const _EBFMI_WARNING_THRESHOLD = 0.3
 
+"""
+    check_diagnostics(chains::HMCChains; space=:constrained, rhat_threshold=1.01, ess_threshold=100.0, ebfmi_threshold=0.3) -> SamplerWarnings
+
+Collect the standard sampler health checks: per-chain divergence counts,
+E-BFMI, treedepth-saturation counts, and the parameters whose R-hat exceeds
+`rhat_threshold` or whose ESS falls below `ess_threshold` (the R-hat/ESS checks
+need at least 2 chains and 4 samples). Returns a `SamplerWarnings`; query it
+with `has_warnings`.
+"""
 function check_diagnostics(
     chains::HMCChains;
     space::Symbol=:constrained,

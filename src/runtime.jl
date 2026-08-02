@@ -90,10 +90,25 @@ function _run_model(
     return trace, ctx.log_weight
 end
 
+"""
+    generate(model::TeaModel, args=(), constraints=choicemap(); rng) -> (trace, log_weight)
+
+Run `model` with the given argument tuple, sampling every random choice whose
+address is absent from `constraints` and fixing (and scoring) every choice
+whose address is present. Returns the resulting `TeaTrace` and the log-weight:
+the sum of the log-densities of the constrained choices.
+"""
 function generate(model::TeaModel, args::Tuple=(), constraints::ChoiceMap=choicemap(); rng::AbstractRNG=Random.default_rng())
     return _run_model(model, args, constraints; rng=rng)
 end
 
+"""
+    assess(model::TeaModel, args=(), constraints=choicemap(); rng) -> Float64
+
+Score a complete execution: every random choice the model makes must have a
+value in `constraints` (a missing address throws). Returns the log joint
+density of the supplied choices.
+"""
 function assess(model::TeaModel, args::Tuple=(), constraints::ChoiceMap=choicemap(); rng::AbstractRNG=Random.default_rng())
     _, log_weight = _run_model(model, args, constraints; rng=rng, require_all_choices_scored=true)
     return log_weight

@@ -822,6 +822,19 @@ function _clip_flat_gradient!(gradient::AbstractVector, gradient_clip::Real)
     return gradient_norm
 end
 
+"""
+    batched_advi(model, args=(), constraints=choicemap(); num_steps, num_particles=32, learning_rate=0.05, guide=:meanfield, elbo=:standard, kwargs...) -> ADVIResult
+
+Automatic differentiation variational inference with `num_particles` particles
+per Adam step, run for `num_steps` steps. `guide` selects the variational
+family: `:meanfield`, `:fullrank`, and `:lowrank` are Gaussian in unconstrained
+space, while `:flow` stacks affine coupling layers (RealNVP-style) on a
+mean-field base to capture nonlinear correlation and skew. `elbo=:standard`
+(default) is the reparameterized ELBO; `elbo=:iwae` is the strictly tighter
+importance-weighted bound with group size `iwae_samples` (available for
+`:meanfield`, `:fullrank`, and `:flow`). Passing a KernelAbstractions `backend`
+runs the mean-field/standard-ELBO path on the device.
+"""
 function batched_advi(
     model::TeaModel,
     args::Tuple=(),

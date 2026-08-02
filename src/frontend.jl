@@ -1095,6 +1095,23 @@ function _expand_tea(mode_expr, definition)
     return esc(Expr(:block, function_definition, filler_definition, binding_definition))
 end
 
+"""
+    @tea static function name(args...) ... end
+    @tea function name(args...) ... end
+
+Define a probabilistic model; the macro binds `name` to a `TeaModel`. Inside
+the body, `mu ~ normal(0.0, 1.0)` makes a random choice bound to `mu` with the
+implicit address `:mu`; `{:y} ~ normal(mu, 1.0)` uses an explicit address; and
+`{:y => i} ~ ...` builds hierarchical addresses (typically in a loop over
+data). Deterministic local computation is allowed between choices.
+
+`@tea static` requires a fixed model structure (statically enumerable choices,
+static or shape-specialized loop bounds, no `if`/`else` branches) and compiles
+to the execution plan that powers the fast scoring, gradient, and sampling
+paths; the plain `@tea function` form keeps fully dynamic `generate`/`assess`
+semantics. Condition a model by passing a `choicemap` of observed addresses to
+the inference entry points (`generate`, `nuts`, ...).
+"""
 macro tea(args...)
     if length(args) == 1
         return _expand_tea(:dynamic, args[1])
