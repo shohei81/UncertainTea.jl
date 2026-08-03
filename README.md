@@ -41,6 +41,9 @@ UncertainTea `0.2.0` is an experimental release.
   `laplace_approximation`
 - Diagnostics and model comparison: `sbc` (simulation-based calibration),
   `waic`, `psis_loo` / `loo`, and posterior-predictive `predict`
+- Ecosystem interop via package extensions: `to_mcmcchains` (MCMCChains /
+  StatsPlots recipes), `to_arviz_dict` (Python ArviZ), and the Tables.jl
+  interface (`DataFrame(chains)`)
 - Experimental GPU-oriented lowering and device execution: support checks via
   `backend_report` and `backend_execution_plan`, plus a KernelAbstractions
   device backend (`device_batched_logjoint`, `device_batched_logjoint_gradient`,
@@ -132,7 +135,9 @@ the `gp_cholesky` helper for direct latent-function inference under non-Gaussian
 likelihoods, and `sparsegaussianprocess` for the `O(NM²+M³)` FITC inducing-point
 approximation), `hmm` (Gaussian-emission hidden Markov models via the forward
 algorithm), and finite `mixture`s; plus `iid` vectors and
-user-defined families via `register_distribution` (`AbstractTeaDistribution`).
+user-defined families via `register_distribution` (`AbstractTeaDistribution`,
+or any Distributions.jl univariate with one line via the Distributions.jl
+extension).
 
 ## Documentation
 

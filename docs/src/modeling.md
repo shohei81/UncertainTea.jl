@@ -198,7 +198,8 @@ and conditioning signature:
    hand-derived per-family partials. No AD involved.
 2. **Reverse-mode AD (Enzyme)** — models with a generated scorer and many
    parameters use Enzyme reverse-mode, whose cost is independent of parameter
-   count. Loading `Enzyme` activates the extension.
+   count. Loading `Enzyme` activates the extension. Non-centered
+   (`reparam=:noncentered`) and truncated-t latents are covered.
 3. **Forward-mode AD (ForwardDiff)** — the default fallback; cost grows with
    parameter count.
 
@@ -208,7 +209,10 @@ The batched samplers accept `adtype`:
   the model supports it **and** has ≥ 24 parameters (below that, forward mode
   wins on constant factors); otherwise forward.
 - `:reverse` — prefer reverse-mode whenever the model supports it
-  (host-only; cannot be combined with a device `backend`).
+  (host-only; cannot be combined with a device `backend`). If the model
+  cannot engage reverse mode (Enzyme not loaded, interpreter-path model,
+  ...), an explicit `:reverse` warns once and falls back to forward mode —
+  it never fails silently.
 - `:forward` — force forward-mode.
 
 ```julia
@@ -236,6 +240,22 @@ draws = prior_predictive(model, args, constraints; num_draws=200)
 
 It returns the same `PredictiveDraws` container as `predict`, so the same
 plotting/summary code applies to prior and posterior predictive draws.
+
+## Numerical robustness
+
+A few guarantees worth knowing when data or parameters get extreme:
+
+- A `NaN` inside a constrained observation value throws an `ArgumentError`
+  naming the offending address (NaN in data is always a bug; `Inf` stays
+  allowed and can legitimately score `-Inf`).
+- When a latent saturates its support boundary in unconstrained space (e.g. a
+  logit-transformed latent past `theta ≈ 36.7`), the log-joint scores `-Inf`
+  **and** the gradient goes non-finite, so gradient-based samplers reject the
+  point instead of following a silently wrong finite gradient.
+- The count families (`binomial`, `poisson`, `negativebinomial`) stay accurate
+  at extreme counts (saddle-point kernels above `1e8`, integer-valued float
+  counts accepted beyond `typemax(Int)`), and `vonmises` sampling is safe at
+  both ends of the `kappa` range.
 
 ## Next steps
 

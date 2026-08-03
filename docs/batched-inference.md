@@ -93,7 +93,7 @@ non-analytic gradient cost from `O(P²)` into `O(P)` (measured 18.9× at `P=100`
 107× at `P=800`; see `bench/reverse_mode/`):
 
 ```julia
-using UncertainTea, Enzyme
+using UncertainTea, UncertainTea.Inference, Enzyme
 gp_nlml(h) = UncertainTea.logpdf(gaussianprocess(X, exp(h[1]), exp(h[2]), exp(h[3])), y)
 g = reverse_mode_gradient(gp_nlml, [0.0, 0.0, -1.0])   # pure objective
 g = reverse_mode_gradient(model, theta, args, constraints)  # whole model
@@ -129,7 +129,7 @@ a `P=60` non-analytic model, 4 chains, 200+200), with a posterior statistically
 identical to forward mode.
 
 ```julia
-using UncertainTea, Enzyme
+using UncertainTea, UncertainTea.Inference, Enzyme
 chain = batched_nuts(model, args, constraints; num_chains=4, num_samples=1000,
                      num_warmup=1000, adtype=:auto)   # reverse when it helps, forward otherwise
 ```

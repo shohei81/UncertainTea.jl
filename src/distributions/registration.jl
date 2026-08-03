@@ -36,9 +36,11 @@ model-side arguments; it must return an `AbstractTeaDistribution` implementing
 `UncertainTea.logpdf(dist, x)` and `Random.rand(rng, dist)`.
 
 `transform` declares the unconstrained parameterization used when the family
-appears as a latent: one of the exported parameter transforms (e.g.
-`IdentityTransform()` for real-line support, `LogTransform()` for positive
-support, `LogitTransform()` for (0,1), `BoundedTransform(lower, upper)`).
+appears as a latent: one of the parameter transforms (unexported — qualify
+as e.g. `UncertainTea.IdentityTransform()` for real-line support,
+`UncertainTea.LogTransform()` for positive support,
+`UncertainTea.LogitTransform()` for (0,1),
+`UncertainTea.BoundedTransform(lower, upper)`).
 Leave it `nothing` for observation-only families -- a latent then gets no
 parameter slot, matching how unsupported built-in latents behave.
 

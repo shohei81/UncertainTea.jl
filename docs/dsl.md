@@ -860,7 +860,7 @@ function Random.rand(rng::AbstractRNG, dist::SkewNormalDist)
     return dist.location + dist.scale * (delta * abs(u0) + sqrt(1 - delta^2) * v)
 end
 
-register_distribution(:skewnormal; builder=skewnormal, transform=IdentityTransform())
+register_distribution(:skewnormal; builder=skewnormal, transform=UncertainTea.IdentityTransform())
 
 @tea static function model()
     x ~ skewnormal(0.0, 1.0, 3.0)
@@ -871,8 +871,15 @@ end
 
 `transform` declares the unconstrained parameterization for latent use --
 `IdentityTransform()` (real line), `LogTransform()` (positive),
-`LogitTransform()` ((0,1)), or `BoundedTransform(lower, upper)`. Omit it for
+`LogitTransform()` ((0,1)), or `BoundedTransform(lower, upper)`. Since the
+v0.2.0 export curation these transform types are unexported, so qualify them
+(`UncertainTea.IdentityTransform()`, ...). Omit `transform` for
 observation-only families; a latent then gets no parameter slot.
+
+*(Update 2026-08, issue #340: for Distributions.jl families the builder and
+transform can be derived automatically — loading Distributions.jl adds the
+positional `register_distribution(:skewnormal, Distributions.SkewNormal)`
+one-liner; see the Modeling page of the rendered docs.)*
 
 Rules and caveats:
 
