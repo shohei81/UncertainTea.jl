@@ -42,11 +42,11 @@ extension) is under active development.
 
 ## Installation
 
-UncertainTea targets Julia 1.10+.
+UncertainTea targets Julia 1.10+ and is registered in the General registry.
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/shohei81/UncertainTea.jl.git")
+Pkg.add("UncertainTea")
 ```
 
 For local development:

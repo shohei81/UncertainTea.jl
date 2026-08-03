@@ -252,9 +252,9 @@ entry); model code written against v0.1.0 runs unchanged.
   gradients consume the one declaration, and the device kernels are pinned to
   it by a per-family parity test (#296–#298).
 
-## v0.1.0
+## v0.1.0 (2026-08-03)
 
-Initial registered release: the static `@tea` DSL with constraint-driven
+Initial registered release on the Julia General registry: the static `@tea` DSL with constraint-driven
 conditioning, CPU/batched/Metal-device inference (NUTS/HMC/ChEES/MEADS, ADVI,
 SVGD, SMC, gibbs, pathfinder, nested sampling), a broad distribution library,
 and diagnostics (split-R̂, ESS, MCSE, WAIC, PSIS-LOO, SBC).
