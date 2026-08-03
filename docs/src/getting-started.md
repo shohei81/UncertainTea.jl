@@ -107,12 +107,17 @@ Structured and specialized families — Gaussian processes (dense, sparse, and
 latent, with a composable kernel language), `hmm`, `orderedlogistic`, and the
 zero-inflated counts — are covered in [Modeling](modeling.md), along with the
 vectorized `family.(...)` observation syntax for GLMs. Custom families can be
-added via `register_distribution`.
+added via `register_distribution` — including any Distributions.jl univariate
+distribution with one line
+(`register_distribution(:skewnormal, Distributions.SkewNormal)`) once
+Distributions.jl is loaded; see [Modeling](modeling.md) for the rules.
 
 ## Next steps
 
 - [Modeling](modeling.md) — vectorized GLM observations, Gaussian processes,
   and the structured distributions.
 - [Inference Overview](inference.md) — how to sample these models.
+- [Working with results](inference.md#working-with-results) — plotting,
+  DataFrames, and persisting draws across sessions.
 - [Eight Schools example](generated/eight_schools.md) — a full hierarchical
   model end to end.

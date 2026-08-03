@@ -92,6 +92,8 @@ println(summary.parameters[1].mean)   # posterior mean of mu
 - [Modeling](modeling.md) — GLM observations, Gaussian processes, and the
   structured distributions.
 - [Inference Overview](inference.md) — samplers, batching, and the device path.
+- [Working with results](inference.md#working-with-results) — plotting,
+  DataFrames, and persisting draws across sessions.
 - [Eight Schools example](generated/eight_schools.md) — a runnable hierarchical
   model with real posterior output.
 - [API Reference](api.md) — the exported surface.

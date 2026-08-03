@@ -33,9 +33,11 @@ The reference entry points run standard MCMC on the CPU:
   its own warmup, combined into an `HMCChains` result.
 
 All of them accept a model, an argument tuple, and a `choicemap` of
-observations, and return chains you can pass to [`summarize`](@ref), `rhat`,
-`ess`, and the export helpers (`posterior_array`, `to_arviz_dict`,
-`to_mcmcchains`).
+observations, and return an `HMCChains` — the single-chain `hmc`/`nuts` return
+a one-chain `HMCChains` (the per-chain record is `first(result)`), so
+everything downstream applies uniformly: [`summarize`](@ref), `rhat`, `ess`
+(defined for a single chain via its split halves), the export helpers
+(`posterior_array`, `to_arviz_dict`, `to_mcmcchains`), `predict`, and `loo`.
 
 ```julia
 chains = nuts_chains(model, args, constraints; num_chains=4, num_samples=500, num_warmup=500)
@@ -95,7 +97,11 @@ log-joint gradients are computed when no analytic backend gradient applies:
 `:auto` (default) picks Enzyme reverse-mode for models with a generated scorer
 and ≥ 24 parameters and ForwardDiff otherwise, `:reverse` prefers reverse-mode
 whenever the model supports it (host-only), and `:forward` forces ForwardDiff.
-See [Modeling — Gradients and AD selection](modeling.md#gradients-and-ad-selection)
+The reverse tier covers non-centered (`reparam=:noncentered`) and truncated-t
+latents; if an explicitly requested `:reverse` cannot engage (Enzyme not
+loaded, interpreter-path model, ...), the sampler warns once and falls back to
+forward mode, while `:auto` falls back silently. See
+[Modeling — Gradients and AD selection](modeling.md#gradients-and-ad-selection)
 for the full tiering.
 
 ## The device backend
@@ -161,12 +167,27 @@ tail-sensitive folded statistics, robust to heavy tails and nonlinear scale,
 now the standard in Stan/ArviZ (`method=:split`, the default, is the classical
 split-chain statistic). `posterior_array`, `parameter_names`,
 `to_arviz_dict`, and `to_mcmcchains` (via the MCMCChains extension) hand draws to
-the wider Julia and Python ecosystems.
+the wider Julia and Python ecosystems. The four-argument
+`to_arviz_dict(model, args, constraints, chains)` additionally emits a
+`"log_likelihood"` group (one matrix per observation address) for
+ArviZ-side LOO/WAIC, and both methods take `layout=:draw_chain` (default,
+Julia InferenceObjects) or `layout=:chain_draw` (Python `az.from_dict`), with
+the chosen layout recorded in an `"attrs"` entry.
 
 See the [Eight Schools example](generated/eight_schools.md) for a full run with
 real posterior output.
 
 ## Working with results
+
+Every inference result — `HMCChains`, `GibbsChain`, `ADVIResult`,
+`PathfinderResult`, `SVGDResult`, `ImportanceSamplingResult`, `SIRResult`,
+`SMCResult`, `NestedSamplingResult`, `EllipticalSliceResult`, `LaplaceResult`,
+and `MAPResult` — implements one common accessor,
+[`constrained_draws`](@ref)`(result; num_draws, rng) -> (draws, names)`: a
+`num_params × num_draws` matrix of constrained-space draws plus display names
+(weighted results are resampled; `MAPResult` yields its mode). `predict` and
+`loo`/`psis_loo`/`waic` route through it, so they accept every result type
+above, not just MCMC chains.
 
 ### Plotting
 
