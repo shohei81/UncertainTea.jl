@@ -284,6 +284,76 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         @test maximum(abs.(mf .- mr)) < 0.15
     end
 
+    @testset "noncentered + truncated-t latents engage the reverse tier (issue #326)" begin
+        # Eight-schools funnel shapes: `reparam=:noncentered` iid latents used to
+        # fail Enzyme type analysis inside the interpreted dependent-transform
+        # walk ("bad enzyme_type ... CompiledChoicePlanStep{...}") because the
+        # compiled step structs carried abstract Union fields; truncated-t
+        # latents are the other shape the issue named. All three must engage the
+        # reverse probe AND match the forward-mode gradient.
+        @tea static function nc326()
+            mu ~ normal(0.0, 5.0)
+            log_tau ~ normal(0.0, 1.0)
+            theta ~ iid(normal(mu, exp(log_tau)), 32; reparam=:noncentered)
+            for j = 1:32
+                {:y => j} ~ normal(theta[j], 1.0)
+            end
+            return mu
+        end
+        @tea static function tt326()
+            mu ~ normal(0.0, 5.0)
+            tau ~ truncatedstudentt(1, 0, 5, 0, Inf)
+            theta ~ iid(normal(mu, tau), 32)
+            for j = 1:32
+                {:y => j} ~ normal(theta[j], 1.0)
+            end
+            return mu
+        end
+        # the canonical funnel: truncated-t scale + noncentered effects at once
+        @tea static function nctt326()
+            mu ~ normal(0.0, 5.0)
+            tau ~ truncatedstudentt(1, 0, 5, 0, Inf)
+            theta ~ iid(normal(mu, tau), 32; reparam=:noncentered)
+            for j = 1:32
+                {:y => j} ~ normal(theta[j], 1.0)
+            end
+            return mu
+        end
+        rng326 = MersenneTwister(326)
+        cm326 = UT.choicemap([(:y => j, randn(rng326)) for j = 1:32])
+        for model in (nc326, tt326, nctt326)
+            params = randn(MersenneTwister(1), 34, 4)
+            cache = UT.BatchedLogjointGradientCache(model, params, (), cm326; adtype=:reverse)
+            @test cache.reverse_cache !== nothing
+            fwd = copy(
+                UT.batched_logjoint_gradient_unconstrained!(
+                    UT.BatchedLogjointGradientCache(model, params, (), cm326; adtype=:forward), params,
+                ),
+            )
+            rev = copy(UT.batched_logjoint_gradient_unconstrained!(cache, params))
+            @test rev ≈ fwd rtol = 1e-10
+        end
+    end
+
+    @testset "explicit :reverse fallback warns when the probe declines (issue #326)" begin
+        # a scalar (non-loop) observation stays off the generated-scorer path even
+        # with Enzyme loaded, so an explicit :reverse request cannot engage and
+        # must warn (once per model) instead of silently measuring forward.
+        @tea static function warn326()
+            mu ~ normal(0.0, 1.0)
+            {:y} ~ normal(mu, 1.0)
+            return mu
+        end
+        cmw = UT.choicemap((:y, 0.7))
+        pw = reshape([0.1, 0.2, 0.3], 1, 3)
+        @test_logs (
+            :warn,
+            r"adtype=:reverse was requested but the reverse-mode tier is unavailable.*generated-scorer.*issues/326",
+        ) UT._maybe_batched_reverse_gradient_cache(warn326, pw, (), cmw, 1, :reverse)
+        # :auto falls back silently
+        @test_logs UT._maybe_batched_reverse_gradient_cache(warn326, pw, (), cmw, 1, :auto)
+    end
+
     @testset "adtype on advi/svgd/smc engages reverse (issue #275)" begin
         cm = batched_big_constraints(1)
 
