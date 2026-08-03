@@ -107,323 +107,11 @@ function _device_choice_value_source(
 end
 
 # ---- per-family choice lowering ----
-
-function _lower_device_step!(
-    out,
-    step::BackendNormalChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(out, step, step.mu, step.sigma, DeviceNormalChoiceStep, backend, layout, T, issues, in_loop, "normal")
-end
-function _lower_device_step!(
-    out,
-    step::BackendLognormalChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.mu,
-        step.sigma,
-        DeviceLognormalChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "lognormal",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendGammaChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(out, step, step.shape, step.rate, DeviceGammaChoiceStep, backend, layout, T, issues, in_loop, "gamma")
-end
-function _lower_device_step!(
-    out,
-    step::BackendLaplaceChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(out, step, step.mu, step.scale, DeviceLaplaceChoiceStep, backend, layout, T, issues, in_loop, "laplace")
-end
-function _lower_device_step!(
-    out,
-    step::BackendCauchyChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(out, step, step.mu, step.sigma, DeviceCauchyChoiceStep, backend, layout, T, issues, in_loop, "cauchy")
-end
-function _lower_device_step!(
-    out,
-    step::BackendHalfNormalChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "halfnormal")
-    sigma = _lower_device_expr(step.sigma, backend.generic_slots, T, issues, "halfnormal argument")
-    (isnothing(src) || isnothing(sigma)) && return nothing
-    value_source, tcode = src
-    push!(out, DeviceHalfNormalChoiceStep(sigma, value_source, tcode, _device_slot32(step.binding_slot)))
-    return nothing
-end
-function _lower_device_step!(
-    out,
-    step::BackendHalfCauchyChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "halfcauchy")
-    scale = _lower_device_expr(step.scale, backend.generic_slots, T, issues, "halfcauchy argument")
-    (isnothing(src) || isnothing(scale)) && return nothing
-    value_source, tcode = src
-    push!(out, DeviceHalfCauchyChoiceStep(scale, value_source, tcode, _device_slot32(step.binding_slot)))
-    return nothing
-end
-function _lower_device_step!(
-    out,
-    step::BackendLogisticChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.mu,
-        step.scale,
-        DeviceLogisticChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "logistic",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendGumbelChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(out, step, step.mu, step.scale, DeviceGumbelChoiceStep, backend, layout, T, issues, in_loop, "gumbel")
-end
-function _lower_device_step!(
-    out,
-    step::BackendFrechetChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.shape,
-        step.scale,
-        DeviceFrechetChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "frechet",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendRayleighChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "rayleigh")
-    scale = _lower_device_expr(step.scale, backend.generic_slots, T, issues, "rayleigh argument")
-    (isnothing(src) || isnothing(scale)) && return nothing
-    value_source, tcode = src
-    push!(out, DeviceRayleighChoiceStep(scale, value_source, tcode, _device_slot32(step.binding_slot)))
-    return nothing
-end
-function _lower_device_step!(
-    out,
-    step::BackendInverseGaussianChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.mu,
-        step.lambda,
-        DeviceInverseGaussianChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "inversegaussian",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendBetaChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(out, step, step.alpha, step.beta, DeviceBetaChoiceStep, backend, layout, T, issues, in_loop, "beta")
-end
-
-function _lower_device_step!(
-    out,
-    step::BackendInverseGammaChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.shape,
-        step.scale,
-        DeviceInverseGammaChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "inversegamma",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendWeibullChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.shape,
-        step.scale,
-        DeviceWeibullChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "weibull",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendBinomialChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.trials,
-        step.probability,
-        DeviceBinomialChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "binomial",
-    )
-end
-function _lower_device_step!(
-    out,
-    step::BackendNegativeBinomialChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    _lower_device_two_arg!(
-        out,
-        step,
-        step.successes,
-        step.probability,
-        DeviceNegativeBinomialChoiceStep,
-        backend,
-        layout,
-        T,
-        issues,
-        in_loop,
-        "negativebinomial",
-    )
-end
+#
+# The pure one-/two-argument delegate wrappers are @eval-generated from
+# DISTRIBUTION_FAMILY_TABLE below the `_lower_device_two_arg!` /
+# `_lower_device_one_arg!` helpers (issue #331 stage 2); only the families
+# with extra structure keep hand-written wrappers here.
 function _lower_device_step!(
     out,
     step::BackendStudentTChoicePlanStep,
@@ -441,23 +129,6 @@ function _lower_device_step!(
     (isnothing(src) || isnothing(nu) || isnothing(mu) || isnothing(sigma)) && return nothing
     value_source, tcode = src
     push!(out, DeviceStudentTChoiceStep(nu, mu, sigma, value_source, tcode, _device_slot32(step.binding_slot)))
-    return nothing
-end
-function _lower_device_step!(
-    out,
-    step::BackendGeometricChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "geometric")
-    p = _lower_device_expr(step.probability, backend.generic_slots, T, issues, "geometric argument")
-    (isnothing(src) || isnothing(p)) && return nothing
-    value_source, tcode = src
-    push!(out, DeviceGeometricChoiceStep(p, value_source, tcode, _device_slot32(step.binding_slot)))
     return nothing
 end
 function _lower_device_step!(
@@ -855,40 +526,87 @@ function _lower_device_two_arg!(
     return nothing
 end
 
-function _lower_device_step!(
+# Single-argument analogue of `_lower_device_two_arg!` for the one-parameter
+# families (issue #331 stage 2).
+function _lower_device_one_arg!(
     out,
-    step::BackendExponentialChoicePlanStep,
+    step,
+    arg_expr,
+    Ctor,
     backend,
     layout,
     ::Type{T},
     issues,
-    loop_counter,
     in_loop,
+    family,
 ) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "exponential")
-    rate = _lower_device_expr(step.rate, backend.generic_slots, T, issues, "exponential argument")
-    (isnothing(src) || isnothing(rate)) && return nothing
+    src = _device_choice_value_source(step, layout, in_loop, issues, family)
+    a1 = _lower_device_expr(arg_expr, backend.generic_slots, T, issues, "$family argument")
+    (isnothing(src) || isnothing(a1)) && return nothing
     value_source, tcode = src
-    push!(out, DeviceExponentialChoiceStep(rate, value_source, tcode, _device_slot32(step.binding_slot)))
+    push!(out, Ctor(a1, value_source, tcode, _device_slot32(step.binding_slot)))
     return nothing
 end
 
-function _lower_device_step!(
-    out,
-    step::BackendBernoulliChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "bernoulli")
-    p = _lower_device_expr(step.probability, backend.generic_slots, T, issues, "bernoulli argument")
-    (isnothing(src) || isnothing(p)) && return nothing
-    value_source, tcode = src
-    push!(out, DeviceBernoulliChoiceStep(p, value_source, tcode, _device_slot32(step.binding_slot)))
-    return nothing
+# ---- table-generated per-family lowering wrappers (issue #331 stage 2) --------
+#
+# Every family whose `_lower_device_step!` body is a pure one-/two-argument
+# delegate is @eval-generated from DISTRIBUTION_FAMILY_TABLE (`step`/`params`
+# fields); the families with extra structure (studentt's three arguments,
+# categorical's probability tuple, the vector/truncated/mixture/marginalize
+# steps, bernoullilogit's GLM fusion, noncentered normal) stay hand-written.
+for family in (
+    :normal,
+    :lognormal,
+    :gamma,
+    :laplace,
+    :cauchy,
+    :logistic,
+    :gumbel,
+    :frechet,
+    :inversegaussian,
+    :beta,
+    :inversegamma,
+    :weibull,
+    :binomial,
+    :negativebinomial,
+    :halfnormal,
+    :halfcauchy,
+    :rayleigh,
+    :exponential,
+    :bernoulli,
+    :geometric,
+    :poisson,
+)
+    spec = _distribution_family_spec(family)
+    step_type = Symbol("Backend", spec.step, "ChoicePlanStep")
+    device_step_type = Symbol("Device", spec.step, "ChoiceStep")
+    helper = length(spec.params) == 2 ? :_lower_device_two_arg! : :_lower_device_one_arg!
+    argument_fields = [:(step.$parameter) for parameter in spec.params]
+    family_name = String(family)
+    @eval function _lower_device_step!(
+        out,
+        step::$step_type,
+        backend,
+        layout,
+        ::Type{T},
+        issues,
+        loop_counter,
+        in_loop,
+    ) where {T}
+        $helper(
+            out,
+            step,
+            $(argument_fields...),
+            $device_step_type,
+            backend,
+            layout,
+            T,
+            issues,
+            in_loop,
+            $family_name,
+        )
+    end
 end
 
 # Resolve the linear predictor coefficient's UNCONSTRAINED parameter row start
@@ -970,24 +688,6 @@ function _lower_device_step!(
     eta = _lower_device_expr(step.eta, backend.generic_slots, T, issues, "bernoullilogit eta")
     isnothing(eta) && return nothing
     push!(out, DeviceBernoulliLogitChoiceStep(eta, Int32(-1), DEVICE_TRANSFORM_IDENTITY, _device_slot32(step.binding_slot)))
-    return nothing
-end
-
-function _lower_device_step!(
-    out,
-    step::BackendPoissonChoicePlanStep,
-    backend,
-    layout,
-    ::Type{T},
-    issues,
-    loop_counter,
-    in_loop,
-) where {T}
-    src = _device_choice_value_source(step, layout, in_loop, issues, "poisson")
-    lambda = _lower_device_expr(step.lambda, backend.generic_slots, T, issues, "poisson argument")
-    (isnothing(src) || isnothing(lambda)) && return nothing
-    value_source, tcode = src
-    push!(out, DevicePoissonChoiceStep(lambda, value_source, tcode, _device_slot32(step.binding_slot)))
     return nothing
 end
 
