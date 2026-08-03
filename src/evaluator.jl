@@ -119,33 +119,54 @@ struct CompiledAddressSpec{P<:Tuple}
 end
 
 # reparam=:noncentered walk data: theta = location + scale * z, or
-# exp(location + scale * z) for the log-space (lognormal) variant.
-struct CompiledNoncentered
-    location::Any
-    scale::Any
+# exp(location + scale * z) for the log-space (lognormal) variant. Concretely
+# typed on the compiled loc/scale expressions (issue #326): abstract `Any`
+# fields here made every noncentered CompiledChoicePlanStep layout opaque to
+# Enzyme's type analysis, which rejected the whole dependent-transform walk
+# ("bad enzyme_type"), silently locking noncentered models out of the reverse
+# tier.
+struct CompiledNoncentered{L<:AbstractCompiledExpr,S<:AbstractCompiledExpr}
+    location::L
+    scale::S
     logspace::Bool
 end
 
 # marginalize=:enumerate walk data (docs/discrete-enumeration.md): the
 # compile-time support values to enumerate. bernoulli: (false, true);
 # categorical: (1, ..., K) from the literal probability-vector length.
-struct CompiledMarginalize
-    support::Tuple
+struct CompiledMarginalize{S<:Tuple}
+    support::S
 end
 
-struct CompiledChoicePlanStep{A<:Tuple,AD<:CompiledAddressSpec,C} <: AbstractCompiledPlanStep
-    binding_slot::Union{Nothing,Int}
+# Every optional field is a type parameter constrained to its small Union
+# (issue #326): with plain `Union{Nothing,...}` FIELDS the LLVM layout carries
+# union selector bytes that Enzyme's type analysis cannot classify, and the
+# reverse-mode probe fails on any plan whose steps flow through the
+# dependent-transform walk (reparam=:noncentered). Parametrizing makes each
+# instantiation's layout fully concrete; plan compilation already specializes
+# per step, so this adds no new dynamic dispatch.
+struct CompiledChoicePlanStep{
+    A<:Tuple,
+    AD<:CompiledAddressSpec,
+    C,
+    B<:Union{Nothing,Int},
+    PV<:Union{Nothing,UnitRange{Int}},
+    PS<:Union{Nothing,Int},
+    N<:Union{Nothing,CompiledNoncentered},
+    M<:Union{Nothing,CompiledMarginalize},
+} <: AbstractCompiledPlanStep
+    binding_slot::B
     address::AD
     constructor::C
     arguments::A
-    parameter_value_indices::Union{Nothing,UnitRange{Int}}
-    parameter_slot::Union{Nothing,Int}
+    parameter_value_indices::PV
+    parameter_slot::PS
     # compiled location/scale (plus log-space flag) for reparam=:noncentered
     # latents; `nothing` for centered choices
-    noncentered::Union{Nothing,CompiledNoncentered}
+    noncentered::N
     # compile-time enumeration support for marginalize=:enumerate latents;
     # `nothing` for ordinary choices
-    marginalize::Union{Nothing,CompiledMarginalize}
+    marginalize::M
     # Dense observed-value staging (issue #145). A loop observation whose
     # address is `(literal..., loop-index)` gets a per-plan stage index; a
     # LogjointGradientCache pre-resolves its constrained values into a dense

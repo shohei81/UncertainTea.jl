@@ -77,10 +77,11 @@ docker run --rm -v "$(git rev-parse --show-toplevel)":/work \
   ForwardDiff vs Enzyme tier on the host batched path, labels the runs
   `batched-cpu-forward`/`batched-cpu-reverse`, and records
   `sampler.adtype`; Enzyme is loaded only for `reverse` runs so `auto` legs
-  keep their default tier. The model is centered with a log-normal tau
-  deliberately — the noncentered `reparam` machinery and the truncated-t tau
-  both fail Enzyme's type analysis today, and the guard would silently fall
-  back to forward.
+  keep their default tier. The model is centered with a log-normal tau —
+  originally forced (the noncentered `reparam` machinery and the truncated-t
+  tau used to fail Enzyme's type analysis and silently fall back to forward),
+  but since issue #326 both shapes engage the reverse tier, and an explicit
+  `adtype=:reverse` request now warns whenever it cannot engage.
 
 ## Sampler settings
 

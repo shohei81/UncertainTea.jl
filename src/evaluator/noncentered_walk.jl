@@ -72,8 +72,7 @@ function _collect_slot_refs!(acc::Set{Int}, expr::Union{CompiledTupleExpr,Compil
     end
     return nothing
 end
-# CompiledNoncentered stores loc/scale untyped; dispatch resolves on the concrete
-# compiled-expr subtype at runtime.
+# catch-all for compiled-expr subtypes with no slot references of their own
 _collect_slot_refs!(acc::Set{Int}, expr) = nothing
 
 # Seed = slots read directly by any noncentered loc/scale; `defs` maps a slot to

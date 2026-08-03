@@ -450,29 +450,53 @@ end
 # repeated or longer run past the threshold amortizes the compile many times over.
 const _REVERSE_MODE_AUTO_MIN_PARAMS = 24
 
+# A silent fallback to forward mode is fine under adtype=:auto, but when the
+# caller EXPLICITLY requested :reverse it must not silently measure a different
+# tier (issue #326): warn once per model, naming the reason the probe declined.
+function _reverse_fallback(model, adtype, reason)
+    if adtype === :reverse
+        @warn "adtype=:reverse was requested but the reverse-mode tier is unavailable for " *
+              "this model; falling back to the forward-mode gradient tiers. Reason: $(reason). " *
+              "See https://github.com/shohei81/UncertainTea.jl/issues/326." _id =
+            Symbol(:uncertaintea_reverse_fallback_, model.name) maxlog = 1
+    end
+    return nothing
+end
+
 function _maybe_batched_reverse_gradient_cache(model, params, args, constraints, parameter_count, adtype)
     adtype === :forward && return nothing
     # cheap gate: the extension method exists only while Enzyme is loaded, so
     # without it (the common case) we skip straight to forward mode without
     # building any objective or attempting a gradient.
-    isempty(methods(reverse_mode_value_and_gradient)) && return nothing
+    isempty(methods(reverse_mode_value_and_gradient)) &&
+        return _reverse_fallback(model, adtype, "Enzyme is not loaded (run `using Enzyme` first)")
     # only the shared-posterior case (a single args tuple + a single ChoiceMap)
     # collapses to one reusable objective; per-column vectors fall back to forward.
-    (args isa Tuple && constraints isa ChoiceMap) || return nothing
+    (args isa Tuple && constraints isa ChoiceMap) || return _reverse_fallback(
+        model, adtype, "per-column args/constraints vectors do not share one objective",
+    )
     if adtype === :auto && parameter_count < _REVERSE_MODE_AUTO_MIN_PARAMS
         return nothing
     end
     seed = collect(view(params, :, 1))
     objective = _generated_gradient_objective_or_nothing(model, seed, args, constraints)
-    isnothing(objective) && return nothing
+    isnothing(objective) && return _reverse_fallback(
+        model, adtype, "the model is not on the type-stable generated-scorer path",
+    )
     # compile + finiteness guard: run one real value+gradient. A MethodError here
     # means Enzyme is not loaded; any other error means Enzyme cannot compile this
     # objective. Either way, fall back to forward mode rather than fail later.
     try
         value, gradient = Base.invokelatest(reverse_mode_value_and_gradient, objective, seed)
-        (isfinite(value) && all(isfinite, gradient)) || return nothing
-    catch
-        return nothing
+        (isfinite(value) && all(isfinite, gradient)) || return _reverse_fallback(
+            model, adtype, "the trial reverse-mode value/gradient was not finite at the initial parameters",
+        )
+    catch err
+        return _reverse_fallback(
+            model, adtype,
+            "Enzyme could not compile the gradient objective ($(typeof(err)); " *
+            "the engagement probe caught it and no sampling ran on it)",
+        )
     end
     return BatchedReverseGradientCache(objective, seed)
 end

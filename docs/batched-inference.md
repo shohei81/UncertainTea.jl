@@ -117,7 +117,10 @@ kernel) — and on `BatchedLogjointGradientCache`:
 - `adtype=:forward` — always forward-mode/analytic.
 - `adtype=:reverse` — force reverse mode (host-only; incompatible with a device
   `backend`). If it cannot be built it still falls back to forward rather than
-  failing the run.
+  failing the run, and emits a `@warn` (once per model) naming the reason —
+  Enzyme not loaded, per-column `args`/`constraints`, interpreter-path model, or
+  a failed trial gradient — so an explicit `:reverse` request never silently
+  measures the wrong tier (issue #326).
 
 The analytic (fused-family) tier is never preempted — reverse only replaces the
 *forward-mode* fallback. End-to-end this turns the non-analytic high-`P` cost from

@@ -48,6 +48,36 @@ end
         end
     end
 
+    @testset "explicit :reverse fallback warns; :auto stays silent (issue #326)" begin
+        # Enzyme is not loaded in this test group, so requesting :reverse must
+        # emit the named fallback warning instead of silently measuring forward.
+        # A dedicated model keeps the once-per-model (maxlog) accounting
+        # independent of the cache constructions in the other testsets.
+        @tea static function adtype_warn_model()
+            x ~ iid(normal(0.0, 1.0), 30)
+            for i = 1:29
+                {:y => i} ~ normal(tanh(x[i]) + 0.5 * x[i+1], 0.3)
+            end
+            return x
+        end
+        warn_cm = choicemap([(:y => i, 0.05 * i) for i = 1:29])
+        warn_params = reshape(collect(range(-1.0, 1.0; length=30 * 4)), 30, 4)
+
+        @test_logs (
+            :warn,
+            r"adtype=:reverse was requested but the reverse-mode tier is unavailable.*Enzyme is not loaded.*issues/326",
+        ) UncertainTea.BatchedLogjointGradientCache(
+            adtype_warn_model, warn_params, (), warn_cm; adtype=:reverse,
+        )
+        # :auto and :forward fall back silently
+        @test_logs UncertainTea.BatchedLogjointGradientCache(
+            adtype_warn_model, warn_params, (), warn_cm; adtype=:auto,
+        )
+        @test_logs UncertainTea.BatchedLogjointGradientCache(
+            adtype_warn_model, warn_params, (), warn_cm; adtype=:forward,
+        )
+    end
+
     @testset "advi/svgd/smc accept and validate adtype (issue #275)" begin
         # a small model, no Enzyme -> every adtype falls back to forward and runs.
         @tea static function adtype_small()

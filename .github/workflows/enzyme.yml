@@ -24,6 +24,12 @@ on:
       - "ext/UncertainTeaEnzymeExt.jl"
       - "test/enzyme/**"
       - "src/generated_scorer.jl"
+      # issue #326: the reverse tier also contracts on the compiled-plan step
+      # layouts (Enzyme type analysis sees them through the dependent-transform
+      # walk) and on the engagement probe itself.
+      - "src/evaluator.jl"
+      - "src/evaluator/**"
+      - "src/batched/api.jl"
       - ".github/workflows/enzyme.yml"
 
 concurrency:
