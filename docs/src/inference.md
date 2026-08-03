@@ -194,20 +194,36 @@ above, not just MCMC chains.
 The plotting route goes through [`to_mcmcchains`](@ref): loading `MCMCChains`
 activates UncertainTea's package extension, and `MCMCChains.Chains` objects
 carry [StatsPlots](https://github.com/JuliaPlots/StatsPlots.jl) recipes for
-trace plots, densities, autocorrelation, corner plots, and more:
+trace plots, densities, autocorrelation, corner plots, and more. The block
+below runs a deliberately tiny model end to end at docs-build time:
 
-```julia
-using UncertainTea, UncertainTea.Inference
-import MCMCChains
+```@example mcmcchains-plot
+using UncertainTea, UncertainTea.Inference, UncertainTea.Diagnostics
+import MCMCChains   # `import`, not `using` — see the name-clash note below
 using StatsPlots
+using Random
 
-chains = nuts_chains(model, args, constraints; num_chains=4)
+@tea static function location_scale()
+    mu ~ normal(0.0, 2.0)
+    log_sigma ~ normal(0.0, 1.0)
+    for i = 1:6
+        {:y => i} ~ normal(mu, exp(log_sigma))
+    end
+    return mu
+end
+
+y = [0.2, 1.1, 0.7, 1.6, 0.9, 1.3]
+constraints = choicemap(((:y => i, y[i]) for i = 1:6)...)
+chains = nuts_chains(location_scale, (), constraints;
+    num_chains=2, num_samples=150, num_warmup=150, rng=MersenneTwister(1))
+
 mc = to_mcmcchains(chains)
-
-plot(mc)             # trace + density per parameter
-autocorplot(mc)
-corner(mc)
+plot(mc; size=(700, 400))   # trace + density per parameter
 ```
+
+`autocorplot(mc)` and `corner(mc)` work the same way. See the
+[Poisson GLM example](generated/poisson_glm.md) for the same route on a real
+model, alongside a posterior-fit plot built from [`posterior_array`](@ref).
 
 The `:internals` section of the converted object carries the per-draw sampler
 statistics (`:lp`, `:diverging`, `:energy`, `:tree_depth`,

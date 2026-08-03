@@ -65,6 +65,39 @@ summarize(chains)
 
 rhat(chains)
 
+# ## Posterior fit
+#
+# Conditioning the GP on the data at the posterior-mean hyperparameters gives
+# the familiar fit picture: predictive mean plus a ±2σ band for the latent
+# function on a fine grid. The conditional mean and variance are the standard
+# GP formulas; the kernel matrices come from the package's internal kernel
+# helpers (unexported, hence the qualified `UncertainTea._gp_*` calls), which
+# keeps the example short — for real work you would average the predictive
+# distribution over posterior draws rather than plugging in the mean.
+
+using LinearAlgebra
+using Statistics
+using Plots
+
+draws = posterior_array(chains)                 # (samples, chains, params)
+pnames = parameter_names(chains)
+hyper(p) = exp(mean(draws[:, :, findfirst(==(p), pnames)]))
+l, v, nz = hyper("log_l"), hyper("log_v"), hyper("log_n")
+
+kern = matern52_kernel(l, v)
+xgrid = collect(range(0.0, 5.0; length=120))
+Xg = reshape(xgrid, 1, :)
+K = UncertainTea._gp_kernel_cross(kern, X, X) + (nz^2 + 1e-8) * I  # train cov + noise
+Ks = UncertainTea._gp_kernel_cross(kern, X, Xg)                    # train x grid
+F = cholesky(Symmetric(K))
+m = Ks' * (F \ y)                                                  # conditional mean
+W = F.L \ Ks
+s = sqrt.(max.(UncertainTea._gp_kernel_self(kern) .- vec(sum(abs2, W; dims=1)), 0.0))
+
+plot(xgrid, m; ribbon=2 .* s, color=:steelblue, fillalpha=0.25,
+    label="posterior mean ± 2σ", xlabel="x", ylabel="y", size=(700, 400))
+scatter!(xs, y; color=:black, markersize=3, label="observations")
+
 # ## Where to go from here
 #
 # - Swap the kernel: `kernel_product(periodic_kernel(l, v, p), rbf_kernel(L, 1.0))`

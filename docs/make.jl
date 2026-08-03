@@ -1,3 +1,9 @@
+# Headless GR: the example pages render Plots.jl figures at build time, and
+# GKSwstype=100 selects the displayless PNG driver so CI (no X server) works.
+# Must be set before any Plots/GR code runs (i.e. before the Literate pages
+# and `@example` blocks execute inside `makedocs`).
+ENV["GKSwstype"] = "100"
+
 using Documenter
 using Literate
 using UncertainTea

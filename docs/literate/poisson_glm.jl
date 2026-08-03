@@ -73,6 +73,44 @@ summarize(chains)
 
 rhat(chains)
 
+# ## Posterior fit
+#
+# The observed counts against the posterior-mean rate curve `exp(a + b*x)`,
+# with a pointwise 90% band computed directly from the posterior draws via
+# `posterior_array`.
+
+using Statistics
+using Plots
+
+draws = posterior_array(chains)                 # (samples, chains, params)
+pnames = parameter_names(chains)
+a_draws = vec(draws[:, :, findfirst(==("a"), pnames)])
+b_draws = vec(draws[:, :, findfirst(==("b"), pnames)])
+
+xgrid = range(-1.5, 1.5; length=80)
+rate = exp.(a_draws .+ b_draws .* xgrid')       # draws x grid
+mid = vec(mean(rate; dims=1))
+lo = [quantile(col, 0.05) for col in eachcol(rate)]
+hi = [quantile(col, 0.95) for col in eachcol(rate)]
+
+plot(xgrid, mid; ribbon=(mid .- lo, hi .- mid), color=:darkorange, fillalpha=0.25,
+    label="posterior mean rate (90% band)", xlabel="x", ylabel="count", size=(700, 400))
+scatter!(x, y; color=:black, markersize=3, label="observed counts")
+
+# ## Trace and density plots via MCMCChains
+#
+# [`UncertainTea.to_mcmcchains`](@ref) converts the result to an `MCMCChains.Chains`, which
+# carries StatsPlots recipes for trace, density, autocorrelation, and corner
+# plots. Load `MCMCChains` with `import` rather than `using`: it also exports
+# `summarize`/`ess`/`rhat`, which would clash with the
+# `UncertainTea.Diagnostics` versions used above.
+
+import MCMCChains
+using StatsPlots
+
+mc = to_mcmcchains(chains)
+plot(mc; size=(700, 400))
+
 # ## Where to go from here
 #
 # - The same spelling works for `bernoulli`, `bernoullilogit` (logistic
