@@ -49,6 +49,22 @@ end
 
 @inline _device_neginf(::Type{T}) where {T} = T(-Inf)
 
+# Positive-and-not-subnormal support test (issue #367 item 3), mirroring the
+# host `_positive_subnormal` boundary of issues #345/#367 at the kernel's OWN
+# precision: exp(theta) at Float32 is subnormal for theta in ~(-103.97, -87.34)
+# before underflowing to exactly 0.0, and inside that band the few surviving
+# mantissa bits make every log(x)/1/x density term silently wrong by O(1)+
+# while the value (and hence the gradient) stays finite -- no guard fires.
+# Treating the band as the off-support boundary scores it -Inf so device
+# integrators reject on the value, exactly like the host paths. Kernels whose
+# density has no log(x)/1/x value term (exponential, halfnormal, halfcauchy)
+# stay exact through the band and keep their plain support tests. The
+# comparison runs on the dual's value channel; `floatmin` needs the dual's
+# base type, so a small type helper resolves it (branchless: `>=` + ifelse).
+@inline _device_floatmin(::Type{T}) where {T<:Real} = floatmin(T)
+@inline _device_floatmin(::Type{DeviceDual{T}}) where {T} = DeviceDual{T}(floatmin(T), zero(T))
+@inline _device_positive_normal(x::T) where {T} = x >= _device_floatmin(T)
+
 # log Gamma(x + 1/2) - log Gamma(x), computed WITHOUT differencing two large
 # loggammas: at large x each loggamma is ~ x log x, so their O(log x) difference
 # drowns in rounding (0.06 absolute at Float32 for x ~ 5e4, visible in any
@@ -77,7 +93,7 @@ end
 @inline function _device_lognormal_logpdf(mu::T, sigma::T, x::T) where {T}
     lx = log(x)
     base = -log(sigma) - T(0.9189385332046727) - ((lx - mu) / sigma)^2 / T(2) - lx
-    return ifelse(x > zero(T), base, _device_neginf(T))
+    return ifelse(_device_positive_normal(x), base, _device_neginf(T))
 end
 
 @inline function _device_exponential_logpdf(rate::T, x::T) where {T}
@@ -87,7 +103,7 @@ end
 @inline function _device_gamma_logpdf(shape::T, rate::T, x::T) where {T}
     base = shape * log(rate) - _device_loggamma(shape) +
            (shape - one(T)) * log(x) - rate * x
-    return ifelse(x > zero(T), base, _device_neginf(T))
+    return ifelse(_device_positive_normal(x), base, _device_neginf(T))
 end
 
 @inline function _device_laplace_logpdf(loc::T, scale::T, x::T) where {T}
@@ -128,18 +144,18 @@ end
 @inline function _device_frechet_logpdf(shape::T, scale::T, x::T) where {T}
     logz = log(x) - log(scale)
     base = log(shape) - log(scale) - (one(T) + shape) * logz - exp(-shape * logz)
-    return ifelse(x > zero(T), base, _device_neginf(T))
+    return ifelse(_device_positive_normal(x), base, _device_neginf(T))
 end
 
 @inline function _device_rayleigh_logpdf(scale::T, x::T) where {T}
     base = log(x) - T(2) * log(scale) - x * x / (T(2) * scale * scale)
-    return ifelse(x > zero(T), base, _device_neginf(T))
+    return ifelse(_device_positive_normal(x), base, _device_neginf(T))
 end
 
 @inline function _device_inversegaussian_logpdf(mu::T, lambda::T, x::T) where {T}
     d = x - mu
     base = T(0.5) * log(lambda) - T(0.9189385332046727) - T(1.5) * log(x) - lambda * d * d / (T(2) * mu * mu * x)
-    return ifelse(x > zero(T), base, _device_neginf(T))
+    return ifelse(_device_positive_normal(x), base, _device_neginf(T))
 end
 
 @inline function _device_beta_logpdf(alpha::T, beta::T, x::T) where {T}
@@ -159,14 +175,14 @@ end
 @inline function _device_inversegamma_logpdf(shape::T, scale::T, x::T) where {T}
     base = shape * log(scale) - _device_loggamma(shape) -
            (shape + one(T)) * log(x) - scale / x
-    return ifelse(x > zero(T), base, _device_neginf(T))
+    return ifelse(_device_positive_normal(x), base, _device_neginf(T))
 end
 
 @inline function _device_weibull_logpdf(shape::T, scale::T, x::T) where {T}
     base = log(shape) + (shape - one(T)) * log(x) -
            shape * log(scale) - exp(shape * (log(x) - log(scale)))
     at_zero = ifelse(shape < one(T), T(Inf), ifelse(shape == one(T), -log(scale), _device_neginf(T)))
-    return ifelse(x > zero(T), base, ifelse(x == zero(T), at_zero, _device_neginf(T)))
+    return ifelse(_device_positive_normal(x), base, ifelse(x == zero(T), at_zero, _device_neginf(T)))
 end
 
 # Support mirrors the CPU `_bernoulli_value` normalization (issue #85): only

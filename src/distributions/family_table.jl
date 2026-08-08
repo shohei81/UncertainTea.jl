@@ -134,7 +134,9 @@ const DISTRIBUTION_FAMILY_TABLE = (
         device=true,
         step=:Lognormal,
         params=(:mu, :sigma),
-        offsupport=:(!(value > 0)),
+        # subnormal values are the exp-underflow boundary (issues #345/#367):
+        # the kernel scores them -Inf, so poison alongside the exact-0.0 case
+        offsupport=:(!(value > 0) || issubnormal(value)),
     ),
     _family_spec(
         :laplace;
@@ -177,7 +179,8 @@ const DISTRIBUTION_FAMILY_TABLE = (
         device=true,
         step=:InverseGamma,
         params=(:shape, :scale),
-        offsupport=:(!(value > 0)),
+        # subnormal boundary as in gamma (issues #345/#367)
+        offsupport=:(!(value > 0) || issubnormal(value)),
     ),
     # weibull's accumulate loop stays hand-written (issue #86 x==0/shape==1
     # boundary), so no offsupport here; step/params still drive the scoring,
@@ -322,7 +325,8 @@ const DISTRIBUTION_FAMILY_TABLE = (
         device=true,
         step=:Frechet,
         params=(:shape, :scale),
-        offsupport=:(!(shape > 0 && scale > 0 && value > 0)),
+        # subnormal boundary as in gamma (issues #345/#367)
+        offsupport=:(!(shape > 0 && scale > 0 && value > 0) || issubnormal(value)),
     ),
     _family_spec(
         :rayleigh;
@@ -332,7 +336,8 @@ const DISTRIBUTION_FAMILY_TABLE = (
         device=true,
         step=:Rayleigh,
         params=(:scale,),
-        offsupport=:(!(scale > 0 && value > 0)),
+        # subnormal boundary as in gamma (issues #345/#367)
+        offsupport=:(!(scale > 0 && value > 0) || issubnormal(value)),
     ),
     _family_spec(
         :inversegaussian;
@@ -342,7 +347,8 @@ const DISTRIBUTION_FAMILY_TABLE = (
         device=true,
         step=:InverseGaussian,
         params=(:mu, :lambda),
-        offsupport=:(!(mu > 0 && lambda > 0 && value > 0)),
+        # subnormal boundary as in gamma (issues #345/#367)
+        offsupport=:(!(mu > 0 && lambda > 0 && value > 0) || issubnormal(value)),
     ),
 )
 

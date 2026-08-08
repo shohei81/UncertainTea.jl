@@ -152,6 +152,12 @@ function _accumulate_weibull_gradient!(
             end
             continue
         end
+        if issubnormal(value)
+            # exp-subnormal boundary (issues #345/#367): the kernel scored the
+            # value -Inf above, so poison the skipped partials as in gamma
+            _poison_offsupport_value_gradient!(gradients, value_gradients, batch_index)
+            continue
+        end
         dvalue, dshape, dscale = _weibull_logpdf_partials(shape, scale, value)
         for parameter_index in axes(gradients, 1)
             gradients[parameter_index, batch_index] +=
