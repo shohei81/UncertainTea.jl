@@ -328,7 +328,27 @@ function modelspec(model)
     return model.spec
 end
 
+# The args-independent default layout cannot describe a model that sizes a
+# latent vector from its arguments (issue #289): the runtime-dim choice has no
+# macro-time slot, so every consumer of this layout (parametercount,
+# parameterchoicemap, the 3-argument transform_to_* forms, parameter_vector)
+# would silently drop the latent. Throw the informative error instead.
+function _reject_runtime_dims_default_layout(model)
+    isempty(model.spec.execution_plan.runtime_dim_candidates) && return nothing
+    throw(
+        ArgumentError(
+            "model `$(model.spec.name)` sizes a vector choice from its arguments (issue #289), " *
+            "so its parameter layout depends on the model arguments; the args-independent " *
+            "default-layout APIs (`parameterlayout(model)`, the 3-argument " *
+            "`transform_to_constrained`/`transform_to_unconstrained`, " *
+            "`parameterchoicemap(model, params)`, `parameter_vector(trace)`) cannot describe " *
+            "it -- use the signature-aware forms that take the model arguments and constraints",
+        ),
+    )
+end
+
 function parameterlayout(model)
+    _reject_runtime_dims_default_layout(model)
     return model.spec.parameter_layout
 end
 
@@ -1076,6 +1096,7 @@ end
 function _parameterize_step_for_signature(
     step::ChoicePlanStep,
     observed,
+    runtime_transforms,
     slots::Vector{ParameterSlotSpec},
     step_counter::Base.RefValue{Int},
     slot_counter::Base.RefValue{Int},
@@ -1088,6 +1109,13 @@ function _parameterize_step_for_signature(
     static = isempty(step.scopes) && isstaticaddress(step.address)
     is_observation = static && (_static_choice_address(step) in observed)
     transform = _parameter_transform(step.rhs)
+    # late transform construction (issue #289): a runtime-dimension candidate
+    # has no macro-time transform (its length is only knowable from the model
+    # arguments), but at signature resolution the dims are resolved Ints, so a
+    # LATENT candidate takes an ordinary vector transform sized from them
+    if isnothing(transform) && static && !is_observation && !isnothing(runtime_transforms)
+        transform = get(runtime_transforms, _static_choice_address(step), nothing)
+    end
     slot_eligible = !is_observation && static && !isnothing(transform)
 
     if !slot_eligible
@@ -1135,6 +1163,7 @@ end
 function _parameterize_plan_steps_for_signature(
     steps::Vector{AbstractPlanStep},
     observed,
+    runtime_transforms,
     slots::Vector{ParameterSlotSpec},
     step_counter::Base.RefValue{Int},
     slot_counter::Base.RefValue{Int},
@@ -1149,6 +1178,7 @@ function _parameterize_plan_steps_for_signature(
                 _parameterize_step_for_signature(
                     step,
                     observed,
+                    runtime_transforms,
                     slots,
                     step_counter,
                     slot_counter,
@@ -1162,6 +1192,7 @@ function _parameterize_plan_steps_for_signature(
             body = _parameterize_plan_steps_for_signature(
                 step.body,
                 observed,
+                runtime_transforms,
                 slots,
                 step_counter,
                 slot_counter,
@@ -1242,7 +1273,32 @@ function _auto_marginalize_discrete_latents(steps::Vector{AbstractPlanStep}, obs
     return out
 end
 
-function _signature_execution_plan(base_plan::ExecutionPlan, observed)
+# Late transforms for the runtime-dimension candidates that are LATENT under
+# `observed`, keyed by normalized address (issue #289): one
+# `VectorIdentityTransform(dims[k])` per latent candidate in plan order,
+# mirroring exactly how `_resolve_runtime_dims` produced `dims`. Returns
+# `nothing` when the plan has no candidates (the overwhelming majority) or all
+# candidates are observed.
+function _runtime_dim_signature_transforms(base_plan::ExecutionPlan, observed, dims::Tuple{Vararg{Int}})
+    candidates = base_plan.runtime_dim_candidates
+    isempty(candidates) && return nothing
+    latents = [candidate for candidate in candidates if !(candidate.address in observed)]
+    length(latents) == length(dims) || throw(
+        ArgumentError(
+            "internal (issue #289): the runtime-dims tuple has $(length(dims)) entries but this " *
+            "signature has $(length(latents)) latent runtime-dimension candidates",
+        ),
+    )
+    isempty(latents) && return nothing
+    transforms = Dict{Tuple,Any}()
+    for (candidate, dim) in zip(latents, dims)
+        transforms[candidate.address] = VectorIdentityTransform(dim)
+    end
+    return transforms
+end
+
+function _signature_execution_plan(base_plan::ExecutionPlan, observed, dims::Tuple{Vararg{Int}}=())
+    runtime_transforms = _runtime_dim_signature_transforms(base_plan, observed, dims)
     slots = ParameterSlotSpec[]
     step_counter = Ref(1)
     slot_counter = Ref(1)
@@ -1251,6 +1307,7 @@ function _signature_execution_plan(base_plan::ExecutionPlan, observed)
     reparameterized = _parameterize_plan_steps_for_signature(
         base_plan.steps,
         observed,
+        runtime_transforms,
         slots,
         step_counter,
         slot_counter,

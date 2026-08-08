@@ -2,13 +2,14 @@
 #
 # The signature cache is keyed by `(Set{Address}, dims::Tuple{Vararg{Int}})`,
 # where `dims` comes from `_resolve_runtime_dims(model, signature, args)`.
-# PR-1 only reserves the seam: dims-free models (no runtime-dimension
-# candidates) always resolve `()` -- one boolean test, one cache entry per
-# signature, identical ResolvedSignaturePlan across calls with different
-# argument VALUES -- while a LATENT runtime-dim candidate (an mv-family choice
-# whose length is only knowable from the model arguments) throws an early,
-# informative ArgumentError instead of today's late no-parameter-slot failure.
-# An OBSERVED candidate keeps working: dynamic-size observations need no slot.
+# Dims-free models (no runtime-dimension candidates) always resolve `()` --
+# one boolean test, one cache entry per signature, identical
+# ResolvedSignaturePlan across calls with different argument VALUES. A LATENT
+# mvnormal/mvnormaldense candidate resolves its dims from the arguments as of
+# PR-2 (see runtime_dim_latents.jl); the remaining candidate families keep an
+# early, informative ArgumentError instead of the old late no-parameter-slot
+# failure. An OBSERVED candidate keeps working: dynamic-size observations need
+# no slot.
 
 @tea static function rdsk_dims_free_model(x)
     mu ~ normal(0.0, 1.0)
@@ -53,30 +54,40 @@ end
         @test key[2] === ()
     end
 
-    @testset "latent runtime-length mvnormal errors early and informatively" begin
-        # the candidate is detected at plan build ...
+    @testset "runtime-length candidates: detection, PR-3 pending error, observed path" begin
+        # the mvnormal candidate is detected at plan build ...
         candidates = U.executionplan(rdsk_runtime_latent_model).runtime_dim_candidates
         @test length(candidates) == 1
         @test candidates[1].family === :mvnormal
         @test candidates[1].address == (:theta,)
 
-        # ... and a latent `theta` throws the early error at logjoint time,
-        # naming the address and the issue
+        # ... and as of PR-2 a latent `theta` RESOLVES (dims from the args)
+        # instead of erroring; runtime_dim_latents.jl owns the capability tests
+        @test U._resolve_runtime_dims(
+            rdsk_runtime_latent_model, U.Set{U.Address}([(:y,)]), (3,),
+        ) === (3,)
+
+        # a PR-3-pending family (dirichlet) keeps the early error at logjoint
+        # time, naming the address and the issue
+        @tea static function rdsk_pending_dirichlet(alpha)
+            w ~ dirichlet(alpha)
+            {:y} ~ normal(w[1], 1.0)
+        end
         err = try
-            logjoint(rdsk_runtime_latent_model, zeros(3), (3,), choicemap((:y, 0.5)))
+            logjoint(rdsk_pending_dirichlet, zeros(2), ([1.0, 1.0, 1.0],), choicemap((:y, 0.5)))
             nothing
         catch caught
             caught
         end
         @test err isa ArgumentError
-        @test occursin("latent `mvnormal`", err.msg)
-        @test occursin("(:theta,)", err.msg)
+        @test occursin("latent `dirichlet`", err.msg)
+        @test occursin("(:w,)", err.msg)
         @test occursin("issue #289", err.msg)
         @test occursin("literal vector/tuple", err.msg)
 
         # nuts hits the same early error (resolution is shared by the samplers)
         @test_throws ArgumentError nuts(
-            rdsk_runtime_latent_model, (3,), choicemap((:y, 0.5));
+            rdsk_pending_dirichlet, ([1.0, 1.0, 1.0],), choicemap((:y, 0.5));
             num_samples=5, num_warmup=5,
         )
 

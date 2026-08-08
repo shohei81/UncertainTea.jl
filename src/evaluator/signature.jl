@@ -65,9 +65,10 @@ _representative_constraints(constraints::AbstractVector) =
 # A representative single argument tuple for signature resolution. The batched
 # and device paths accept either a shared tuple or a per-column vector of
 # tuples; the resolved plan is per-signature, so the first entry stands in for
-# the batch. (PR-2 of issue #289 must additionally REJECT per-column args whose
-# runtime dims disagree rather than trusting the representative column; until
-# then a runtime-dim latent throws at resolution regardless of the column.)
+# the batch. Per-column args of a runtime-dims model must additionally agree on
+# ONE dims tuple before the representative column may stand in for the batch;
+# the batched entry points resolve through
+# `_resolve_signature_plan_representative`, which validates exactly that.
 _representative_args(args::Tuple) = args
 function _representative_args(args::AbstractVector)
     isempty(args) && return ()
@@ -102,15 +103,20 @@ end
 # everything memoized on the ResolvedSignaturePlan per dims for free.
 const _SignatureCacheKey = Tuple{Set{Address},Tuple{Vararg{Int}}}
 
+# Families whose runtime-length LATENT support has landed (issue #289, PR-2):
+# the diagonal and dense multivariate normals, both unconstraining through a
+# plain `VectorIdentityTransform(n)` constructed at signature-resolution time.
+# The remaining candidate families (mvstudentt/mvstudenttdense/dirichlet) keep
+# the early pending error until PR-3.
+const _RUNTIME_DIM_SUPPORTED_FAMILIES = (:mvnormal, :mvnormaldense)
+
 # Runtime dims of `model` under `signature` given `args` (issue #289). The fast
 # path is one boolean test: a model without runtime-dim candidates resolves to
-# the empty tuple without touching `args`. PR-1 only reserves the seam -- a
-# candidate that is OBSERVED under the signature is fine (a constrained mv
-# choice scores with a dynamic size and needs no slot), while a LATENT
-# candidate gets an early, informative error here instead of the late,
-# misleading no-parameter-slot failure it produces today. The actual dims walk
-# (evaluating the size-bearing argument expressions against `args`) lands in
-# PR-2.
+# the empty tuple without touching `args`. A candidate that is OBSERVED under
+# the signature contributes nothing (a constrained mv choice scores with a
+# dynamic size and needs no slot); a LATENT candidate of a supported family
+# resolves its length from the model arguments by the dims walk
+# (src/evaluator/runtime_dims.jl), one Int per latent candidate in plan order.
 function _resolve_runtime_dims(
     @nospecialize(model::TeaModel),
     signature::Set{Address},
@@ -118,17 +124,67 @@ function _resolve_runtime_dims(
 )
     candidates = executionplan(model).runtime_dim_candidates
     isempty(candidates) && return ()
+    latents = RuntimeDimCandidate[]
     for candidate in candidates
         candidate.address in signature && continue
-        throw(
+        candidate.family in _RUNTIME_DIM_SUPPORTED_FAMILIES || throw(
             ArgumentError(
                 "latent `$(candidate.family)` at address `$(candidate.address)` with a " *
-                "runtime-length argument is not supported yet (issue #289); the length must " *
-                "be a literal vector/tuple, or the address must be constrained as an observation",
+                "runtime-length argument is not supported yet (issue #289): runtime dimensions " *
+                "currently cover `mvnormal`/`mvnormaldense` latents; the length must be a " *
+                "literal vector/tuple, or the address must be constrained as an observation",
             ),
         )
+        push!(latents, candidate)
     end
-    return ()
+    isempty(latents) && return ()
+    return _runtime_dims_walk(model, latents, args)
+end
+
+# Batched-path resolution: the batched/device entry points accept a shared
+# constraints/args pair or per-column vectors. The resolved plan is
+# per-signature, so the representative pair stands in for the batch -- but for
+# a runtime-dims model the representative column must not silently stand in
+# for columns of a DIFFERENT latent length, so per-column args are first
+# validated to agree on one dims tuple (issue #289).
+function _resolve_signature_plan_representative(
+    @nospecialize(model::TeaModel),
+    @nospecialize(constraints),
+    @nospecialize(args),
+)
+    _validate_shared_runtime_dims(model, constraints, args)
+    return _resolve_signature_plan(
+        model, _representative_constraints(constraints), _representative_args(args),
+    )
+end
+
+function _validate_shared_runtime_dims(
+    @nospecialize(model::TeaModel),
+    @nospecialize(constraints),
+    @nospecialize(args),
+)
+    args isa AbstractVector || return nothing
+    isempty(executionplan(model).runtime_dim_candidates) && return nothing
+    representative = _representative_constraints(constraints)
+    representative isa ChoiceMap || return nothing
+    signature = _conditioning_signature(model, representative)
+    reference = nothing
+    for column_args in args
+        column_args isa Tuple || continue
+        dims = _resolve_runtime_dims(model, signature, column_args)
+        if isnothing(reference)
+            reference = dims
+        elseif dims != reference
+            throw(
+                DimensionMismatch(
+                    "batched per-column model arguments resolve conflicting runtime latent " *
+                    "dimensions $(reference) vs $(dims); every column of a batch must resolve " *
+                    "the same dims tuple (issue #289) -- run mixed-length batches as separate calls",
+                ),
+            )
+        end
+    end
+    return nothing
 end
 
 function _resolve_signature_plan(
@@ -151,7 +207,7 @@ function _resolve_signature_plan_keyed(@nospecialize(model::TeaModel), key::_Sig
         store = cache::Dict{_SignatureCacheKey,ResolvedSignaturePlan}
         existing = get(store, key, nothing)
         isnothing(existing) && begin
-            plan = _signature_execution_plan(executionplan(model), key[1])
+            plan = _signature_execution_plan(executionplan(model), key[1], key[2])
             existing = ResolvedSignaturePlan(plan, _compile_execution_plan(model, plan))
             store[key] = existing
         end

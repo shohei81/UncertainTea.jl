@@ -215,10 +215,11 @@ const mvd_latent_L = [1.0 0.0; 0.8 0.6]
     @test mvd_cor(mvd_pooled_z1, mvd_pooled_z2) < -0.18
 end
 
-# --- non-static mean latents are observation-only ---------------------------
-@testset "mvd_dynamic_mean_observation_only" begin
-    # The frontend only grants a parameter slot when the mean length is static;
-    # this mirrors the diagonal mvnormal rule exactly.
+# --- non-static mean lengths resolve from the arguments (issue #289) --------
+@testset "mvd_dynamic_mean_runtime_dims" begin
+    # The macro-time static-size probes are unchanged; a runtime-length mean is
+    # simply deferred to (signature, dims) resolution instead of being
+    # observation-only (the pre-#289 behavior).
     @test UncertainTea._mvnormaldense_static_size(:(mvnormaldense([a, b], L))) == 2
     @test UncertainTea._mvnormaldense_static_size(:(mvnormaldense(muvec, L))) === nothing
     @test UncertainTea._supported_distribution_family(:(mvnormaldense([a, b], L))) === :mvnormaldense
@@ -228,23 +229,22 @@ end
         w ~ mvnormaldense(muvec, Larg)
         {:o} ~ normal(1.0, 1.0)
     end
-    mvd_dyn_layout = parameterlayout(mvd_dynamic_mu_model)
-    @test isempty(mvd_dyn_layout.slots)
-    @test parametercount(mvd_dyn_layout) == 0
+    # The args-independent default-layout API cannot size the slot and says so.
+    @test_throws ArgumentError parameterlayout(mvd_dynamic_mu_model)
 
-    # Without a slot the choice must be provided as an observation to score...
     mvd_dyn_mu = [0.0, 0.0, 0.0]
     mvd_dyn_L = [1.0 0.0 0.0; 0.2 1.0 0.0; 0.1 -0.3 1.0]
-    @test_throws ArgumentError logjoint(
-        mvd_dynamic_mu_model, Float64[], (mvd_dyn_mu, mvd_dyn_L), choicemap((:o, 1.0)),
-    )
-    # ... and scores correctly when it is.
-    mvd_dyn_full = choicemap((:w, [0.4, -0.6, 0.2]), (:o, 1.0))
-    mvd_dyn_expected =
-        UncertainTea.logpdf(mvnormaldense(mvd_dyn_mu, mvd_dyn_L), [0.4, -0.6, 0.2]) +
+    # Unconstrained `w` is now a real latent with an args-resolved slot ...
+    mvd_dyn_w = [0.4, -0.6, 0.2]
+    mvd_dyn_latent_expected =
+        UncertainTea.logpdf(mvnormaldense(mvd_dyn_mu, mvd_dyn_L), mvd_dyn_w) +
         UncertainTea.logpdf(normal(1.0, 1.0), 1.0)
+    @test logjoint(mvd_dynamic_mu_model, mvd_dyn_w, (mvd_dyn_mu, mvd_dyn_L), choicemap((:o, 1.0))) ≈
+          mvd_dyn_latent_expected atol = 1e-10
+    # ... and constraining it still scores it as an observation.
+    mvd_dyn_full = choicemap((:w, mvd_dyn_w), (:o, 1.0))
     @test logjoint(mvd_dynamic_mu_model, Float64[], (mvd_dyn_mu, mvd_dyn_L), mvd_dyn_full) ≈
-          mvd_dyn_expected atol = 1e-10
+          mvd_dyn_latent_expected atol = 1e-10
 end
 
 # --- backend now natively supports the family (see PR 50) --------------------

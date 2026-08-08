@@ -197,9 +197,7 @@ function BatchedLogjointWorkspace(
     args=(),
     reject_invalid_parameters::Bool=false,
 )
-    resolved = _resolve_signature_plan(
-        model, _representative_constraints(constraints), _representative_args(args),
-    )
+    resolved = _resolve_signature_plan_representative(model, constraints, args)
     plan = resolved.plan
     layout = plan.parameter_layout
     return BatchedLogjointWorkspace(
@@ -226,9 +224,7 @@ end
 # its slot; leaving an unbound choice unconstrained adds one. (PR-5 owns naming
 # the signature in the message.)
 function _batched_signature_layout(model::TeaModel, constraints, args=())
-    return _resolve_signature_plan(
-        model, _representative_constraints(constraints), _representative_args(args),
-    ).plan.parameter_layout
+    return _resolve_signature_plan_representative(model, constraints, args).plan.parameter_layout
 end
 
 function _validate_batched_unconstrained_params(
