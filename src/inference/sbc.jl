@@ -201,7 +201,7 @@ function sbc(
         end
         data = choicemap((address, prior_trace[address]) for address in data_addresses)
         if isnothing(signature_layout)
-            signature_layout = _conditioned_parameter_layout(model, data)
+            signature_layout = _conditioned_parameter_layout(model, data, args)
             num_values = parametervaluecount(signature_layout)
             num_values > 0 ||
                 throw(ArgumentError("sbc requires at least one free latent after conditioning on the observations"))
@@ -391,7 +391,7 @@ function _sbc_batched(
         data = choicemap((address, prior_trace[address]) for address in data_addresses)
         data_vector[simulation] = data
         if isnothing(signature_layout)
-            signature_layout = _conditioned_parameter_layout(model, data)
+            signature_layout = _conditioned_parameter_layout(model, data, args)
             num_values = parametervaluecount(signature_layout)
             num_values > 0 ||
                 throw(ArgumentError("sbc requires at least one free latent after conditioning on the observations"))

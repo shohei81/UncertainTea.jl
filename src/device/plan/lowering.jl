@@ -1541,8 +1541,10 @@ function _device_steps_rebind_argument(steps, argument_slots::BitSet)
     return false
 end
 
-function device_lowering_report(model::TeaModel; constraints::ChoiceMap=choicemap(), precision::Type=Float64)
-    resolved = _resolve_signature_plan(model, _representative_constraints(constraints))
+function device_lowering_report(
+    model::TeaModel; args::Tuple=(), constraints::ChoiceMap=choicemap(), precision::Type=Float64,
+)
+    resolved = _resolve_signature_plan(model, _representative_constraints(constraints), args)
     issues, plan = _lower_device_plan(model, resolved, precision)
     return (isempty(issues) && !isnothing(plan), issues)
 end

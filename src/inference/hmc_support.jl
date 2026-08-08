@@ -118,7 +118,7 @@ function _initial_hmc_position(
     initial_params,
     rng::AbstractRNG,
 )
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     return _initial_hmc_position(model, resolved, args, constraints, initial_params, rng)
 end
 
@@ -197,7 +197,9 @@ function _initial_batched_hmc_positions(
     # One signature resolution for the whole batch: every column of a batch
     # shares one conditioning signature (see `_representative_constraints`), so
     # re-deriving it per chain is pure setup overhead (issue #156).
-    resolved = _resolve_signature_plan(model, _representative_constraints(batch_constraints))
+    resolved = _resolve_signature_plan(
+        model, _representative_constraints(batch_constraints), _representative_args(batch_args),
+    )
     positions = Matrix{Float64}(undef, num_params, num_chains)
     _fill_batched_initial_positions!(
         positions,
@@ -306,7 +308,9 @@ function _redraw_batched_initial_positions!(
     constrained_num_params::Int,
     num_chains::Int,
 )
-    resolved = _resolve_signature_plan(model, _representative_constraints(batch_constraints))
+    resolved = _resolve_signature_plan(
+        model, _representative_constraints(batch_constraints), _representative_args(batch_args),
+    )
     return _fill_batched_initial_positions!(
         positions,
         columns,

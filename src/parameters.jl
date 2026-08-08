@@ -514,7 +514,7 @@ end
 # signature, so a constrained-space vector produced for `(model, constraints)`
 # maps back to exactly the conditioned latents' addresses.
 function parameterchoicemap(model::TeaModel, params::AbstractVector, constraints::ChoiceMap)
-    return _parameterchoicemap(_conditioned_parameter_layout(model, constraints), params)
+    return _parameterchoicemap(_conditioned_parameter_layout(model, constraints, ()), params)
 end
 
 function _parameterchoicemap(layout::ParameterLayout, params::AbstractVector)
@@ -585,7 +585,7 @@ function transform_to_constrained(
     args::Tuple,
     constraints::ChoiceMap,
 )
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     constrained, _ = _transform_to_constrained_with_logabsdet(model, resolved, params, args, constraints)
     return constrained
 end
@@ -629,7 +629,7 @@ function transform_to_unconstrained(
     args::Tuple,
     constraints::ChoiceMap,
 )
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     return _transform_to_unconstrained(model, resolved, params, args, constraints)
 end
 

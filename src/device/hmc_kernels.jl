@@ -330,7 +330,7 @@ function _run_device_batched_hmc(
     T = precision
     # Signature-aware sizing (#95): match the CPU batched_hmc path and the
     # signature-aware device workspace (PR-4), not the syntactic default layout.
-    signature_layout = _batched_signature_layout(model, constraints)
+    signature_layout = _batched_signature_layout(model, constraints, args)
     num_params = parametercount(signature_layout)
     constrained_num_params = parametervaluecount(signature_layout)
     _validate_batched_hmc_arguments(

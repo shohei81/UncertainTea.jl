@@ -3,9 +3,11 @@
 # The compiled scoring path classifies latents/observations from the CONDITIONING
 # SIGNATURE (docs/constraint-driven-conditioning.md): the set of constrained
 # addresses that name a static, unscoped choice. The signature-specific execution
-# plan (and its parameter layout) is memoized per `(model, signature)` in the
-# model's `signature_cache`, so re-running inference with new data at the same
-# observed addresses reuses the compiled plan.
+# plan (and its parameter layout) is memoized per `(model, (signature, dims))` in
+# the model's `signature_cache` -- `dims` is the runtime-dims tuple resolved from
+# the model arguments (issue #289; always `()` for dims-free models) -- so
+# re-running inference with new data at the same observed addresses reuses the
+# compiled plan.
 
 mutable struct ResolvedSignaturePlan
     plan::ExecutionPlan
@@ -60,6 +62,22 @@ _representative_constraints(constraints::ChoiceMap) = constraints
 _representative_constraints(constraints::AbstractVector) =
     isempty(constraints) ? choicemap() : first(constraints)
 
+# A representative single argument tuple for signature resolution. The batched
+# and device paths accept either a shared tuple or a per-column vector of
+# tuples; the resolved plan is per-signature, so the first entry stands in for
+# the batch. (PR-2 of issue #289 must additionally REJECT per-column args whose
+# runtime dims disagree rather than trusting the representative column; until
+# then a runtime-dim latent throws at resolution regardless of the column.)
+_representative_args(args::Tuple) = args
+function _representative_args(args::AbstractVector)
+    isempty(args) && return ()
+    representative = first(args)
+    # Malformed per-column args (entries that are not tuples) cannot stand in
+    # for the batch; return `()` so `_validate_batched_args` raises its
+    # informative ArgumentError instead of resolution hitting a MethodError.
+    return representative isa Tuple ? representative : ()
+end
+
 # The observed set is the canonical signature: the normalized addresses of the
 # model's static, unscoped choices that are present in `constraints`. Values are
 # never part of it, so it is a value-independent memoization key. Constrained
@@ -77,20 +95,65 @@ function _conditioning_signature(model::TeaModel, constraints::ChoiceMap)
     return observed
 end
 
-function _resolve_signature_plan(@nospecialize(model::TeaModel), signature::Set{Address})
+# The signature-cache key (issue #289): the conditioning signature plus the
+# runtime-dims tuple resolved from the model arguments. Dims-free models (the
+# overwhelming majority) always resolve `()` for the dims component, so one
+# signature keeps exactly one cache entry; runtime-dim models re-specialize
+# everything memoized on the ResolvedSignaturePlan per dims for free.
+const _SignatureCacheKey = Tuple{Set{Address},Tuple{Vararg{Int}}}
+
+# Runtime dims of `model` under `signature` given `args` (issue #289). The fast
+# path is one boolean test: a model without runtime-dim candidates resolves to
+# the empty tuple without touching `args`. PR-1 only reserves the seam -- a
+# candidate that is OBSERVED under the signature is fine (a constrained mv
+# choice scores with a dynamic size and needs no slot), while a LATENT
+# candidate gets an early, informative error here instead of the late,
+# misleading no-parameter-slot failure it produces today. The actual dims walk
+# (evaluating the size-bearing argument expressions against `args`) lands in
+# PR-2.
+function _resolve_runtime_dims(
+    @nospecialize(model::TeaModel),
+    signature::Set{Address},
+    @nospecialize(args::Tuple),
+)
+    candidates = executionplan(model).runtime_dim_candidates
+    isempty(candidates) && return ()
+    for candidate in candidates
+        candidate.address in signature && continue
+        throw(
+            ArgumentError(
+                "latent `$(candidate.family)` at address `$(candidate.address)` with a " *
+                "runtime-length argument is not supported yet (issue #289); the length must " *
+                "be a literal vector/tuple, or the address must be constrained as an observation",
+            ),
+        )
+    end
+    return ()
+end
+
+function _resolve_signature_plan(
+    @nospecialize(model::TeaModel),
+    signature::Set{Address},
+    @nospecialize(args::Tuple),
+)
+    dims = _resolve_runtime_dims(model, signature, args)
+    return _resolve_signature_plan_keyed(model, (signature, dims))
+end
+
+function _resolve_signature_plan_keyed(@nospecialize(model::TeaModel), key::_SignatureCacheKey)
     _reject_branchful_compiled_scoring(model)
     return lock(_PLAN_MEMO_LOCK) do
         cache = model.signature_cache[]
         if isnothing(cache)
-            cache = Dict{Set{Address},ResolvedSignaturePlan}()
+            cache = Dict{_SignatureCacheKey,ResolvedSignaturePlan}()
             model.signature_cache[] = cache
         end
-        store = cache::Dict{Set{Address},ResolvedSignaturePlan}
-        existing = get(store, signature, nothing)
+        store = cache::Dict{_SignatureCacheKey,ResolvedSignaturePlan}
+        existing = get(store, key, nothing)
         isnothing(existing) && begin
-            plan = _signature_execution_plan(executionplan(model), signature)
+            plan = _signature_execution_plan(executionplan(model), key[1])
             existing = ResolvedSignaturePlan(plan, _compile_execution_plan(model, plan))
-            store[signature] = existing
+            store[key] = existing
         end
         existing
     end
@@ -192,16 +255,20 @@ function _validate_constraint_values_not_nan(constraints::ChoiceMap)
     return nothing
 end
 
-function _resolve_signature_plan(model::TeaModel, constraints::ChoiceMap)
+function _resolve_signature_plan(model::TeaModel, constraints::ChoiceMap, args::Tuple)
     _validate_constraint_values_not_nan(constraints)
     signature = _conditioning_signature(model, constraints)
+    # the dims resolution stays outside the locked region (the walk is pure and
+    # cheap; dims-free models pay one boolean test)
+    dims = _resolve_runtime_dims(model, signature, args)
+    key = (signature, dims)
     # first-encounter validation only: peek the memo unlocked (a benign race
     # merely repeats the cheap static check)
     cache = model.signature_cache[]
-    if isnothing(cache) || !haskey(cache::Dict{Set{Address},ResolvedSignaturePlan}, signature)
+    if isnothing(cache) || !haskey(cache::Dict{_SignatureCacheKey,ResolvedSignaturePlan}, key)
         _warn_unmatched_constraint_addresses(model, constraints)
     end
-    return _resolve_signature_plan(model, signature)
+    return _resolve_signature_plan_keyed(model, key)
 end
 
 # The signature-specific parameter layout for one conditioning. The CPU
@@ -209,14 +276,14 @@ end
 # (issue #95, PR-6), not the syntactic default `parameterlayout(model)`: the
 # latent set is a function of which addresses are constrained, so a constrained
 # bound choice drops its slot and an unconstrained unbound choice gains one.
-_conditioned_parameter_layout(model::TeaModel, constraints::ChoiceMap) =
-    _resolve_signature_plan(model, constraints).plan.parameter_layout
+_conditioned_parameter_layout(model::TeaModel, constraints::ChoiceMap, args) =
+    _resolve_signature_plan(model, constraints, _representative_args(args)).plan.parameter_layout
 
 # Per-column conditioning (a chain/result may carry one ChoiceMap per column):
 # every column shares the same signature, so the representative constraints fix
 # the (static) layout, matching how `_batched_signature_layout` resolves it.
-_conditioned_parameter_layout(model::TeaModel, constraints::AbstractVector) =
-    _conditioned_parameter_layout(model, _representative_constraints(constraints))
+_conditioned_parameter_layout(model::TeaModel, constraints::AbstractVector, args) =
+    _conditioned_parameter_layout(model, _representative_constraints(constraints), args)
 
 # Human-readable description of a conditioning signature, used by the
 # raw-parameter-vector APIs when a length check fails. The parameter-vector

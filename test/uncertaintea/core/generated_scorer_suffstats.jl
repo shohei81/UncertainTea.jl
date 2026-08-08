@@ -106,12 +106,12 @@ end
         expo_cons = choicemap(((:y => i, abs(randn(gss_rng))) for i = 1:8)...)
         pois_cons = choicemap(((:y => i, float(rand(gss_rng, 0:6))) for i = 1:8)...)
         vary_cons = choicemap(((:y => i, randn(gss_rng)) for i = 1:8)...)
-        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_gauss, gauss_cons).compiled) == [:normal]
-        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_expo, expo_cons).compiled) ==
+        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_gauss, gauss_cons, ()).compiled) == [:normal]
+        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_expo, expo_cons, ()).compiled) ==
               [:exponential]
-        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_pois, pois_cons).compiled) == [:poisson]
+        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_pois, pois_cons, ()).compiled) == [:poisson]
         # loop-varying mu (reads the iterator): not fusable
-        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_varying, vary_cons).compiled) == [:none]
+        @test gss_UT._gen_stage_fusion(gss_UT._resolve_signature_plan(gss_varying, vary_cons, ()).compiled) == [:none]
     end
 
     @testset "fused == unfused == interpreter to rtol 1e-10" begin

@@ -665,7 +665,7 @@ function summarize(chains::HMCChains; space::Symbol=:constrained, quantiles=(0.0
     rhats = rhat(chains; space=space)
     ess_values = ess(chains; space=space)
     diagnostics = _diagnostics_summary(chains)
-    layout = _conditioned_parameter_layout(chains.model, chains.constraints)
+    layout = _conditioned_parameter_layout(chains.model, chains.constraints, chains.args)
     summary_entries = _summary_parameter_entries(layout, space)
     length(summary_entries) == num_params ||
         throw(DimensionMismatch("summary expected $num_params parameters in layout, got $(length(summary_entries))"))

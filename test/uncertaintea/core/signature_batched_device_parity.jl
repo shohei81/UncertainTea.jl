@@ -32,7 +32,7 @@ end
     # --- signature A: :y observed (constrained) -> only mu is latent ---------
     cons_a = choicemap(:y => 2.5, :z => zval)
     layout_a =
-        UncertainTea._resolve_signature_plan(sig_parity_model, cons_a).plan.parameter_layout
+        UncertainTea._resolve_signature_plan(sig_parity_model, cons_a, ()).plan.parameter_layout
     @test parametercount(layout_a) == 1        # mu only
     @test parametervaluecount(layout_a) == 1
 
@@ -59,7 +59,7 @@ end
     # --- signature B: :y latent (unconstrained) -> mu AND y are latent -------
     cons_b = choicemap(:z => zval)
     layout_b =
-        UncertainTea._resolve_signature_plan(sig_parity_model, cons_b).plan.parameter_layout
+        UncertainTea._resolve_signature_plan(sig_parity_model, cons_b, ()).plan.parameter_layout
     @test parametercount(layout_b) == 2        # mu and y
     @test parametervaluecount(layout_b) == 2
 

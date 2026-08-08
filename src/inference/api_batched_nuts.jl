@@ -113,7 +113,7 @@ function batched_nuts(
     # Signature-aware sizing (#95): per-chain position rows and constrained
     # result width follow the conditioning signature, not the syntactic default
     # layout, matching the signature-aware batched workspaces (PR-4).
-    signature_layout = _batched_signature_layout(model, constraints)
+    signature_layout = _batched_signature_layout(model, constraints, args)
     num_params = parametercount(signature_layout)
     constrained_num_params = parametervaluecount(signature_layout)
     _validate_batched_nuts_arguments(

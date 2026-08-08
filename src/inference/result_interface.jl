@@ -48,8 +48,8 @@ function _select_stored_draws(draws::AbstractMatrix, num_draws::Int)
 end
 
 # Constrained-space display names from a result's conditioning triple.
-function _constrained_draw_names(model::TeaModel, constraints::ChoiceMap)
-    return _export_parameter_names(model, constraints, :constrained)
+function _constrained_draw_names(model::TeaModel, args, constraints::ChoiceMap)
+    return _export_parameter_names(model, args, constraints, :constrained)
 end
 
 """
@@ -97,7 +97,7 @@ function constrained_draws(
         length(chains.chains) == 1 ? first(chains.chains).constrained_samples :
         reduce(hcat, (chain.constrained_samples for chain in chains.chains))
     return _select_stored_draws(pooled, num_draws),
-    _constrained_draw_names(chains.model, chains.constraints)
+    _constrained_draw_names(chains.model, chains.args, chains.constraints)
 end
 
 function constrained_draws(
@@ -106,7 +106,7 @@ function constrained_draws(
     rng::AbstractRNG=Random.default_rng(),
 )
     return _select_stored_draws(chain.constrained_samples, num_draws),
-    _constrained_draw_names(chain.model, chain.constraints)
+    _constrained_draw_names(chain.model, chain.args, chain.constraints)
 end
 
 function constrained_draws(
@@ -116,7 +116,7 @@ function constrained_draws(
 )
     count = isnothing(num_draws) ? _GENERATED_DRAWS_DEFAULT : num_draws
     draws = variational_samples(result; num_samples=count, space=:constrained, rng=rng)
-    return draws, _constrained_draw_names(result.model, result.constraints)
+    return draws, _constrained_draw_names(result.model, result.args, result.constraints)
 end
 
 function constrained_draws(
@@ -125,7 +125,7 @@ function constrained_draws(
     rng::AbstractRNG=Random.default_rng(),
 )
     unconstrained = _select_stored_draws(result.draws, num_draws)
-    layout = _conditioned_parameter_layout(result.model, result.constraints)
+    layout = _conditioned_parameter_layout(result.model, result.constraints, result.args)
     constrained = Matrix{Float64}(undef, parametervaluecount(layout), size(unconstrained, 2))
     _signature_batched_transform_to_constrained!(
         constrained,
@@ -134,7 +134,7 @@ function constrained_draws(
         result.args,
         result.constraints,
     )
-    return constrained, _constrained_draw_names(result.model, result.constraints)
+    return constrained, _constrained_draw_names(result.model, result.args, result.constraints)
 end
 
 function constrained_draws(
@@ -143,7 +143,7 @@ function constrained_draws(
     rng::AbstractRNG=Random.default_rng(),
 )
     return _select_stored_draws(result.constrained_particles, num_draws),
-    _constrained_draw_names(result.model, result.constraints)
+    _constrained_draw_names(result.model, result.args, result.constraints)
 end
 
 # Weighted particle populations: systematic resampling by the normalized
@@ -169,7 +169,7 @@ function constrained_draws(
     draws = _weighted_constrained_draws(
         result.constrained_particles, result.normalized_weights, num_draws, rng,
     )
-    return draws, _constrained_draw_names(result.model, result.constraints)
+    return draws, _constrained_draw_names(result.model, result.args, result.constraints)
 end
 
 function constrained_draws(
@@ -188,7 +188,7 @@ function constrained_draws(
     rng::AbstractRNG=Random.default_rng(),
 )
     return _select_stored_draws(result.constrained_samples, num_draws),
-    _constrained_draw_names(result.importance.model, result.importance.constraints)
+    _constrained_draw_names(result.importance.model, result.importance.args, result.importance.constraints)
 end
 
 function constrained_draws(
@@ -199,7 +199,7 @@ function constrained_draws(
     draws = _weighted_constrained_draws(
         result.constrained_samples, result.normalized_weights, num_draws, rng,
     )
-    return draws, _constrained_draw_names(result.model, result.constraints)
+    return draws, _constrained_draw_names(result.model, result.args, result.constraints)
 end
 
 # Elliptical slice sampling has no model attached (it targets a Gaussian prior
@@ -222,7 +222,7 @@ function constrained_draws(
     count > 0 || throw(ArgumentError("constrained_draws requires num_draws > 0"))
     map_result = result.map
     unconstrained = rand(rng, result, count)
-    layout = _conditioned_parameter_layout(map_result.model, map_result.constraints)
+    layout = _conditioned_parameter_layout(map_result.model, map_result.constraints, map_result.args)
     constrained = Matrix{Float64}(undef, parametervaluecount(layout), count)
     _signature_batched_transform_to_constrained!(
         constrained,
@@ -231,7 +231,7 @@ function constrained_draws(
         map_result.args,
         map_result.constraints,
     )
-    return constrained, _constrained_draw_names(map_result.model, map_result.constraints)
+    return constrained, _constrained_draw_names(map_result.model, map_result.args, map_result.constraints)
 end
 
 function constrained_draws(
@@ -240,7 +240,7 @@ function constrained_draws(
     rng::AbstractRNG=Random.default_rng(),
 )
     draws = reshape(copy(result.constrained_mode), :, 1)
-    return draws, _constrained_draw_names(result.model, result.constraints)
+    return draws, _constrained_draw_names(result.model, result.args, result.constraints)
 end
 
 # --- GibbsChain diagnostics (issue #337) --------------------------------------

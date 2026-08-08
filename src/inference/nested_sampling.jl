@@ -363,7 +363,7 @@ function nested_sampling(
     max_iterations >= 1 ||
         throw(ArgumentError("nested_sampling requires max_iterations >= 1, got $max_iterations"))
 
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     completed_args = _complete_model_args(model, args)
     layout = resolved.plan.parameter_layout
     dim = parametercount(layout)                     # unconstrained latent count

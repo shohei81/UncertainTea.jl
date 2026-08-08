@@ -725,7 +725,7 @@ end
 # and the batched per-column reverse path need the same Enzyme-differentiable
 # objective the forward `logjoint_gradient_unconstrained` builds.
 function _generated_gradient_objective_or_nothing(model, seed, args, constraints)
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
     scorer = _generated_scorer(resolved, false)
     isnothing(scorer) && return nothing

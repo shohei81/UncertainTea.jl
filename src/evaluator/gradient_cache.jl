@@ -35,7 +35,7 @@ function _logjoint_gradient_cache(
     seed = collect(params)
     length(buffer) == length(seed) ||
         throw(DimensionMismatch("expected gradient buffer of length $(length(seed)), got $(length(buffer))"))
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     stage = _stage_observations(model, resolved, seed, args, constraints)
     # Prefer the type-stable generated scorer (issue #144) when the plan and its
     # dense observation vectors are representable; otherwise the interpreter
@@ -128,7 +128,7 @@ function logjoint_gradient_unconstrained(
     constraints::ChoiceMap=choicemap(),
 )
     seed = collect(params)
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     stage = _memoized_observation_stage(model, resolved, seed, args, constraints)
     scorer = _generated_scorer(resolved, false)
     obs_stats = isnothing(scorer) ? nothing : _gen_obs_and_stats_for_stage(resolved, stage)
