@@ -103,12 +103,15 @@ end
 # everything memoized on the ResolvedSignaturePlan per dims for free.
 const _SignatureCacheKey = Tuple{Set{Address},Tuple{Vararg{Int}}}
 
-# Families whose runtime-length LATENT support has landed (issue #289, PR-2):
-# the diagonal and dense multivariate normals, both unconstraining through a
-# plain `VectorIdentityTransform(n)` constructed at signature-resolution time.
-# The remaining candidate families (mvstudentt/mvstudenttdense/dirichlet) keep
-# the early pending error until PR-3.
-const _RUNTIME_DIM_SUPPORTED_FAMILIES = (:mvnormal, :mvnormaldense)
+# Families whose runtime-length LATENT support has landed (issue #289): the
+# multivariate normal/Student-t families unconstrain through a plain
+# `VectorIdentityTransform(n)` and dirichlet through a `SimplexTransform(n)`
+# (parameter dimension n-1), each constructed at signature-resolution time.
+# This is every runtime-dimension candidate family: `wishart`/`inversewishart`
+# and `lkjcholesky` are literal-dimension by design (the macro hard-errors on a
+# non-literal size), so they never become candidates.
+const _RUNTIME_DIM_SUPPORTED_FAMILIES =
+    (:mvnormal, :mvnormaldense, :mvstudentt, :mvstudenttdense, :dirichlet)
 
 # Runtime dims of `model` under `signature` given `args` (issue #289). The fast
 # path is one boolean test: a model without runtime-dim candidates resolves to
@@ -127,11 +130,14 @@ function _resolve_runtime_dims(
     latents = RuntimeDimCandidate[]
     for candidate in candidates
         candidate.address in signature && continue
+        # defensive: every candidate family is supported today; this guards a
+        # future family added to `_runtime_dim_size_expr` before its transform
+        # support lands (`wishart`/`lkj` stay literal by design and never get
+        # here -- the macro rejects their non-literal sizes)
         candidate.family in _RUNTIME_DIM_SUPPORTED_FAMILIES || throw(
             ArgumentError(
                 "latent `$(candidate.family)` at address `$(candidate.address)` with a " *
-                "runtime-length argument is not supported yet (issue #289): runtime dimensions " *
-                "currently cover `mvnormal`/`mvnormaldense` latents; the length must be a " *
+                "runtime-length argument is not supported (issue #289): the length must be a " *
                 "literal vector/tuple, or the address must be constrained as an observation",
             ),
         )

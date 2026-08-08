@@ -1,14 +1,17 @@
-# Runtime-dimension mvnormal/mvnormaldense latents (issue #289, PR-2).
+# Runtime-dimension vector latents (issue #289, PR-2 + PR-3).
 #
 # `theta ~ mvnormal(zeros(n), ones(n))` with a model argument `n` resolves its
 # parameter slot at signature-resolution time: `_resolve_runtime_dims` walks
 # the dependency cone of the size-bearing argument against the model arguments
-# (choice bindings poisoned), and the signature pass late-constructs a plain
-# `VectorIdentityTransform(n)` (src/evaluator/runtime_dims.jl, ir.jl). The
-# crux test is TWIN EQUALITY: the runtime-dim model must score bitwise
-# identically to a literal-length twin on every CPU path. Batched/device
-# lowering and the args-independent layout APIs are honestly unsupported, each
-# with a tested failure mode.
+# (choice bindings poisoned), and the signature pass late-constructs the
+# transform from the resolved Int (src/evaluator/runtime_dims.jl, ir.jl) --
+# `VectorIdentityTransform(n)` for the mv normal/Student-t families,
+# `SimplexTransform(n)` (parameter dimension n-1) for dirichlet. The crux test
+# is TWIN EQUALITY: the runtime-dim model must score bitwise identically to a
+# literal-length twin on every CPU path. Batched/device lowering and the
+# args-independent layout APIs are honestly unsupported, each with a tested
+# failure mode. wishart/inversewishart/lkjcholesky are literal-dimension by
+# design (macro-time errors, pinned below) and never become candidates.
 
 const rdl_UT = UncertainTea
 
@@ -85,14 +88,72 @@ end
     {:obs} ~ normal(sum(theta), 1.0)
 end
 
-# PR-3 families keep the pending error
-@tea static function rdl_dirichlet_pending(alpha)
+# PR-3 families: runtime-length dirichlet / mvstudentt / mvstudenttdense
+@tea static function rdl_dirichlet_runtime(alpha)
     w ~ dirichlet(alpha)
     {:obs} ~ normal(w[1], 1.0)
 end
 
-@tea static function rdl_mvstudentt_pending(mu)
-    theta ~ mvstudentt(4.0, mu, ones(3))
+@tea static function rdl_dirichlet_lit3()
+    w ~ dirichlet([2.0, 3.0, 4.0])
+    {:obs} ~ normal(w[1], 1.0)
+end
+
+@tea static function rdl_dirichlet_lit4()
+    w ~ dirichlet([2.0, 3.0, 4.0, 5.0])
+    {:obs} ~ normal(w[1], 1.0)
+end
+
+@tea static function rdl_dirichlet_fresh3(alpha)
+    w ~ dirichlet(alpha)
+    {:obs} ~ normal(w[1], 1.0)
+end
+
+@tea static function rdl_dirichlet_fresh4(alpha)
+    w ~ dirichlet(alpha)
+    {:obs} ~ normal(w[1], 1.0)
+end
+
+# latent-dependent concentration LENGTH: still rejected (values may depend on
+# latents, the length may not)
+@tea static function rdl_dirichlet_lengthdep()
+    k ~ poisson(3.0)
+    w ~ dirichlet(2.0 .* ones(k))
+    {:obs} ~ normal(w[1], 1.0)
+end
+
+@tea static function rdl_mvt_runtime(n)
+    theta ~ mvstudentt(4.0, zeros(n), ones(n))
+    {:obs} ~ normal(sum(theta), 1.0)
+end
+
+@tea static function rdl_mvt_lit3()
+    theta ~ mvstudentt(4.0, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+    {:obs} ~ normal(sum(theta), 1.0)
+end
+
+@tea static function rdl_mvt_lit7()
+    theta ~ mvstudentt(4.0, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    {:obs} ~ normal(sum(theta), 1.0)
+end
+
+@tea static function rdl_mvt_fresh3(n)
+    theta ~ mvstudentt(4.0, zeros(n), ones(n))
+    {:obs} ~ normal(sum(theta), 1.0)
+end
+
+@tea static function rdl_mvt_fresh7(n)
+    theta ~ mvstudentt(4.0, zeros(n), ones(n))
+    {:obs} ~ normal(sum(theta), 1.0)
+end
+
+@tea static function rdl_mvtd_runtime(n, L)
+    theta ~ mvstudenttdense(4.0, zeros(n), L)
+    {:obs} ~ normal(sum(theta), 1.0)
+end
+
+@tea static function rdl_mvtd_literal(L)
+    theta ~ mvstudenttdense(4.0, [0.0, 0.0, 0.0], L)
     {:obs} ~ normal(sum(theta), 1.0)
 end
 
@@ -281,20 +342,181 @@ end
         @test U.parametercount(layout) == 3
     end
 
-    @testset "mvstudentt/dirichlet keep the PR-3 pending error" begin
-        for (model, args) in (
-            (rdl_dirichlet_pending, ([1.0, 1.0, 1.0],)),
-            (rdl_mvstudentt_pending, ([0.0, 0.0, 0.0],)),
+    @testset "twin equality: runtime-dim dirichlet == literal twin (n=3, n=4)" begin
+        # logjoint takes the CONSTRAINED simplex value (length n); the
+        # unconstrained forms take the (n-1)-wide SimplexTransform coordinates
+        cases = (
+            (([2.0, 3.0, 4.0],), rdl_dirichlet_lit3, [0.3, -0.2], [0.2, 0.3, 0.5]),
+            (([2.0, 3.0, 4.0, 5.0],), rdl_dirichlet_lit4, [0.3, -0.2, 0.45], [0.1, 0.2, 0.3, 0.4]),
+        )
+        for (rt_args, lit_model, params, value) in cases
+            @test logjoint(rdl_dirichlet_runtime, value, rt_args, rdl_cons) ==
+                  logjoint(lit_model, value, (), rdl_cons)
+            @test logjoint_unconstrained(rdl_dirichlet_runtime, params, rt_args, rdl_cons) ==
+                  logjoint_unconstrained(lit_model, params, (), rdl_cons)
+            @test logjoint_gradient_unconstrained(rdl_dirichlet_runtime, params, rt_args, rdl_cons) ==
+                  logjoint_gradient_unconstrained(lit_model, params, (), rdl_cons)
+        end
+        # the dims entry is the VALUE length n; the slot is n-1 wide behind a
+        # SimplexTransform(n), exactly the static dirichlet slot sizing
+        n3_alpha = ([2.0, 3.0, 4.0],)
+        @test U._resolve_runtime_dims(rdl_dirichlet_runtime, Set{U.Address}([(:obs,)]), n3_alpha) === (3,)
+        layout = U._conditioned_parameter_layout(rdl_dirichlet_runtime, rdl_cons, n3_alpha)
+        @test U.parametercount(layout) == 2
+        @test U.parametervaluecount(layout) == 3
+        @test only(layout.slots).transform == SimplexTransform(3)
+    end
+
+    @testset "simplex round trip through the signature-aware transforms" begin
+        for (rt_args, params) in (
+            (([2.0, 3.0, 4.0],), [0.3, -0.2]),
+            (([2.0, 3.0, 4.0, 5.0],), [0.3, -0.2, 0.45]),
+        )
+            constrained = U.transform_to_constrained(rdl_dirichlet_runtime, params, rt_args, rdl_cons)
+            @test length(constrained) == length(params) + 1
+            @test all(constrained .> 0)
+            @test isapprox(sum(constrained), 1.0; atol=1e-12)
+            back = U.transform_to_unconstrained(rdl_dirichlet_runtime, constrained, rt_args, rdl_cons)
+            @test isapprox(back, params; atol=1e-12)
+        end
+    end
+
+    @testset "twin equality: runtime-dim mvstudentt == literal twin (n=3, n=7)" begin
+        cases = (
+            ((3,), rdl_mvt_lit3, [0.3, -0.4, 0.25]),
+            ((7,), rdl_mvt_lit7, [0.3, -0.4, 0.25, 0.1, -0.05, 0.7, -1.1]),
+        )
+        for (rt_args, lit_model, params) in cases
+            @test logjoint(rdl_mvt_runtime, params, rt_args, rdl_cons) ==
+                  logjoint(lit_model, params, (), rdl_cons)
+            @test logjoint_unconstrained(rdl_mvt_runtime, params, rt_args, rdl_cons) ==
+                  logjoint_unconstrained(lit_model, params, (), rdl_cons)
+            @test logjoint_gradient_unconstrained(rdl_mvt_runtime, params, rt_args, rdl_cons) ==
+                  logjoint_gradient_unconstrained(lit_model, params, (), rdl_cons)
+        end
+        layout = U._conditioned_parameter_layout(rdl_mvt_runtime, rdl_cons, (3,))
+        @test U.parametercount(layout) == 3
+        @test only(layout.slots).transform == VectorIdentityTransform(3)
+    end
+
+    @testset "twin equality: runtime-dim mvstudenttdense with a matrix argument" begin
+        L = [1.0 0.0 0.0; 0.3 0.9 0.0; -0.2 0.1 0.8]
+        params = [0.3, -0.4, 0.25]
+        @test logjoint(rdl_mvtd_runtime, params, (3, L), rdl_cons) ==
+              logjoint(rdl_mvtd_literal, params, (L,), rdl_cons)
+        @test logjoint_unconstrained(rdl_mvtd_runtime, params, (3, L), rdl_cons) ==
+              logjoint_unconstrained(rdl_mvtd_literal, params, (L,), rdl_cons)
+        @test logjoint_gradient_unconstrained(rdl_mvtd_runtime, params, (3, L), rdl_cons) ==
+              logjoint_gradient_unconstrained(rdl_mvtd_literal, params, (L,), rdl_cons)
+    end
+
+    @testset "fresh-vs-cached across n: dirichlet and mvstudentt" begin
+        # dirichlet: n=3, n=4, n=3 in one session (constrained simplex values)
+        a3 = ([2.0, 3.0, 4.0],)
+        a4 = ([2.0, 3.0, 4.0, 5.0],)
+        p3 = [0.2, 0.3, 0.5]
+        p4 = [0.1, 0.2, 0.3, 0.4]
+        first_3 = logjoint(rdl_dirichlet_runtime, p3, a3, rdl_cons)
+        first_4 = logjoint(rdl_dirichlet_runtime, p4, a4, rdl_cons)
+        @test logjoint(rdl_dirichlet_runtime, p3, a3, rdl_cons) == first_3
+        @test first_3 == logjoint(rdl_dirichlet_fresh3, p3, a3, rdl_cons)
+        @test first_4 == logjoint(rdl_dirichlet_fresh4, p4, a4, rdl_cons)
+        cache = rdl_dirichlet_runtime.signature_cache[]
+        @test Set(key[2] for key in keys(cache)) == Set([(3,), (4,)])
+        # mvstudentt: n=3, n=7, n=3 in one session
+        q3 = [0.2, -0.1, 0.45]
+        q7 = [0.2, -0.1, 0.45, 0.8, -0.6, 0.05, 1.3]
+        mvt_3 = logjoint(rdl_mvt_runtime, q3, (3,), rdl_cons)
+        mvt_7 = logjoint(rdl_mvt_runtime, q7, (7,), rdl_cons)
+        @test logjoint(rdl_mvt_runtime, q3, (3,), rdl_cons) == mvt_3
+        @test mvt_3 == logjoint(rdl_mvt_fresh3, q3, (3,), rdl_cons)
+        @test mvt_7 == logjoint(rdl_mvt_fresh7, q7, (7,), rdl_cons)
+    end
+
+    @testset "sampler smoke: dirichlet nuts at two n in one session" begin
+        res3 = nuts(
+            rdl_dirichlet_runtime, ([2.0, 3.0, 4.0],), rdl_cons;
+            num_samples=300, num_warmup=300, rng=MersenneTwister(289),
+        )
+        res4 = nuts(
+            rdl_dirichlet_runtime, ([2.0, 3.0, 4.0, 5.0],), rdl_cons;
+            num_samples=300, num_warmup=300, rng=MersenneTwister(289),
+        )
+        d3, names3 = constrained_draws(res3)
+        d4, names4 = constrained_draws(res4)
+        @test size(d3, 1) == 3 && names3 == ["w[1]", "w[2]", "w[3]"]
+        @test size(d4, 1) == 4 && length(names4) == 4
+        # the SimplexTransform is exercised end to end: every draw is a simplex
+        @test all(d3 .> 0) && all(d4 .> 0)
+        @test all(abs.(vec(sum(d3; dims=1)) .- 1.0) .< 1e-10)
+        @test all(abs.(vec(sum(d4; dims=1)) .- 1.0) .< 1e-10)
+        # scoring is bitwise identical to the literal twin, so the same-seed
+        # NUTS run produces the identical chain
+        lit3 = nuts(
+            rdl_dirichlet_lit3, (), rdl_cons;
+            num_samples=300, num_warmup=300, rng=MersenneTwister(289),
+        )
+        dlit, _ = constrained_draws(lit3)
+        @test d3 == dlit
+    end
+
+    @testset "dirichlet latent-dependent concentration LENGTH is rejected" begin
+        err = try
+            logjoint(rdl_dirichlet_lengthdep, zeros(3), (), rdl_cons)
+            nothing
+        catch caught
+            caught
+        end
+        @test err isa ArgumentError
+        @test occursin("model arguments alone", err.msg)
+        @test occursin("(:w,)", err.msg)
+        @test occursin("issue #289", err.msg)
+    end
+
+    @testset "no candidate family remains on the pending error" begin
+        # every family `_runtime_dim_size_expr` can emit as a candidate is in
+        # the supported list, so the defensive resolution error is unreachable
+        # for today's models
+        for family in (:mvnormal, :mvnormaldense, :mvstudentt, :mvstudenttdense, :dirichlet)
+            @test family in U._RUNTIME_DIM_SUPPORTED_FAMILIES
+        end
+    end
+
+    @testset "wishart/inversewishart/lkjcholesky stay literal (macro-time pin)" begin
+        # NOT runtime-dim candidates by design: a non-literal size hard-errors
+        # at macro expansion (@eval wraps macro errors in LoadError)
+        rdl_unwrap(err) = err isa LoadError ? rdl_unwrap(err.error) : err
+        for (src, needle) in (
+            (
+                :(@tea static function rdl_wishart_bad(S)
+                    Sigma ~ wishart(5.0, S)
+                    {:obs} ~ normal(Sigma[1], 1.0)
+                end),
+                "wishart latents require a static square scale-matrix literal",
+            ),
+            (
+                :(@tea static function rdl_invwishart_bad(S)
+                    Sigma ~ inversewishart(5.0, S)
+                    {:obs} ~ normal(Sigma[1], 1.0)
+                end),
+                "inversewishart latents require a static square scale-matrix literal",
+            ),
+            (
+                :(@tea static function rdl_lkj_bad(d)
+                    C ~ lkjcholesky(d, 2.0)
+                    {:obs} ~ normal(C[1], 1.0)
+                end),
+                "lkjcholesky requires a literal integer dimension",
+            ),
         )
             err = try
-                logjoint(model, zeros(3), args, rdl_cons)
+                @eval $src
                 nothing
             catch caught
-                caught
+                rdl_unwrap(caught)
             end
             @test err isa ArgumentError
-            @test occursin("not supported yet (issue #289)", err.msg)
-            @test occursin("mvnormal", err.msg)  # the message names what IS covered
+            @test occursin(needle, err.msg)
         end
     end
 

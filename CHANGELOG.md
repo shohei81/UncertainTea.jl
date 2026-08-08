@@ -63,20 +63,25 @@
 
 ### Added
 
-- **Runtime-length `mvnormal`/`mvnormaldense` latents** (#289, PR-2):
+- **Runtime-length vector latents** (#289, PR-2 + PR-3):
   `theta ~ mvnormal(zeros(n), ones(n))` with a model argument `n` now works on
   every CPU path (`logjoint`, `logjoint_unconstrained`, gradients, `nuts` and
   the other samplers, `generate`/`assess`) — the latent's dimension is
   resolved from the model arguments at signature-resolution time and cached
   per `(signature, dims)`, so one session can score/sample the same model at
-  several `n`. The length must be computable from the arguments alone (a
-  latent-dependent length is rejected with an informative error); mixed-`n`
-  per-column argument batches are rejected; batched gradients fall back to
-  per-column ForwardDiff (no backend/device lowering yet); the
-  args-independent layout APIs (`parameterlayout(model)`, 3-argument
-  `transform_to_*`) throw an informative error for these models. The
-  remaining runtime-length families (`mvstudentt`, `mvstudenttdense`,
-  `dirichlet`) keep an early pending error until PR-3.
+  several `n`. All five argument-sized families are covered: `mvnormal`,
+  `mvnormaldense`, `mvstudentt`, `mvstudenttdense` (identity vector
+  transform), and `dirichlet` (`SimplexTransform(n)`, parameter dimension
+  `n-1`). In particular GP latent-function models no longer need a
+  literal-length mean: `f ~ mvnormaldense(zeros(n), gp_cholesky(X, kernel,
+  jitter))` runs at any data size. The length must be computable from the
+  arguments alone (a latent-dependent length is rejected with an informative
+  error); mixed-`n` per-column argument batches are rejected; batched
+  gradients fall back to per-column ForwardDiff (no backend/device lowering
+  yet); the args-independent layout APIs (`parameterlayout(model)`,
+  3-argument `transform_to_*`) throw an informative error for these models.
+  `wishart`/`inversewishart`/`lkjcholesky` stay literal-dimension by design
+  (macro-time errors, unchanged).
 - **Distributions.jl adapter** (#340): the new `UncertainTeaDistributionsExt`
   package extension (activated by loading Distributions.jl) makes any
   Distributions.jl univariate distribution usable inside `@tea` models with

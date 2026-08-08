@@ -5,11 +5,10 @@
 # Dims-free models (no runtime-dimension candidates) always resolve `()` --
 # one boolean test, one cache entry per signature, identical
 # ResolvedSignaturePlan across calls with different argument VALUES. A LATENT
-# mvnormal/mvnormaldense candidate resolves its dims from the arguments as of
-# PR-2 (see runtime_dim_latents.jl); the remaining candidate families keep an
-# early, informative ArgumentError instead of the old late no-parameter-slot
-# failure. An OBSERVED candidate keeps working: dynamic-size observations need
-# no slot.
+# candidate of any runtime-dim family (mvnormal/mvnormaldense as of PR-2,
+# mvstudentt/mvstudenttdense/dirichlet as of PR-3) resolves its dims from the
+# arguments; runtime_dim_latents.jl owns the capability tests. An OBSERVED
+# candidate keeps working: dynamic-size observations need no slot.
 
 @tea static function rdsk_dims_free_model(x)
     mu ~ normal(0.0, 1.0)
@@ -54,7 +53,7 @@ end
         @test key[2] === ()
     end
 
-    @testset "runtime-length candidates: detection, PR-3 pending error, observed path" begin
+    @testset "runtime-length candidates: detection, resolution, observed path" begin
         # the mvnormal candidate is detected at plan build ...
         candidates = U.executionplan(rdsk_runtime_latent_model).runtime_dim_candidates
         @test length(candidates) == 1
@@ -67,28 +66,26 @@ end
             rdsk_runtime_latent_model, U.Set{U.Address}([(:y,)]), (3,),
         ) === (3,)
 
-        # a PR-3-pending family (dirichlet) keeps the early error at logjoint
-        # time, naming the address and the issue
-        @tea static function rdsk_pending_dirichlet(alpha)
+        # a PR-3 family (dirichlet) resolves too: the dims entry is the VALUE
+        # length of the concentration vector (the slot is n-1 wide behind a
+        # late SimplexTransform; runtime_dim_latents.jl owns the capability
+        # tests)
+        @tea static function rdsk_runtime_dirichlet(alpha)
             w ~ dirichlet(alpha)
             {:y} ~ normal(w[1], 1.0)
         end
-        err = try
-            logjoint(rdsk_pending_dirichlet, zeros(2), ([1.0, 1.0, 1.0],), choicemap((:y, 0.5)))
-            nothing
-        catch caught
-            caught
-        end
-        @test err isa ArgumentError
-        @test occursin("latent `dirichlet`", err.msg)
-        @test occursin("(:w,)", err.msg)
-        @test occursin("issue #289", err.msg)
-        @test occursin("literal vector/tuple", err.msg)
-
-        # nuts hits the same early error (resolution is shared by the samplers)
-        @test_throws ArgumentError nuts(
-            rdsk_pending_dirichlet, ([1.0, 1.0, 1.0],), choicemap((:y, 0.5));
-            num_samples=5, num_warmup=5,
+        @test U._resolve_runtime_dims(
+            rdsk_runtime_dirichlet, U.Set{U.Address}([(:y,)]), ([1.0, 1.0, 1.0],),
+        ) === (3,)
+        # logjoint takes the CONSTRAINED value (a length-3 simplex); the
+        # unconstrained slot behind it is 2 wide (SimplexTransform(3))
+        @test isfinite(
+            logjoint(rdsk_runtime_dirichlet, [0.2, 0.3, 0.5], ([1.0, 1.0, 1.0],), choicemap((:y, 0.5))),
+        )
+        @test isfinite(
+            logjoint_unconstrained(
+                rdsk_runtime_dirichlet, zeros(2), ([1.0, 1.0, 1.0],), choicemap((:y, 0.5)),
+            ),
         )
 
         # OBSERVING the candidate keeps today's dynamic-size observation path:
