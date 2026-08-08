@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-08-08)
 
 ### Breaking
 
@@ -223,7 +223,7 @@
   requires status checks (#330); a scheduled workflow exercises the Enzyme
   extension (#333).
 
-## v0.2.0 (unreleased → pending registration)
+### Earlier in the 0.2.0 development line
 
 A large feature release. Breaking only in the export surface (see the first
 entry); model code written against v0.1.0 runs unchanged.
