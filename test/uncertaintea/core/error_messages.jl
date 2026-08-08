@@ -28,6 +28,9 @@ end
         @test occursin("literal integer", err.msg)
         @test occursin("static `for` loop", err.msg)   # points at the loop alternative
         @test occursin("model argument", err.msg)
+        # ... and at the runtime-length mvnormal spelling for the iid-normal case
+        @test occursin("mvnormal(zeros(n), ones(n))", err.msg)
+        @test occursin("issue #289", err.msg)
     end
 
     @testset "unsupported ~ left-hand side lists the valid spellings" begin

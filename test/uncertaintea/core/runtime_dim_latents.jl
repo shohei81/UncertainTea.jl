@@ -1,4 +1,4 @@
-# Runtime-dimension vector latents (issue #289, PR-2 + PR-3).
+# Runtime-dimension vector latents (issue #289, PR-2 through PR-4).
 #
 # `theta ~ mvnormal(zeros(n), ones(n))` with a model argument `n` resolves its
 # parameter slot at signature-resolution time: `_resolve_runtime_dims` walks
@@ -525,6 +525,20 @@ end
         report = U._signature_backend_lowering(rdl_runtime, resolved).report
         @test !report.supported
         @test any(occursin("mvnormal", issue) for issue in report.issues)
+        # PR-4 posture: the reason names the runtime-length choice and the
+        # fallback instead of the generic tuple-lowering errors, on the
+        # args-independent report and the signature-specific one alike
+        for issues in (backend_report(rdl_runtime).issues, report.issues)
+            reason = only(filter(issue -> occursin("issue #289", issue), issues))
+            @test occursin("mvnormal", reason)
+            @test occursin("(:theta,)", reason)
+            @test occursin("runtime-length vector choice", reason)
+            @test occursin("per-column ForwardDiff", reason)
+            # the misleading per-argument errors are gone
+            @test !any(occursin("unsupported call `zeros`", issue) for issue in issues)
+            @test !any(occursin("tuple-like backend arguments", issue) for issue in issues)
+        end
+        @test !backend_report(rdl_runtime).supported
         # ... and the fallback gradient equals the single-path gradient
         params = hcat([0.3, -0.4, 0.25], [0.1, 0.0, -0.2])
         batched = batched_logjoint_gradient_unconstrained(rdl_runtime, params, (3,), rdl_cons)
@@ -548,10 +562,18 @@ end
     end
 
     @testset "device lowering reports unsupported with a clear message" begin
+        # device lowering consumes the backend plan, so the runtime-length
+        # reason (and the honest device verdict inside it) surfaces here too;
+        # the DeviceDiagNormalChoiceStepDyn generalization stays out of scope
+        # until a whole-vector backend step exists (issue #289, PR-4)
         ok, issues = device_lowering_report(rdl_runtime; args=(3,), constraints=rdl_cons)
         @test !ok
         @test !isempty(issues)
-        @test any(occursin("mvnormal", issue) for issue in issues)
+        reason = only(filter(issue -> occursin("issue #289", issue), issues))
+        @test occursin("mvnormal", reason)
+        @test occursin("(:theta,)", reason)
+        @test occursin("runtime-length vector choice", reason)
+        @test occursin("device path is unsupported", reason)
     end
 
     @testset "args-independent layout APIs throw the informative error" begin

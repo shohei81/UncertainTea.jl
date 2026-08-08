@@ -153,6 +153,58 @@ latent function gradient-free — see
 These join the scalar and multivariate families listed in
 [Getting Started](getting-started.md#distributions).
 
+## Runtime-length vector latents
+
+A vector latent may size itself from the model arguments instead of a literal
+(issue #289):
+
+```julia
+@tea static function random_effects(n)
+    theta ~ mvnormal(zeros(n), ones(n))   # n latent components, n a model argument
+    {:y} ~ normal(sum(theta), 1.0)
+    return theta
+end
+
+nuts(random_effects, (5,), choicemap((:y, 1.2)))   # a 5-dimensional latent
+nuts(random_effects, (8,), choicemap((:y, 1.2)))   # the same model at n = 8
+```
+
+This works for the five argument-sized families — `mvnormal`, `mvnormaldense`,
+`mvstudentt`, `mvstudenttdense` (identity vector transform), and `dirichlet`
+(simplex transform, `n-1` free coordinates) — and in particular lets GP
+latent-function models run at any data size:
+`f ~ mvnormaldense(zeros(n), gp_cholesky(X, kernel, jitter))`.
+
+The rules:
+
+- **The length comes from the arguments.** The size-bearing argument (the mean
+  vector, or the concentration vector for `dirichlet`) may be any expression
+  computable from the model arguments and deterministic bindings derived from
+  them. A length that depends on a random choice (`k ~ poisson(3.0);
+  theta ~ mvnormal(zeros(k), ones(k))`) is rejected with an error naming the
+  address — trans-dimensional structure stays out of the static subset.
+- **Re-specialization is per `(conditioning signature, resolved lengths)`.**
+  The layout, compiled plans, and gradients are resolved once per distinct
+  length tuple and cached, so re-running at a previously seen `n` is as cheap
+  as a static model. A workload that sweeps *many* distinct `n` values in one
+  session pays one resolution (plan compilation) per distinct `n` and keeps
+  each cache entry alive; prefer padding or batching by size if you have
+  thousands of distinct lengths.
+- **Supported vs. fallback.** Every single-path CPU API works: `logjoint`,
+  `logjoint_unconstrained`, gradients, `nuts`/`hmc` and the other samplers,
+  `generate`/`assess`. Batched scoring works but falls back to per-column
+  ForwardDiff (no whole-vector backend lowering), and the device
+  (KernelAbstractions) path reports unsupported —
+  `backend_report`/`device_lowering_report` name the runtime-length choice as
+  the reason. Batched per-column argument tuples must agree on the resolved
+  lengths (mixed-`n` batches are rejected). The args-independent layout APIs
+  (`parameterlayout(model)`, the 3-argument `transform_to_*` forms) throw an
+  informative error for these models — use the signature-aware forms that
+  take the model arguments and constraints.
+
+`wishart`, `inversewishart`, and `lkjcholesky` keep their literal-dimension
+requirement (a macro-time error) by design.
+
 ## Using Distributions.jl families
 
 Any [Distributions.jl](https://github.com/JuliaStats/Distributions.jl)

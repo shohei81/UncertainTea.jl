@@ -330,6 +330,28 @@ function _backend_scalar_parameter_row(parameter_layout::ParameterLayout, parame
     return slot.value_index, true
 end
 
+# A runtime-dimension vector choice (issue #289) sizes its vector from a
+# non-literal expression (e.g. `mvnormal(zeros(n), ones(n))` with a model
+# argument `n`), so it has no static per-component argument expressions and no
+# whole-vector backend step can describe it -- by the kept PR-4 posture
+# (docs/src/modeling.md "Runtime-length vector latents"), batched scoring
+# falls back to per-column ForwardDiff and the device path stays unsupported.
+# Emit the one comprehensible reason instead of the generic per-argument
+# tuple-lowering errors ("unsupported call `zeros` ...").
+function _backend_runtime_dim_issue!(issues::Vector{String}, step::ChoicePlanStep)
+    step.rhs isa DistributionSpec || return false
+    isnothing(_runtime_dim_size_expr(step.rhs)) && return false
+    location = isstaticaddress(step.address) ? "at `$(_static_choice_address(step))`" : "at a dynamic address"
+    _backend_issue!(
+        issues,
+        "the $(step.rhs.family) choice $(location) sizes its vector from the model arguments " *
+        "at runtime (runtime-length vector choice, issue #289); backend lowering supports only " *
+        "literal-length vector choices, so batched scoring falls back to per-column ForwardDiff " *
+        "and the device path is unsupported for this model",
+    )
+    return true
+end
+
 function _backend_lower_step(
     @nospecialize(model::TeaModel),
     layout::EnvironmentLayout,
@@ -370,6 +392,7 @@ function _backend_lower_step(
         )
         return nothing
     end
+    _backend_runtime_dim_issue!(issues, step) && return nothing
     step.rhs.family === :mvnormal && return _backend_lower_mvnormal_choice_step(model, layout, parameter_layout, step, issues)
     step.rhs.family === :dirichlet && return _backend_lower_dirichlet_choice_step(model, layout, parameter_layout, step, issues)
     step.rhs.family === :lkjcholesky &&

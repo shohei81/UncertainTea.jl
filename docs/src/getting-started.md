@@ -74,7 +74,10 @@ The `static` subset (`@tea static function ...`) requires that model structure
 stays fixed:
 
 - the set of choices is fixed for a compiled execution plan,
-- each choice has a fixed shape and each address is statically enumerable,
+- each choice has a fixed shape — a literal, or a vector length resolved from
+  the model arguments at signature-resolution time
+  ([runtime-length vector latents](modeling.md#Runtime-length-vector-latents)) —
+  and each address is statically enumerable,
 - loop bounds are static or shape-specialized,
 - no recursion, no trans-dimensional structure, no data-dependent creation of
   new addresses.
