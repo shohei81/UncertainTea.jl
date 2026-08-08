@@ -255,6 +255,15 @@ Rejected or sent to CPU fallback:
 - variable-length latent structure
 - dynamic control flow that changes which choices exist
 
+> **Update (2026-08-08, issue #289):** "each choice has a fixed shape" is now
+> resolved per `(conditioning signature, argument-derived dims)` rather than
+> only at macro time: a vector latent in the argument-sized families may take
+> its length from the model arguments (`theta ~ mvnormal(zeros(n), ones(n))`
+> with a model argument `n`), and the slot is allocated at
+> signature-resolution time. The shape still cannot depend on a random choice
+> — "variable-length latent structure" in the trans-dimensional sense stays
+> rejected. See docs/src/modeling.md ("Runtime-length vector latents").
+
 ### Branchful Control Flow Is Rejected in Static Models
 
 The linear execution plan has no IR for branches, so `@tea static` REJECTS

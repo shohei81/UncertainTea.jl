@@ -63,7 +63,7 @@
 
 ### Added
 
-- **Runtime-length vector latents** (#289, PR-2 + PR-3):
+- **Runtime-length vector latents** (#289):
   `theta ~ mvnormal(zeros(n), ones(n))` with a model argument `n` now works on
   every CPU path (`logjoint`, `logjoint_unconstrained`, gradients, `nuts` and
   the other samplers, `generate`/`assess`) — the latent's dimension is
@@ -76,12 +76,18 @@
   literal-length mean: `f ~ mvnormaldense(zeros(n), gp_cholesky(X, kernel,
   jitter))` runs at any data size. The length must be computable from the
   arguments alone (a latent-dependent length is rejected with an informative
-  error); mixed-`n` per-column argument batches are rejected; batched
-  gradients fall back to per-column ForwardDiff (no backend/device lowering
-  yet); the args-independent layout APIs (`parameterlayout(model)`,
-  3-argument `transform_to_*`) throw an informative error for these models.
+  error); mixed-`n` per-column argument batches are rejected; the
+  args-independent layout APIs (`parameterlayout(model)`, 3-argument
+  `transform_to_*`) throw an informative error for these models.
   `wishart`/`inversewishart`/`lkjcholesky` stay literal-dimension by design
-  (macro-time errors, unchanged).
+  (macro-time errors, unchanged). Posture (final): batched scoring
+  deliberately falls back to per-column ForwardDiff — no whole-vector backend
+  lowering — and the device path stays unsupported;
+  `backend_report`/`device_lowering_report` now name the runtime-length
+  choice as the one reason instead of the generic per-argument lowering
+  errors, and the `iid` runtime-count error points at the runtime-length
+  `mvnormal` spelling for i.i.d. normal vectors. Documented in
+  docs/src/modeling.md ("Runtime-length vector latents").
 - **Distributions.jl adapter** (#340): the new `UncertainTeaDistributionsExt`
   package extension (activated by loading Distributions.jl) makes any
   Distributions.jl univariate distribution usable inside `@tea` models with

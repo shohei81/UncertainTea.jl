@@ -389,7 +389,10 @@ function _rhs_spec_expr(rhs)
                 "execution plan sizes the choice vector when the model is defined, so a " *
                 "runtime variable cannot set it. For a data-dependent count, write the " *
                 "repeated structure as a static `for` loop over `{addr => i}` choices — " *
-                "its extent may be a model argument.",
+                "its extent may be a model argument. For an i.i.d. normal vector " *
+                "specifically, the runtime-length multivariate spelling " *
+                "`theta ~ mvnormal(zeros(n), ones(n))` also works: it sizes the latent " *
+                "vector from the model arguments (issue #289).",
             ),
         )
         (base isa Expr && base.head == :call && !isempty(base.args) && base.args[1] isa Symbol) ||

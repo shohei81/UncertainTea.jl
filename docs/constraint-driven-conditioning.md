@@ -97,6 +97,14 @@ dense, and GPU-friendly** -- identical in kind to today's layout. We therefore:
 Values never enter the signature, so re-running with new data at the same
 observed addresses reuses the cached layout and compiled plan.
 
+> **Update (2026-08-08, issue #289):** the resolution key gained a second
+> component — the memoization is now per `(conditioning signature,
+> argument-derived dims)`. A model that sizes a vector latent from its
+> arguments (`theta ~ mvnormal(zeros(n), ones(n))`) resolves the dims tuple
+> from the args at resolution time, so the layout is a function of the
+> signature **and** the resolved lengths. Once both are fixed the layout is
+> fully static exactly as described above; values still never enter the key.
+
 ## Design
 
 ### 1. Classification and parameter layout (`src/ir.jl`)
