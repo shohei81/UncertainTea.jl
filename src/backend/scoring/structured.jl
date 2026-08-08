@@ -235,7 +235,7 @@ function _backend_mixture_normal_logpdf(weights, mus, sigmas, x)
     total = zero(float(first(weights)))
     for index = 1:k
         w = weights[index]
-        w >= zero(w) || throw(ArgumentError("mixture weights must be nonnegative"))
+        _primal(w) >= zero(_primal(w)) || throw(ArgumentError("mixture weights must be nonnegative"))
         total += w
     end
     abs(total - one(total)) <= oftype(total, 1e-8) ||

@@ -16,7 +16,7 @@ struct VonMisesDist{M,K} <: AbstractTeaDistribution
     kappa::K
 
     function VonMisesDist(mu, kappa)
-        kappa > zero(kappa) || throw(ArgumentError("vonmises requires kappa > 0"))
+        _primal(kappa) > zero(_primal(kappa)) || throw(ArgumentError("vonmises requires kappa > 0"))
         return new{typeof(mu),typeof(kappa)}(mu, kappa)
     end
 end
@@ -46,7 +46,8 @@ vonmises(mu, kappa) = VonMisesDist(mu, kappa)
         for k = 1:400
             term *= q / (k * k)
             new_total = total + term
-            new_total == total && break
+            # primal convergence (ForwardDiff 1.x compares Dual partials too)
+            _primal(new_total) == _primal(total) && break
             total = new_total
         end
         return log(total)

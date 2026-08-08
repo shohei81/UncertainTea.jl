@@ -14,8 +14,10 @@ struct ZeroInflatedPoissonDist{P,L} <: AbstractTeaDistribution
     lambda::L
 
     function ZeroInflatedPoissonDist(p, lambda)
-        zero(p) <= p <= one(p) || throw(ArgumentError("zeroinflatedpoisson requires 0 <= p <= 1"))
-        lambda > zero(lambda) || throw(ArgumentError("zeroinflatedpoisson requires lambda > 0"))
+        zero(_primal(p)) <= _primal(p) <= one(_primal(p)) ||
+            throw(ArgumentError("zeroinflatedpoisson requires 0 <= p <= 1"))
+        _primal(lambda) > zero(_primal(lambda)) ||
+            throw(ArgumentError("zeroinflatedpoisson requires lambda > 0"))
         return new{typeof(p),typeof(lambda)}(p, lambda)
     end
 end
@@ -26,11 +28,11 @@ struct ZeroInflatedNegativeBinomialDist{P,S,Q} <: AbstractTeaDistribution
     probability::Q
 
     function ZeroInflatedNegativeBinomialDist(p, successes, probability)
-        zero(p) <= p <= one(p) ||
+        zero(_primal(p)) <= _primal(p) <= one(_primal(p)) ||
             throw(ArgumentError("zeroinflatednegativebinomial requires 0 <= p <= 1"))
-        successes > zero(successes) ||
+        _primal(successes) > zero(_primal(successes)) ||
             throw(ArgumentError("zeroinflatednegativebinomial requires successes > 0"))
-        zero(probability) < probability <= one(probability) ||
+        zero(_primal(probability)) < _primal(probability) <= one(_primal(probability)) ||
             throw(ArgumentError("zeroinflatednegativebinomial requires 0 < probability <= 1"))
         return new{typeof(p),typeof(successes),typeof(probability)}(p, successes, probability)
     end
@@ -73,9 +75,10 @@ function logpdf(dist::ZeroInflatedPoissonDist, x)
     count = _poisson_count(x)
     isnothing(count) && return oftype(float(dist.lambda), -Inf)
     # p == 0 degenerates to the plain count; p == 1 puts all mass at zero
-    dist.p == one(dist.p) && return count == 0 ? zero(float(dist.lambda)) : oftype(float(dist.lambda), -Inf)
+    _primal(dist.p) == one(_primal(dist.p)) &&
+        return count == 0 ? zero(float(dist.lambda)) : oftype(float(dist.lambda), -Inf)
     logk = _backend_poisson_logpdf(dist.lambda, count)
-    dist.p == zero(dist.p) && return logk
+    _primal(dist.p) == zero(_primal(dist.p)) && return logk
     log0 = count == 0 ? logk : _backend_poisson_logpdf(dist.lambda, 0)
     return _zero_inflated_logpdf(dist.p, log0, logk, count)
 end
@@ -83,10 +86,10 @@ end
 function logpdf(dist::ZeroInflatedNegativeBinomialDist, x)
     count = _poisson_count(x)
     isnothing(count) && return oftype(float(dist.probability), -Inf)
-    dist.p == one(dist.p) &&
+    _primal(dist.p) == one(_primal(dist.p)) &&
         return count == 0 ? zero(float(dist.probability)) : oftype(float(dist.probability), -Inf)
     logk = _backend_negativebinomial_logpdf(dist.successes, dist.probability, count)
-    dist.p == zero(dist.p) && return logk
+    _primal(dist.p) == zero(_primal(dist.p)) && return logk
     log0 = count == 0 ? logk : _backend_negativebinomial_logpdf(dist.successes, dist.probability, 0)
     return _zero_inflated_logpdf(dist.p, log0, logk, count)
 end

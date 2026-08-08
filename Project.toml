@@ -28,7 +28,7 @@ UncertainTeaTablesExt = "Tables"
 [compat]
 Distributions = "0.25"
 Enzyme = "0.13"
-ForwardDiff = "0.10"
+ForwardDiff = "0.10, 1"
 KernelAbstractions = "0.9"
 MCMCChains = "6, 7"
 Metal = "1"

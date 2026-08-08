@@ -4,7 +4,7 @@ struct BernoulliDist{T<:Real} <: AbstractTeaDistribution
     p::T
 
     function BernoulliDist(p::T) where {T<:Real}
-        zero(T) <= p <= one(T) || throw(ArgumentError("bernoulli requires 0 <= p <= 1"))
+        zero(T) <= _primal(p) <= one(T) || throw(ArgumentError("bernoulli requires 0 <= p <= 1"))
         new{T}(p)
     end
 end
@@ -13,7 +13,7 @@ struct GeometricDist{T<:Real} <: AbstractTeaDistribution
     p::T
 
     function GeometricDist(p::T) where {T<:Real}
-        zero(T) < p <= one(T) || throw(ArgumentError("geometric requires 0 < p <= 1"))
+        zero(T) < _primal(p) <= one(T) || throw(ArgumentError("geometric requires 0 < p <= 1"))
         new{T}(p)
     end
 end
@@ -37,7 +37,7 @@ struct BinomialDist{T<:Real} <: AbstractTeaDistribution
 
     function BinomialDist(trials::Int, p::T) where {T<:Real}
         trials >= 0 || throw(ArgumentError("binomial requires trials >= 0"))
-        zero(T) <= p <= one(T) || throw(ArgumentError("binomial requires 0 <= p <= 1"))
+        zero(T) <= _primal(p) <= one(T) || throw(ArgumentError("binomial requires 0 <= p <= 1"))
         new{T}(trials, p)
     end
 end
@@ -47,8 +47,8 @@ struct NegativeBinomialDist{T<:Real} <: AbstractTeaDistribution
     p::T
 
     function NegativeBinomialDist(successes::T, p::T) where {T<:Real}
-        successes > zero(T) || throw(ArgumentError("negativebinomial requires successes > 0"))
-        zero(T) < p <= one(T) || throw(ArgumentError("negativebinomial requires 0 < p <= 1"))
+        _primal(successes) > zero(T) || throw(ArgumentError("negativebinomial requires successes > 0"))
+        zero(T) < _primal(p) <= one(T) || throw(ArgumentError("negativebinomial requires 0 < p <= 1"))
         new{T}(successes, p)
     end
 end
@@ -60,7 +60,8 @@ struct CategoricalDist{T<:Real} <: AbstractTeaDistribution
         isempty(probabilities) && throw(ArgumentError("categorical requires at least one probability"))
         total = zero(T)
         for probability in probabilities
-            zero(T) <= probability <= one(T) || throw(ArgumentError("categorical requires 0 <= p <= 1"))
+            zero(T) <= _primal(probability) <= one(T) ||
+                throw(ArgumentError("categorical requires 0 <= p <= 1"))
             total += probability
         end
         tolerance = sqrt(eps(float(total))) * max(length(probabilities), 1) * 8
@@ -73,7 +74,7 @@ struct PoissonDist{T<:Real} <: AbstractTeaDistribution
     lambda::T
 
     function PoissonDist(lambda::T) where {T<:Real}
-        lambda > zero(T) || throw(ArgumentError("poisson requires lambda > 0"))
+        _primal(lambda) > zero(T) || throw(ArgumentError("poisson requires lambda > 0"))
         new{T}(lambda)
     end
 end
@@ -372,7 +373,9 @@ function _bd0(x, np)
         for j = 1:1000
             ej *= v2
             s_next = s + ej / (2 * j + 1)
-            s_next == s && return s_next
+            # primal convergence check (ForwardDiff 1.x compares Dual partials
+            # too; the partials converge at the same v^2 rate as the primal)
+            _primal(s_next) == _primal(s) && return s_next
             s = s_next
         end
         return s
@@ -395,13 +398,13 @@ end
 function _binomial_logpdf_saddle(trials, probability, count)
     pf = float(probability)
     if count == 0
-        probability == one(probability) && return oftype(pf, -Inf)
+        _primal(probability) == one(_primal(probability)) && return oftype(pf, -Inf)
         return oftype(pf, Float64(trials) * log1p(-pf))
     elseif count == trials
-        probability == zero(probability) && return oftype(pf, -Inf)
+        _primal(probability) == zero(_primal(probability)) && return oftype(pf, -Inf)
         return oftype(pf, Float64(trials) * log(pf))
     end
-    (probability == zero(probability) || probability == one(probability)) &&
+    (_primal(probability) == zero(_primal(probability)) || _primal(probability) == one(_primal(probability))) &&
         return oftype(pf, -Inf)
     nf = Float64(trials)
     kf = Float64(count)
@@ -494,8 +497,8 @@ struct BetaBinomialDist{T<:Real} <: AbstractTeaDistribution
 
     function BetaBinomialDist(trials::Int, alpha::T, beta::T) where {T<:Real}
         trials >= 0 || throw(ArgumentError("betabinomial requires trials >= 0"))
-        alpha > zero(T) || throw(ArgumentError("betabinomial requires alpha > 0"))
-        beta > zero(T) || throw(ArgumentError("betabinomial requires beta > 0"))
+        _primal(alpha) > zero(T) || throw(ArgumentError("betabinomial requires alpha > 0"))
+        _primal(beta) > zero(T) || throw(ArgumentError("betabinomial requires beta > 0"))
         new{T}(trials, alpha, beta)
     end
 end
@@ -512,7 +515,8 @@ struct MultinomialDist{T<:Real} <: AbstractTeaDistribution
         isempty(probabilities) && throw(ArgumentError("multinomial requires at least one probability"))
         total = zero(T)
         for probability in probabilities
-            zero(T) <= probability <= one(T) || throw(ArgumentError("multinomial requires 0 <= p <= 1"))
+            zero(T) <= _primal(probability) <= one(T) ||
+                throw(ArgumentError("multinomial requires 0 <= p <= 1"))
             total += probability
         end
         tolerance = sqrt(eps(float(total))) * max(length(probabilities), 1) * 8
@@ -605,7 +609,7 @@ function logpdf(dist::MultinomialDist, x)
         total += count
         accumulator -= _logfactorial_like(carrier, count)
         if count > 0
-            probability > zero(probability) || return oftype(carrier, -Inf)
+            _primal(probability) > zero(_primal(probability)) || return oftype(carrier, -Inf)
             accumulator += count * log(probability)
         end
     end

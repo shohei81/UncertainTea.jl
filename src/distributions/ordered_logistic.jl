@@ -21,7 +21,8 @@ struct OrderedLogisticDist{T,C<:AbstractVector} <: AbstractTeaDistribution
     function OrderedLogisticDist(eta, cutpoints::AbstractVector)
         length(cutpoints) >= 1 ||
             throw(ArgumentError("orderedlogistic requires at least one cutpoint"))
-        issorted(cutpoints) || throw(ArgumentError("orderedlogistic cutpoints must be increasing"))
+        issorted(cutpoints; by=_primal) ||
+            throw(ArgumentError("orderedlogistic cutpoints must be increasing"))
         return new{typeof(eta),typeof(cutpoints)}(eta, cutpoints)
     end
 end
