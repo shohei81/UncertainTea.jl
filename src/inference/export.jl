@@ -84,6 +84,31 @@ end
 _arviz_layout_matrix(matrix::AbstractMatrix, layout::Symbol) =
     layout === :chain_draw ? permutedims(matrix) : matrix
 
+# Grouped (flatten_vectors=false) counterpart: cubes are built
+# `(num_samples, num_chains, k)` internally; `:chain_draw` swaps the first two
+# axes to the Python `(chain, draw, *shape)` convention of `az.from_dict`.
+_arviz_layout_cube(cube::AbstractArray{<:Any,3}, layout::Symbol) =
+    layout === :chain_draw ? permutedims(cube, (2, 1, 3)) : cube
+
+# ArviZ auto-naming convention for the coordinate dimension of a vector
+# variable (Python ArviZ names unlabeled dims "<var>_dim_0").
+_arviz_dim_name(name::AbstractString) = string(name, "_dim_0")
+
+# Record the coords/dims bookkeeping for one grouped vector variable following
+# the `az.from_dict` convention: `dims[name]` lists the named trailing dims,
+# `coords[dim]` carries that dim's coordinate labels.
+function _arviz_register_vector_dim!(
+    coords::Dict{String,Any},
+    dims::Dict{String,Any},
+    name::AbstractString,
+    labels::AbstractVector,
+)
+    dim_name = _arviz_dim_name(name)
+    dims[name] = [dim_name]
+    coords[dim_name] = collect(labels)
+    return nothing
+end
+
 # Display name of an observation address, matching the flattened parameter
 # naming convention: a single-part address keeps its name (e.g. "y"), a
 # multi-part address gets bracketed trailing parts (e.g. `(:y, 3)` -> "y[3]").
@@ -93,17 +118,21 @@ _observation_display_name(address::Tuple) =
 _observation_display_name(address) = string(address)
 
 """
-    to_arviz_dict(chains::HMCChains; layout=:draw_chain) -> Dict{String,Any}
-    to_arviz_dict(model, args, constraints, chains::HMCChains; layout=:draw_chain)
+    to_arviz_dict(chains::HMCChains; layout=:draw_chain, flatten_vectors=true)
         -> Dict{String,Any}
+    to_arviz_dict(model, args, constraints, chains::HMCChains;
+                  layout=:draw_chain, flatten_vectors=true) -> Dict{String,Any}
 
 Return an ArviZ-style nested dictionary with:
 
-- a `"posterior"` group: one matrix per constrained parameter. Vector-valued
-  parameters are flattened to per-component keys following the same convention
-  as [`parameter_names`](@ref) (e.g. a length-3 `v` becomes `"v[1]"`, `"v[2]"`,
-  `"v[3]"`); re-assembling them into a single array with a coordinate
-  dimension is future work.
+- a `"posterior"` group: one array per constrained parameter. With the default
+  `flatten_vectors=true`, vector-valued parameters are flattened to
+  per-component matrix keys following the same convention as
+  [`parameter_names`](@ref) (e.g. a length-3 `v` becomes `"v[1]"`, `"v[2]"`,
+  `"v[3]"`). With `flatten_vectors=false`, each vector parameter stays a single
+  key holding one array with an extra trailing component dimension (the ArviZ
+  one-array-per-variable convention), and the dictionary gains top-level
+  `"coords"` / `"dims"` entries naming that dimension (see below).
 - a `"sample_stats"` group: `"diverging"`, `"energy"`, `"tree_depth"`,
   `"acceptance_rate"`, `"lp"`, `"step_size"` (the chain's adapted step size,
   constant across its draws), and `"n_steps"` (per-draw leapfrog integration
@@ -113,29 +142,85 @@ Return an ArviZ-style nested dictionary with:
 
 The four-argument form (same conditioning triple as [`loo`](@ref) /
 [`pointwise_loglikelihood`](@ref)) additionally emits a `"log_likelihood"`
-group: one matrix per observation address (named like `"y[1]"`), computed via
-[`pointwise_loglikelihood`](@ref) in [`observation_addresses`](@ref) order —
-the group `az.loo` / `az.compare` need.
+group, computed via [`pointwise_loglikelihood`](@ref) in
+[`observation_addresses`](@ref) order — the group `az.loo` / `az.compare`
+need. With `flatten_vectors=true` it holds one matrix per observation address
+(named like `"y[1]"`); with `flatten_vectors=false`, indexed observation
+addresses `(:y, 1) ... (:y, n)` are grouped into a single `"y"` array with a
+trailing component dimension, mirroring the posterior treatment.
 
-`layout` selects the matrix axis order for every group:
+`layout` selects the axis order for every group:
 
-- `:draw_chain` (default): `(num_samples, num_chains)`, the Julia
-  InferenceObjects convention.
-- `:chain_draw`: `(num_chains, num_samples)`, the Python `az.from_dict`
-  convention. Use this when handing the dictionary to Python ArviZ — with the
-  default layout a 2-chain x 1000-draw run would silently round-trip as 1000
-  chains x 2 draws.
+- `:draw_chain` (default): `(num_samples, num_chains)` matrices — and with
+  `flatten_vectors=false` vector variables are `(num_samples, num_chains, k)`
+  — the Julia InferenceObjects convention.
+- `:chain_draw`: `(num_chains, num_samples)` matrices — vector variables
+  `(num_chains, num_samples, k)` — the Python `az.from_dict`
+  `(chain, draw, *shape)` convention. Use this when handing the dictionary to
+  Python ArviZ — with the default layout a 2-chain x 1000-draw run would
+  silently round-trip as 1000 chains x 2 draws.
+
+With `flatten_vectors=false` the returned dictionary carries the ArviZ
+`from_dict` coordinate metadata for every grouped vector variable:
+
+- `"dims"`: `Dict(name => [dim_name])`, where `dim_name` follows the ArviZ
+  auto-naming convention (e.g. a vector `theta` gets `"theta_dim_0"`);
+- `"coords"`: `Dict(dim_name => labels)` with the component indices
+  (`1:k` for parameters, the observed address indices for `log_likelihood`
+  entries).
+
+Python round-trip example:
+
+```julia
+d = to_arviz_dict(model, args, constraints, chains;
+                  layout=:chain_draw, flatten_vectors=false)
+# ... serialize `d` (e.g. NPZ / JSON), then in Python:
+# idata = az.from_dict(
+#     posterior=d["posterior"],
+#     sample_stats=d["sample_stats"],
+#     log_likelihood=d["log_likelihood"],
+#     coords=d["coords"],
+#     dims=d["dims"],
+# )
+```
 """
-function to_arviz_dict(chains::HMCChains; layout::Symbol=:draw_chain)
+function to_arviz_dict(
+    chains::HMCChains;
+    layout::Symbol=:draw_chain,
+    flatten_vectors::Bool=true,
+)
     _validate_arviz_layout(layout)
     isempty(chains.chains) && throw(ArgumentError("to_arviz_dict requires at least one chain"))
-    names = parameter_names(chains; space=:constrained)
     draws = posterior_array(chains; space=:constrained)
     num_samples, num_chains, num_params = size(draws)
 
     posterior = Dict{String,Any}()
-    for p = 1:num_params
-        posterior[names[p]] = _arviz_layout_matrix(Array{Float64,2}(draws[:, :, p]), layout)
+    coords = Dict{String,Any}()
+    dims = Dict{String,Any}()
+    if flatten_vectors
+        names = parameter_names(chains; space=:constrained)
+        for p = 1:num_params
+            posterior[names[p]] = _arviz_layout_matrix(Array{Float64,2}(draws[:, :, p]), layout)
+        end
+    else
+        # Group the flattened constrained columns back into one array per
+        # parameter using the resolved layout's slot structure (the same
+        # signature-aware layout `parameter_names` uses), instead of parsing
+        # "v[i]" display names.
+        parameter_layout =
+            _conditioned_parameter_layout(chains.model, chains.constraints, chains.args)
+        for slot in parameter_layout.slots
+            indices = parametervalueindices(slot)
+            name = String(slot.binding)
+            if length(indices) == 1
+                posterior[name] =
+                    _arviz_layout_matrix(Array{Float64,2}(draws[:, :, first(indices)]), layout)
+            else
+                cube = Array{Float64,3}(draws[:, :, indices])
+                posterior[name] = _arviz_layout_cube(cube, layout)
+                _arviz_register_vector_dim!(coords, dims, name, 1:length(indices))
+            end
+        end
     end
 
     diverging = Array{Bool,2}(undef, num_samples, num_chains)
@@ -173,11 +258,16 @@ function to_arviz_dict(chains::HMCChains; layout::Symbol=:draw_chain)
         "inference_library_version" => string(pkgversion(UncertainTea)),
     )
 
-    return Dict{String,Any}(
+    result = Dict{String,Any}(
         "posterior" => posterior,
         "sample_stats" => sample_stats,
         "attrs" => attrs,
     )
+    if !flatten_vectors
+        result["coords"] = coords
+        result["dims"] = dims
+    end
+    return result
 end
 
 function to_arviz_dict(
@@ -186,8 +276,9 @@ function to_arviz_dict(
     constraints::ChoiceMap,
     chains::HMCChains;
     layout::Symbol=:draw_chain,
+    flatten_vectors::Bool=true,
 )
-    result = to_arviz_dict(chains; layout=layout)
+    result = to_arviz_dict(chains; layout=layout, flatten_vectors=flatten_vectors)
     num_samples = numsamples(chains)
     num_chains = nchains(chains)
     addresses = observation_addresses(model, args, constraints)
@@ -202,9 +293,46 @@ function to_arviz_dict(
         ),
     )
     log_likelihood = Dict{String,Any}()
-    for (column, address) in enumerate(addresses)
-        matrix = reshape(ll[:, column], num_samples, num_chains)
-        log_likelihood[_observation_display_name(address)] = _arviz_layout_matrix(matrix, layout)
+    if flatten_vectors
+        for (column, address) in enumerate(addresses)
+            matrix = reshape(ll[:, column], num_samples, num_chains)
+            log_likelihood[_observation_display_name(address)] =
+                _arviz_layout_matrix(matrix, layout)
+        end
+    else
+        # Group indexed observation addresses `(:y, i)` under their base name
+        # (component order follows the observed indices, sorted); any other
+        # address shape keeps its flat display name.
+        grouped = Dict{String,Vector{Tuple{Int,Int}}}()  # base -> [(index, column)]
+        for (column, address) in enumerate(addresses)
+            if address isa Tuple && length(address) == 2 && address[2] isa Integer
+                push!(get!(Vector{Tuple{Int,Int}}, grouped, string(address[1])), (Int(address[2]), column))
+            else
+                matrix = reshape(ll[:, column], num_samples, num_chains)
+                log_likelihood[_observation_display_name(address)] =
+                    _arviz_layout_matrix(matrix, layout)
+            end
+        end
+        for (base, components) in grouped
+            sort!(components; by=first)
+            component_count = length(components)
+            if component_count == 1
+                matrix = reshape(ll[:, last(only(components))], num_samples, num_chains)
+                log_likelihood[base] = _arviz_layout_matrix(matrix, layout)
+            else
+                cube = Array{Float64,3}(undef, num_samples, num_chains, component_count)
+                for (offset, (_, column)) in enumerate(components)
+                    cube[:, :, offset] = reshape(ll[:, column], num_samples, num_chains)
+                end
+                log_likelihood[base] = _arviz_layout_cube(cube, layout)
+                _arviz_register_vector_dim!(
+                    result["coords"],
+                    result["dims"],
+                    base,
+                    first.(components),
+                )
+            end
+        end
     end
     result["log_likelihood"] = log_likelihood
     return result
