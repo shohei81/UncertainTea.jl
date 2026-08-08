@@ -75,9 +75,10 @@ def build_model(model_name: str, data: dict):
         return model, ["a", "b"]
 
     if model_name == "schools_large":
-        # issue #317: J=32 centered hierarchy with log-normal tau (the P >= 24
-        # reverse-mode leg on the UncertainTea side). log_tau is the sampled
-        # parameter in every framework so the exported columns align by name.
+        # issue #317: J=32 hierarchy with log-normal tau (the P >= 24
+        # reverse-mode leg on the UncertainTea side), NONCENTERED since issue
+        # #365 (post-#326). log_tau is the sampled parameter in every framework
+        # and theta is exported as a deterministic so the columns align by name.
         y = jnp.asarray(data["y"])
         sigma = jnp.asarray(data["sigma"])
         J = data["J"]
@@ -86,7 +87,8 @@ def build_model(model_name: str, data: dict):
             mu = numpyro.sample("mu", dist.Normal(0.0, 5.0))
             log_tau = numpyro.sample("log_tau", dist.Normal(0.0, 1.0))
             with numpyro.plate("J", J):
-                theta = numpyro.sample("theta", dist.Normal(mu, jnp.exp(log_tau)))
+                z = numpyro.sample("theta_z", dist.Normal(0.0, 1.0))
+            theta = numpyro.deterministic("theta", mu + jnp.exp(log_tau) * z)
             with numpyro.plate("obs", J):
                 numpyro.sample("y", dist.Normal(theta, sigma), obs=y)
 

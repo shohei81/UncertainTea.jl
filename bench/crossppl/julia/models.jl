@@ -84,17 +84,20 @@ end
     return a
 end
 
-# J=32 hierarchical Gaussian (eight-schools shape, CENTERED, log-normal tau) —
-# the P >= 24 (34-parameter) model for the reverse-mode (Enzyme) leg
-# (issue #317). Centered + lognormal deliberately: the reverse tier engages for
-# plain iid latents, while the noncentered `reparam` machinery and the
-# truncated-t tau both fail Enzyme's type analysis today (the adtype guard
-# would silently fall back to forward). The eight_schools twins keep measuring
-# the canonical funnel; this model measures the gradient tiers at real P.
+# J=32 hierarchical Gaussian (eight-schools shape, NONCENTERED, log-normal
+# tau) — the P >= 24 (34-parameter) model for the reverse-mode (Enzyme) leg
+# (issue #317). The canonical noncentered form: log_tau stays the sampled
+# parameter (normal prior) so the exported columns align by name across
+# frameworks, and theta = mu + exp(log_tau) * theta_z via `reparam=:noncentered`.
+# The model was originally forced centered because the noncentered `reparam`
+# machinery failed Enzyme's type analysis; issue #326 fixed that, so the
+# canonical shape now engages the reverse tier (issue #365). The eight_schools
+# twins keep measuring the canonical funnel; this model measures the gradient
+# tiers at real P.
 @tea static function bench_schools_large(sigma)
     mu ~ normal(0.0, 5.0)
     log_tau ~ normal(0.0, 1.0)
-    theta ~ iid(normal(mu, exp(log_tau)), 32)
+    theta ~ iid(normal(mu, exp(log_tau)), 32; reparam=:noncentered)
     for i = 1:32
         {:y => i} ~ normal(theta[i], sigma[i])
     end
