@@ -269,7 +269,7 @@ function _score_backend_step!(
     for batch_index = 1:env.batch_size
         z = choice_values[batch_index]
         sigma = sigma_values[batch_index]
-        (isfinite(sigma) && sigma > 0) || throw(
+        (isfinite(sigma) && _primal(sigma) > 0) || throw(
             BatchedBackendFallback("noncentered normal requires a finite positive scale, got $sigma"),
         )
         totals[batch_index] += _backend_normal_logpdf(zero(z), one(z), z)

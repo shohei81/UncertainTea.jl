@@ -212,7 +212,10 @@ function _to_constrained_cholesky_corr!(
             # (_device_cholesky_corr_constrain): degrade the log-abs-det to
             # -Inf (rejection) and clamp the entry to zero (issue #99). The
             # healthy path is bit-for-bit unchanged.
-            saturated = sum_sqs >= one(sum_sqs)
+            # primal comparison: tanh saturation can land sum_sqs EXACTLY on 1
+            # with nonzero partials (issue #99 boundary; ForwardDiff 1.x would
+            # otherwise tie-break on the partials)
+            saturated = _primal(sum_sqs) >= one(_primal(sum_sqs))
             logabsdet +=
                 _log1m_tanh_sq(z) +
                 (saturated ? oftype(sum_sqs, -Inf) : log1p(-sum_sqs) / 2)
@@ -221,7 +224,7 @@ function _to_constrained_cholesky_corr!(
             sum_sqs += entry * entry
         end
         destination[_packed_lower_index(d, row, row)] =
-            sum_sqs >= one(sum_sqs) ? zero(sum_sqs) : sqrt(1 - sum_sqs)
+            _primal(sum_sqs) >= one(_primal(sum_sqs)) ? zero(sum_sqs) : sqrt(1 - sum_sqs)
     end
     return logabsdet
 end

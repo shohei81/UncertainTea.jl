@@ -5,7 +5,7 @@ struct NormalDist{T<:Real} <: AbstractTeaDistribution
     sigma::T
 
     function NormalDist(mu::T, sigma::T) where {T<:Real}
-        sigma > zero(T) || throw(ArgumentError("normal requires sigma > 0"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("normal requires sigma > 0"))
         new{T}(mu, sigma)
     end
 end
@@ -15,7 +15,7 @@ struct LaplaceDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function LaplaceDist(mu::T, scale::T) where {T<:Real}
-        scale > zero(T) || throw(ArgumentError("laplace requires scale > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("laplace requires scale > 0"))
         new{T}(mu, scale)
     end
 end
@@ -24,7 +24,7 @@ struct ExponentialDist{T<:Real} <: AbstractTeaDistribution
     rate::T
 
     function ExponentialDist(rate::T) where {T<:Real}
-        rate > zero(T) || throw(ArgumentError("exponential requires rate > 0"))
+        _primal(rate) > zero(T) || throw(ArgumentError("exponential requires rate > 0"))
         new{T}(rate)
     end
 end
@@ -34,8 +34,8 @@ struct GammaDist{T<:Real} <: AbstractTeaDistribution
     rate::T
 
     function GammaDist(shape::T, rate::T) where {T<:Real}
-        shape > zero(T) || throw(ArgumentError("gamma requires shape > 0"))
-        rate > zero(T) || throw(ArgumentError("gamma requires rate > 0"))
+        _primal(shape) > zero(T) || throw(ArgumentError("gamma requires shape > 0"))
+        _primal(rate) > zero(T) || throw(ArgumentError("gamma requires rate > 0"))
         new{T}(shape, rate)
     end
 end
@@ -45,8 +45,8 @@ struct InverseGammaDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function InverseGammaDist(shape::T, scale::T) where {T<:Real}
-        shape > zero(T) || throw(ArgumentError("inversegamma requires shape > 0"))
-        scale > zero(T) || throw(ArgumentError("inversegamma requires scale > 0"))
+        _primal(shape) > zero(T) || throw(ArgumentError("inversegamma requires shape > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("inversegamma requires scale > 0"))
         new{T}(shape, scale)
     end
 end
@@ -56,8 +56,8 @@ struct WeibullDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function WeibullDist(shape::T, scale::T) where {T<:Real}
-        shape > zero(T) || throw(ArgumentError("weibull requires shape > 0"))
-        scale > zero(T) || throw(ArgumentError("weibull requires scale > 0"))
+        _primal(shape) > zero(T) || throw(ArgumentError("weibull requires shape > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("weibull requires scale > 0"))
         new{T}(shape, scale)
     end
 end
@@ -67,8 +67,8 @@ struct BetaDist{T<:Real} <: AbstractTeaDistribution
     beta::T
 
     function BetaDist(alpha::T, beta::T) where {T<:Real}
-        alpha > zero(T) || throw(ArgumentError("beta requires alpha > 0"))
-        beta > zero(T) || throw(ArgumentError("beta requires beta > 0"))
+        _primal(alpha) > zero(T) || throw(ArgumentError("beta requires alpha > 0"))
+        _primal(beta) > zero(T) || throw(ArgumentError("beta requires beta > 0"))
         new{T}(alpha, beta)
     end
 end
@@ -78,7 +78,7 @@ struct LogNormalDist{T<:Real} <: AbstractTeaDistribution
     sigma::T
 
     function LogNormalDist(mu::T, sigma::T) where {T<:Real}
-        sigma > zero(T) || throw(ArgumentError("lognormal requires sigma > 0"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("lognormal requires sigma > 0"))
         new{T}(mu, sigma)
     end
 end
@@ -89,8 +89,8 @@ struct StudentTDist{T<:Real} <: AbstractTeaDistribution
     sigma::T
 
     function StudentTDist(nu::T, mu::T, sigma::T) where {T<:Real}
-        nu > zero(T) || throw(ArgumentError("studentt requires nu > 0"))
-        sigma > zero(T) || throw(ArgumentError("studentt requires sigma > 0"))
+        _primal(nu) > zero(T) || throw(ArgumentError("studentt requires nu > 0"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("studentt requires sigma > 0"))
         new{T}(nu, mu, sigma)
     end
 end
@@ -100,7 +100,7 @@ struct CauchyDist{T<:Real} <: AbstractTeaDistribution
     sigma::T
 
     function CauchyDist(mu::T, sigma::T) where {T<:Real}
-        sigma > zero(T) || throw(ArgumentError("cauchy requires sigma > 0"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("cauchy requires sigma > 0"))
         new{T}(mu, sigma)
     end
 end
@@ -109,7 +109,7 @@ struct HalfNormalDist{T<:Real} <: AbstractTeaDistribution
     sigma::T
 
     function HalfNormalDist(sigma::T) where {T<:Real}
-        sigma > zero(T) || throw(ArgumentError("halfnormal requires sigma > 0"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("halfnormal requires sigma > 0"))
         new{T}(sigma)
     end
 end
@@ -118,7 +118,7 @@ struct HalfCauchyDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function HalfCauchyDist(scale::T) where {T<:Real}
-        scale > zero(T) || throw(ArgumentError("halfcauchy requires scale > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("halfcauchy requires scale > 0"))
         new{T}(scale)
     end
 end
@@ -128,7 +128,7 @@ struct UniformDist{T<:Real} <: AbstractTeaDistribution
     upper::T
 
     function UniformDist(lower::T, upper::T) where {T<:Real}
-        upper > lower || throw(ArgumentError("uniform requires upper > lower"))
+        _primal(upper) > _primal(lower) || throw(ArgumentError("uniform requires upper > lower"))
         new{T}(lower, upper)
     end
 end
@@ -138,7 +138,7 @@ struct LogisticDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function LogisticDist(mu::T, scale::T) where {T<:Real}
-        scale > zero(T) || throw(ArgumentError("logistic requires scale > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("logistic requires scale > 0"))
         new{T}(mu, scale)
     end
 end
@@ -148,7 +148,7 @@ struct GumbelDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function GumbelDist(mu::T, scale::T) where {T<:Real}
-        scale > zero(T) || throw(ArgumentError("gumbel requires scale > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("gumbel requires scale > 0"))
         new{T}(mu, scale)
     end
 end
@@ -159,8 +159,8 @@ struct ParetoDist{T<:Real} <: AbstractTeaDistribution
     alpha::T
 
     function ParetoDist(xm::T, alpha::T) where {T<:Real}
-        xm > zero(T) || throw(ArgumentError("pareto requires x_m > 0"))
-        alpha > zero(T) || throw(ArgumentError("pareto requires alpha > 0"))
+        _primal(xm) > zero(T) || throw(ArgumentError("pareto requires x_m > 0"))
+        _primal(alpha) > zero(T) || throw(ArgumentError("pareto requires alpha > 0"))
         new{T}(xm, alpha)
     end
 end
@@ -170,8 +170,8 @@ struct FrechetDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function FrechetDist(shape::T, scale::T) where {T<:Real}
-        shape > zero(T) || throw(ArgumentError("frechet requires shape > 0"))
-        scale > zero(T) || throw(ArgumentError("frechet requires scale > 0"))
+        _primal(shape) > zero(T) || throw(ArgumentError("frechet requires shape > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("frechet requires scale > 0"))
         new{T}(shape, scale)
     end
 end
@@ -180,7 +180,7 @@ struct RayleighDist{T<:Real} <: AbstractTeaDistribution
     scale::T
 
     function RayleighDist(scale::T) where {T<:Real}
-        scale > zero(T) || throw(ArgumentError("rayleigh requires scale > 0"))
+        _primal(scale) > zero(T) || throw(ArgumentError("rayleigh requires scale > 0"))
         new{T}(scale)
     end
 end
@@ -190,8 +190,8 @@ struct InverseGaussianDist{T<:Real} <: AbstractTeaDistribution
     lambda::T
 
     function InverseGaussianDist(mu::T, lambda::T) where {T<:Real}
-        mu > zero(T) || throw(ArgumentError("inversegaussian requires mu > 0"))
-        lambda > zero(T) || throw(ArgumentError("inversegaussian requires lambda > 0"))
+        _primal(mu) > zero(T) || throw(ArgumentError("inversegaussian requires mu > 0"))
+        _primal(lambda) > zero(T) || throw(ArgumentError("inversegaussian requires lambda > 0"))
         new{T}(mu, lambda)
     end
 end

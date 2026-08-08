@@ -7,8 +7,8 @@ struct TruncatedNormalDist{T<:Real} <: AbstractTeaDistribution
     upper::T
 
     function TruncatedNormalDist(mu::T, sigma::T, lower::T, upper::T) where {T<:Real}
-        sigma > zero(T) || throw(ArgumentError("truncatednormal requires sigma > 0"))
-        lower < upper || throw(ArgumentError("truncatednormal requires lower < upper"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("truncatednormal requires sigma > 0"))
+        _primal(lower) < _primal(upper) || throw(ArgumentError("truncatednormal requires lower < upper"))
         new{T}(mu, sigma, lower, upper)
     end
 end
@@ -21,9 +21,9 @@ struct TruncatedStudentTDist{T<:Real} <: AbstractTeaDistribution
     upper::T
 
     function TruncatedStudentTDist(nu::T, mu::T, sigma::T, lower::T, upper::T) where {T<:Real}
-        nu > zero(T) || throw(ArgumentError("truncatedstudentt requires nu > 0"))
-        sigma > zero(T) || throw(ArgumentError("truncatedstudentt requires sigma > 0"))
-        lower < upper || throw(ArgumentError("truncatedstudentt requires lower < upper"))
+        _primal(nu) > zero(T) || throw(ArgumentError("truncatedstudentt requires nu > 0"))
+        _primal(sigma) > zero(T) || throw(ArgumentError("truncatedstudentt requires sigma > 0"))
+        _primal(lower) < _primal(upper) || throw(ArgumentError("truncatedstudentt requires lower < upper"))
         new{T}(nu, mu, sigma, lower, upper)
     end
 end
@@ -209,7 +209,7 @@ end
 
 function logpdf(dist::TruncatedNormalDist, x)
     xx, mu, sigma, lower, upper = promote(x, dist.mu, dist.sigma, dist.lower, dist.upper)
-    (xx < lower || xx > upper) && return _offsupport_neginf(xx)
+    (_primal(xx) < _primal(lower) || _primal(xx) > _primal(upper)) && return _offsupport_neginf(xx)
     base = logpdf(normal(mu, sigma), xx)
     za = (lower - mu) / sigma
     zb = (upper - mu) / sigma
@@ -219,7 +219,7 @@ end
 function logpdf(dist::TruncatedStudentTDist, x)
     xx, nu, mu, sigma, lower, upper =
         promote(x, dist.nu, dist.mu, dist.sigma, dist.lower, dist.upper)
-    (xx < lower || xx > upper) && return _offsupport_neginf(xx)
+    (_primal(xx) < _primal(lower) || _primal(xx) > _primal(upper)) && return _offsupport_neginf(xx)
     base = logpdf(studentt(nu, mu, sigma), xx)
     za = (lower - mu) / sigma
     zb = (upper - mu) / sigma

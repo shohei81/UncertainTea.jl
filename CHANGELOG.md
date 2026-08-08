@@ -142,7 +142,17 @@
 
 ### Fixed
 
-- **Enzyme reverse tier engages for non-centered and truncated-t latents**
+- **ForwardDiff 1.x compatibility — boundary validations judge the primal
+  value**: ForwardDiff 1.x compares `Dual`s lexicographically at value ties
+  (the partials break the tie), so a saturated latent landing EXACTLY on a
+  support boundary with live partials (issues #343/#354 — e.g.
+  `sigmoid(theta)` rounding to `1.0` with derivative `~8.5e-17`) started
+  misfiring boundary-inclusive checks like `0 <= p <= 1` in both directions
+  (values that used to pass now threw, and `x > 0` at `Dual(0.0, +1)` wrongly
+  admitted the boundary). All Dual-reachable validation, support-membership,
+  and boundary-equality comparisons now route through a `_primal` helper so a
+  perturbation direction can never flip support membership; semantics under
+  ForwardDiff 0.10 are unchanged, and the compat entry widens to `"0.10, 1"`.
   (#326): concrete compiled-plan step types fix the union-selector layouts
   that made Enzyme's type analysis reject `reparam=:noncentered` models, so
   the guarded-automatic (`adtype=:auto`) and explicit `:reverse` paths now

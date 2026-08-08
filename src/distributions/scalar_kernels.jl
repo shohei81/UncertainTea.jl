@@ -65,30 +65,30 @@ _positive_subnormal(x::ForwardDiff.Dual) = _positive_subnormal(ForwardDiff.value
 
 function _backend_normal_logpdf(mu, sigma, x)
     xx, mu_, sigma_ = promote(x, mu, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
     z = (xx - mu_) / sigma_
     return -log(sigma_) - log(2 * pi) / 2 - z * z / 2
 end
 
 function _backend_lognormal_logpdf(mu, sigma, x)
     xx, mu_, sigma_ = promote(x, mu, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    xx > zero(xx) || return _offsupport_neginf(xx)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
+    _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
     return _backend_normal_logpdf(mu_, sigma_, log(xx)) - log(xx)
 end
 
 function _backend_exponential_logpdf(rate, x)
     xx, rate_ = promote(x, rate)
-    rate_ > zero(rate_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return _offsupport_neginf(xx)
+    _primal(rate_) > zero(_primal(rate_)) || return oftype(xx, NaN)
+    _primal(xx) >= zero(_primal(xx)) || return _offsupport_neginf(xx)
     return log(rate_) - rate_ * xx
 end
 
 function _backend_gamma_logpdf(shape, rate, x)
     xx, shape_, rate_ = promote(x, shape, rate)
-    shape_ > zero(shape_) || return oftype(xx, NaN)
-    rate_ > zero(rate_) || return oftype(xx, NaN)
-    xx > zero(xx) || return _offsupport_neginf(xx)
+    _primal(shape_) > zero(_primal(shape_)) || return oftype(xx, NaN)
+    _primal(rate_) > zero(_primal(rate_)) || return oftype(xx, NaN)
+    _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
     # exp-subnormal boundary (issue #345): a subnormal value scores as the
     # boundary (-Inf with poisoned partials), not a silently-wrong finite
     # density built from log of a few mantissa bits
@@ -98,8 +98,8 @@ end
 
 function _backend_studentt_logpdf(nu, mu, sigma, x)
     xx, nu_, mu_, sigma_ = promote(x, nu, mu, sigma)
-    nu_ > zero(nu_) || return oftype(xx, NaN)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
+    _primal(nu_) > zero(_primal(nu_)) || return oftype(xx, NaN)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
     z = (xx - mu_) / sigma_
     return _studentt_log_constant(nu_) - log(sigma_) -
            (nu_ + one(nu_)) * log1p((z * z) / nu_) / 2
@@ -107,15 +107,15 @@ end
 
 function _backend_laplace_logpdf(mu, scale, x)
     xx, mu_, scale_ = promote(x, mu, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
     return -log(2 * scale_) - abs(xx - mu_) / scale_
 end
 
 function _backend_inversegamma_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
-    shape_ > zero(shape_) || return oftype(xx, NaN)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx > zero(xx) || return _offsupport_neginf(xx)
+    _primal(shape_) > zero(_primal(shape_)) || return oftype(xx, NaN)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
+    _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
     return shape_ * log(scale_) - loggamma(shape_) -
            (shape_ + one(shape_)) * log(xx) -
            scale_ / xx
@@ -123,13 +123,13 @@ end
 
 function _backend_weibull_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
-    shape_ > zero(shape_) || return oftype(xx, NaN)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx < zero(xx) && return _offsupport_neginf(xx)
-    if xx == zero(xx)
-        if shape_ < one(shape_)
+    _primal(shape_) > zero(_primal(shape_)) || return oftype(xx, NaN)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
+    _primal(xx) < zero(_primal(xx)) && return _offsupport_neginf(xx)
+    if _primal(xx) == zero(_primal(xx))
+        if _primal(shape_) < one(_primal(shape_))
             return oftype(xx, Inf)
-        elseif shape_ == one(shape_)
+        elseif _primal(shape_) == one(_primal(shape_))
             return -log(scale_)
         end
         return _offsupport_neginf(xx)
@@ -141,9 +141,9 @@ end
 
 function _backend_beta_logpdf(alpha, beta_parameter, x)
     xx, alpha_, beta_ = promote(x, alpha, beta_parameter)
-    alpha_ > zero(alpha_) || return oftype(xx, NaN)
-    beta_ > zero(beta_) || return oftype(xx, NaN)
-    zero(xx) < xx < one(xx) || return _offsupport_neginf(xx)
+    _primal(alpha_) > zero(_primal(alpha_)) || return oftype(xx, NaN)
+    _primal(beta_) > zero(_primal(beta_)) || return oftype(xx, NaN)
+    zero(_primal(xx)) < _primal(xx) < one(_primal(xx)) || return _offsupport_neginf(xx)
     return loggamma(alpha_ + beta_) - loggamma(alpha_) - loggamma(beta_) +
            (alpha_ - one(alpha_)) * log(xx) +
            (beta_ - one(beta_)) * log1p(-xx)
@@ -151,37 +151,37 @@ end
 
 function _backend_cauchy_logpdf(mu, sigma, x)
     xx, mu_, sigma_ = promote(x, mu, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
     z = (xx - mu_) / sigma_
     return -log(oftype(xx, pi)) - log(sigma_) - log1p(z * z)
 end
 
 function _backend_halfnormal_logpdf(sigma, x)
     xx, sigma_ = promote(x, sigma)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return _offsupport_neginf(xx)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
+    _primal(xx) >= zero(_primal(xx)) || return _offsupport_neginf(xx)
     z = xx / sigma_
     return log(oftype(xx, 2)) - log(sigma_) - log(2 * oftype(xx, pi)) / 2 - z * z / 2
 end
 
 function _backend_halfcauchy_logpdf(scale, x)
     xx, scale_ = promote(x, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx >= zero(xx) || return _offsupport_neginf(xx)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
+    _primal(xx) >= zero(_primal(xx)) || return _offsupport_neginf(xx)
     z = xx / scale_
     return log(oftype(xx, 2)) - log(oftype(xx, pi)) - log(scale_) - log1p(z * z)
 end
 
 function _backend_uniform_logpdf(lower, upper, x)
     xx, lower_, upper_ = promote(x, lower, upper)
-    upper_ > lower_ || return oftype(xx, NaN)
-    lower_ <= xx <= upper_ || return _offsupport_neginf(xx)
+    _primal(upper_) > _primal(lower_) || return oftype(xx, NaN)
+    _primal(lower_) <= _primal(xx) <= _primal(upper_) || return _offsupport_neginf(xx)
     return -log(upper_ - lower_)
 end
 
 function _backend_logistic_logpdf(mu, scale, x)
     xx, mu_, scale_ = promote(x, mu, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
     z = (xx - mu_) / scale_
     az = abs(z)
     return -log(scale_) - az - 2 * log1p(exp(-az))
@@ -189,37 +189,37 @@ end
 
 function _backend_gumbel_logpdf(mu, scale, x)
     xx, mu_, scale_ = promote(x, mu, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
     z = (xx - mu_) / scale_
     return -log(scale_) - z - exp(-z)
 end
 
 function _backend_pareto_logpdf(xm, alpha, x)
     xx, xm_, alpha_ = promote(x, xm, alpha)
-    (xm_ > zero(xm_) && alpha_ > zero(alpha_)) || return oftype(xx, NaN)
-    xx >= xm_ || return _offsupport_neginf(xx)
+    (_primal(xm_) > zero(_primal(xm_)) && _primal(alpha_) > zero(_primal(alpha_))) || return oftype(xx, NaN)
+    _primal(xx) >= _primal(xm_) || return _offsupport_neginf(xx)
     return log(alpha_) + alpha_ * log(xm_) - (alpha_ + one(alpha_)) * log(xx)
 end
 
 function _backend_frechet_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
-    (shape_ > zero(shape_) && scale_ > zero(scale_)) || return oftype(xx, NaN)
-    xx > zero(xx) || return _offsupport_neginf(xx)
+    (_primal(shape_) > zero(_primal(shape_)) && _primal(scale_) > zero(_primal(scale_))) || return oftype(xx, NaN)
+    _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
     logz = log(xx) - log(scale_)
     return log(shape_) - log(scale_) - (one(shape_) + shape_) * logz - exp(-shape_ * logz)
 end
 
 function _backend_rayleigh_logpdf(scale, x)
     xx, scale_ = promote(x, scale)
-    scale_ > zero(scale_) || return oftype(xx, NaN)
-    xx > zero(xx) || return _offsupport_neginf(xx)
+    _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
+    _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
     return log(xx) - 2 * log(scale_) - xx * xx / (2 * scale_ * scale_)
 end
 
 function _backend_inversegaussian_logpdf(mu, lambda, x)
     xx, mu_, lambda_ = promote(x, mu, lambda)
-    (mu_ > zero(mu_) && lambda_ > zero(lambda_)) || return oftype(xx, NaN)
-    xx > zero(xx) || return _offsupport_neginf(xx)
+    (_primal(mu_) > zero(_primal(mu_)) && _primal(lambda_) > zero(_primal(lambda_))) || return oftype(xx, NaN)
+    _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
     d = xx - mu_
     return log(lambda_) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
            lambda_ * d * d / (2 * mu_ * mu_ * xx)
@@ -400,7 +400,7 @@ end
 
 function _backend_bernoulli_logpdf(p, x)
     probability = p
-    zero(probability) <= probability <= one(probability) ||
+    zero(_primal(probability)) <= _primal(probability) <= one(_primal(probability)) ||
         throw(ArgumentError("bernoulli requires 0 <= p <= 1"))
     value = _bernoulli_value(x)
     isnothing(value) && return oftype(float(probability), -Inf)
@@ -417,7 +417,7 @@ function _backend_bernoullilogit_logpdf(eta, x)
 end
 
 function _backend_poisson_logpdf(lambda, x)
-    lambda > zero(lambda) || throw(ArgumentError("poisson requires lambda > 0"))
+    _primal(lambda) > zero(_primal(lambda)) || throw(ArgumentError("poisson requires lambda > 0"))
     count = _poisson_count(x)
     isnothing(count) && return oftype(float(lambda), -Inf)
     # extreme counts (issue #345): the naive spelling differences
@@ -429,13 +429,13 @@ end
 
 function _backend_geometric_logpdf(probability, x)
     probability_ = float(probability)
-    zero(probability_) < probability_ <= one(probability_) ||
+    zero(_primal(probability_)) < _primal(probability_) <= one(_primal(probability_)) ||
         throw(ArgumentError("geometric requires 0 < p <= 1"))
     count = _poisson_count(x)
     isnothing(count) && return oftype(probability_, -Inf)
     if count == 0
         return log(probability_)
-    elseif probability_ == one(probability_)
+    elseif _primal(probability_) == one(_primal(probability_))
         return oftype(probability_, -Inf)
     end
     return log(probability_) + count * log1p(-probability_)
@@ -443,14 +443,15 @@ end
 
 function _backend_negativebinomial_logpdf(successes, probability, x)
     successes_, probability_ = promote(successes, probability)
-    successes_ > zero(successes_) || throw(ArgumentError("negativebinomial requires successes > 0"))
-    zero(probability_) < probability_ <= one(probability_) ||
+    _primal(successes_) > zero(_primal(successes_)) ||
+        throw(ArgumentError("negativebinomial requires successes > 0"))
+    zero(_primal(probability_)) < _primal(probability_) <= one(_primal(probability_)) ||
         throw(ArgumentError("negativebinomial requires 0 < p <= 1"))
     count = _poisson_count(x)
     isnothing(count) && return oftype(probability_, -Inf)
-    if count == 0 && probability_ == one(probability_)
+    if count == 0 && _primal(probability_) == one(_primal(probability_))
         return zero(probability_)
-    elseif probability_ == one(probability_)
+    elseif _primal(probability_) == one(_primal(probability_))
         return oftype(probability_, -Inf)
     end
     # extreme counts (issue #345): loggamma(count + r) - log(count!) and the
@@ -464,7 +465,7 @@ end
 
 function _backend_binomial_logpdf(trials, probability, x)
     probability_ = float(probability)
-    zero(probability_) <= probability_ <= one(probability_) ||
+    zero(_primal(probability_)) <= _primal(probability_) <= one(_primal(probability_)) ||
         throw(ArgumentError("binomial requires 0 <= p <= 1"))
     trial_count = _binomial_trials(trials)
     isnothing(trial_count) && throw(ArgumentError("binomial requires integer trials >= 0"))
@@ -494,8 +495,8 @@ end
 # reference; `alpha`/`beta` may be latent-flowing.
 function _backend_betabinomial_logpdf(trials, alpha, beta, x)
     alpha_, beta_ = promote(float(alpha), float(beta))
-    alpha_ > zero(alpha_) || throw(ArgumentError("betabinomial requires alpha > 0"))
-    beta_ > zero(beta_) || throw(ArgumentError("betabinomial requires beta > 0"))
+    _primal(alpha_) > zero(_primal(alpha_)) || throw(ArgumentError("betabinomial requires alpha > 0"))
+    _primal(beta_) > zero(_primal(beta_)) || throw(ArgumentError("betabinomial requires beta > 0"))
     trial_count = _binomial_trials(trials)
     isnothing(trial_count) && throw(ArgumentError("betabinomial requires integer trials >= 0"))
     count = _poisson_count(x)
@@ -521,7 +522,7 @@ function _backend_categorical_logpdf(probabilities::Tuple, x)
     total = zero(float(first(probabilities)))
     for probability in probabilities
         probability_ = float(probability)
-        zero(probability_) <= probability_ <= one(probability_) ||
+        zero(_primal(probability_)) <= _primal(probability_) <= one(_primal(probability_)) ||
             throw(ArgumentError("categorical requires 0 <= p <= 1"))
         total += probability_
     end

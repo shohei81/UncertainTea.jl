@@ -9,8 +9,8 @@
 # remain a genuine user-input contract and still throw.
 function _backend_truncatednormal_logpdf(mu, sigma, lower, upper, x)
     xx, mu_, sigma_, lower_, upper_ = promote(x, mu, sigma, lower, upper)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    (xx < lower_ || xx > upper_) && return _offsupport_neginf(xx)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
+    (_primal(xx) < _primal(lower_) || _primal(xx) > _primal(upper_)) && return _offsupport_neginf(xx)
     base = _backend_normal_logpdf(mu_, sigma_, xx)
     za = (lower_ - mu_) / sigma_
     zb = (upper_ - mu_) / sigma_
@@ -87,10 +87,10 @@ function _backend_truncatedstudentt_logpdf(nu, mu, sigma, lower, upper, x)
     # inverted-bounds check is a structural specification error (a genuine
     # user-input contract) and still throws, mirroring the CPU
     # `TruncatedStudentTDist` constructor.
-    nu_ > zero(nu_) || return oftype(xx, NaN)
-    sigma_ > zero(sigma_) || return oftype(xx, NaN)
-    lower_ < upper_ || throw(ArgumentError("truncatedstudentt requires lower < upper"))
-    (xx < lower_ || xx > upper_) && return _offsupport_neginf(xx)
+    _primal(nu_) > zero(_primal(nu_)) || return oftype(xx, NaN)
+    _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
+    _primal(lower_) < _primal(upper_) || throw(ArgumentError("truncatedstudentt requires lower < upper"))
+    (_primal(xx) < _primal(lower_) || _primal(xx) > _primal(upper_)) && return _offsupport_neginf(xx)
     base = _backend_studentt_logpdf(nu_, mu_, sigma_, xx)
     za = (lower_ - mu_) / sigma_
     zb = (upper_ - mu_) / sigma_

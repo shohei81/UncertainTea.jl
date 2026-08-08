@@ -6,7 +6,7 @@ struct DirichletDist{T<:Real} <: AbstractTeaDistribution
     function DirichletDist(alpha::Vector{T}) where {T<:Real}
         length(alpha) >= 2 || throw(ArgumentError("dirichlet requires at least 2 concentration parameters"))
         for value in alpha
-            value > zero(T) || throw(ArgumentError("dirichlet requires alpha > 0"))
+            _primal(value) > zero(T) || throw(ArgumentError("dirichlet requires alpha > 0"))
         end
         return new{T}(alpha)
     end
@@ -23,7 +23,7 @@ struct MvNormalDist{T<:Real} <: AbstractTeaDistribution
         isempty(mu) && throw(ArgumentError("mvnormal requires at least one dimension"))
         length(mu) == length(sigma) || throw(ArgumentError("mvnormal requires mean and scale vectors with the same length"))
         for value in sigma
-            value > zero(T) || throw(ArgumentError("mvnormal requires sigma > 0 in every dimension"))
+            _primal(value) > zero(T) || throw(ArgumentError("mvnormal requires sigma > 0 in every dimension"))
         end
         return new{T}(mu, sigma)
     end
@@ -45,7 +45,7 @@ struct MixtureDist{W<:Real,C<:Tuple} <: AbstractTeaDistribution
         )
         total = zero(W)
         for w in weights
-            w >= zero(W) || throw(ArgumentError("mixture weights must be nonnegative"))
+            _primal(w) >= zero(W) || throw(ArgumentError("mixture weights must be nonnegative"))
             total += w
         end
         abs(total - one(W)) <= oftype(total, 1e-8) ||
@@ -79,7 +79,7 @@ struct MvNormalDenseDist{M<:AbstractVector,S<:AbstractMatrix} <: AbstractTeaDist
             ),
         )
         for index = 1:size(scale_tril, 1)
-            scale_tril[index, index] > 0 || throw(ArgumentError(
+            _primal(scale_tril[index, index]) > 0 || throw(ArgumentError(
                 "mvnormaldense requires strictly positive scale_tril diagonal entries",
             ))
         end
@@ -97,7 +97,7 @@ struct LKJCholeskyDist{T<:Real} <: AbstractTeaDistribution
 
     function LKJCholeskyDist(d::Int, eta::Real)
         d >= 2 || throw(ArgumentError("lkjcholesky requires a dimension d >= 2"))
-        eta > 0 || throw(ArgumentError("lkjcholesky requires a concentration eta > 0"))
+        _primal(eta) > 0 || throw(ArgumentError("lkjcholesky requires a concentration eta > 0"))
         promoted_eta = float(eta)
         return new{typeof(promoted_eta)}(d, promoted_eta)
     end
@@ -114,12 +114,13 @@ struct MvStudentTDist{N<:Real,T<:Real} <: AbstractTeaDistribution
     sigma::Vector{T}
 
     function MvStudentTDist(nu::N, mu::Vector{T}, sigma::Vector{T}) where {N<:Real,T<:Real}
-        nu > zero(nu) || throw(ArgumentError("mvstudentt requires degrees of freedom nu > 0"))
+        _primal(nu) > zero(_primal(nu)) || throw(ArgumentError("mvstudentt requires degrees of freedom nu > 0"))
         isempty(mu) && throw(ArgumentError("mvstudentt requires at least one dimension"))
         length(mu) == length(sigma) ||
             throw(ArgumentError("mvstudentt requires mean and scale vectors with the same length"))
         for value in sigma
-            value > zero(T) || throw(ArgumentError("mvstudentt requires sigma > 0 in every dimension"))
+            _primal(value) > zero(T) ||
+                throw(ArgumentError("mvstudentt requires sigma > 0 in every dimension"))
         end
         return new{N,T}(nu, mu, sigma)
     end
@@ -134,7 +135,8 @@ struct MvStudentTDenseDist{N<:Real,M<:AbstractVector,S<:AbstractMatrix} <: Abstr
     scale_tril::S
 
     function MvStudentTDenseDist(nu::N, mu::AbstractVector, scale_tril::AbstractMatrix) where {N<:Real}
-        nu > zero(nu) || throw(ArgumentError("mvstudenttdense requires degrees of freedom nu > 0"))
+        _primal(nu) > zero(_primal(nu)) ||
+            throw(ArgumentError("mvstudenttdense requires degrees of freedom nu > 0"))
         isempty(mu) && throw(ArgumentError("mvstudenttdense requires at least one dimension"))
         size(scale_tril, 1) == size(scale_tril, 2) || throw(ArgumentError(
             "mvstudenttdense requires a square scale_tril matrix, got size $(size(scale_tril))",
@@ -145,7 +147,7 @@ struct MvStudentTDenseDist{N<:Real,M<:AbstractVector,S<:AbstractMatrix} <: Abstr
             ),
         )
         for index = 1:size(scale_tril, 1)
-            scale_tril[index, index] > 0 ||
+            _primal(scale_tril[index, index]) > 0 ||
                 throw(ArgumentError("mvstudenttdense requires strictly positive scale_tril diagonal entries"))
         end
         return new{N,typeof(mu),typeof(scale_tril)}(nu, mu, scale_tril)
@@ -168,7 +170,7 @@ struct WishartDist{N<:Real,S<:AbstractMatrix} <: AbstractTeaDistribution
             throw(ArgumentError("wishart requires a square scale matrix, got size $(size(scale))"))
         d = size(scale, 1)
         d >= 1 || throw(ArgumentError("wishart requires a dimension d >= 1"))
-        nu > d - 1 || throw(ArgumentError("wishart requires degrees of freedom nu > d - 1 = $(d - 1)"))
+        _primal(nu) > d - 1 || throw(ArgumentError("wishart requires degrees of freedom nu > d - 1 = $(d - 1)"))
         return new{N,typeof(scale)}(d, nu, scale)
     end
 end
@@ -183,7 +185,8 @@ struct InverseWishartDist{N<:Real,S<:AbstractMatrix} <: AbstractTeaDistribution
             throw(ArgumentError("inversewishart requires a square scale matrix, got size $(size(scale))"))
         d = size(scale, 1)
         d >= 1 || throw(ArgumentError("inversewishart requires a dimension d >= 1"))
-        nu > d - 1 || throw(ArgumentError("inversewishart requires degrees of freedom nu > d - 1 = $(d - 1)"))
+        _primal(nu) > d - 1 ||
+            throw(ArgumentError("inversewishart requires degrees of freedom nu > d - 1 = $(d - 1)"))
         return new{N,typeof(scale)}(d, nu, scale)
     end
 end
@@ -839,7 +842,7 @@ function logpdf(dist::DirichletDist, x)
     total = zero(eltype(promoted_values))
     accumulator = loggamma(sum(dist.alpha)) - sum(loggamma, dist.alpha)
     for (value, alpha) in zip(promoted_values, dist.alpha)
-        value > zero(value) || return oftype(value, -Inf)
+        _primal(value) > zero(_primal(value)) || return oftype(value, -Inf)
         total += value
         accumulator += (alpha - one(alpha)) * log(value)
     end
@@ -977,7 +980,7 @@ function logpdf(dist::WishartDist, x)
     log_det_M = zero(acc0)
     jac = d * log(oftype(acc0, 2))
     for i = 1:d
-        L[i, i] > zero(L[i, i]) || return oftype(acc0, -Inf)
+        _primal(L[i, i]) > zero(_primal(L[i, i])) || return oftype(acc0, -Inf)
         log_det_M += log(L[i, i])
         jac += (d + 1 - i) * log(L[i, i])
     end
@@ -1011,7 +1014,7 @@ function logpdf(dist::InverseWishartDist, x)
     log_det_X = zero(acc0)
     jac = d * log(oftype(acc0, 2))
     for i = 1:d
-        L[i, i] > zero(L[i, i]) || return oftype(acc0, -Inf)
+        _primal(L[i, i]) > zero(_primal(L[i, i])) || return oftype(acc0, -Inf)
         log_det_X += log(L[i, i])
         jac += (d + 1 - i) * log(L[i, i])
     end
@@ -1052,7 +1055,7 @@ function logpdf(dist::LKJCholeskyDist, x)
     tolerance = sqrt(eps(Float64)) * d * 16
     for row = 1:d
         diagonal = values[_packed_lower_index(d, row, row)]
-        diagonal > zero(diagonal) || return oftype(accumulator, -Inf)
+        _primal(diagonal) > zero(_primal(diagonal)) || return oftype(accumulator, -Inf)
         sum_sqs = zero(float(diagonal))
         for col = 1:row
             entry = values[_packed_lower_index(d, row, col)]
