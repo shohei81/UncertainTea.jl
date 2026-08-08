@@ -1,6 +1,8 @@
 # ArviZ export (issue #339): the log_likelihood group, the layout kwarg
 # (:draw_chain vs the Python :chain_draw convention), the attrs entry, the
 # step_size/n_steps sample stats, and the loo/predict arity alignment.
+# Issue #366: flatten_vectors=false groups vector parameters/observations into
+# single arrays with a trailing coord dim plus coords/dims metadata.
 
 @tea static function avz_model(n)
     mu ~ normal(0.0, 1.0)
@@ -9,6 +11,15 @@
         {:y => i} ~ normal(mu, sigma)
     end
     return mu
+end
+
+@tea static function avz_vec_model(k)
+    mu ~ normal(0.0, 1.0)
+    theta ~ iid(normal(mu, 1.0), 3)
+    for i = 1:k
+        {:y => i} ~ normal(theta[i], 1.0)
+    end
+    return theta
 end
 
 @testset "arviz_export" begin
@@ -87,6 +98,90 @@ end
             @test avz_stats["n_steps"][:, avz_ci] == avz_chain.integration_steps
         end
         @test all(>(0), avz_stats["n_steps"])
+    end
+
+    @testset "avz_flatten_vectors_false" begin
+        avz_vk = 3
+        avz_vcm = choicemap((:y => i, 0.3 * i) for i = 1:avz_vk)
+        avz_vargs = (avz_vk,)
+        avz_vchains = nuts_chains(
+            avz_vec_model,
+            avz_vargs,
+            avz_vcm;
+            num_chains=avz_C,
+            num_samples=avz_S,
+            num_warmup=40,
+            rng=MersenneTwister(366),
+        )
+
+        avz_flat = to_arviz_dict(avz_vec_model, avz_vargs, avz_vcm, avz_vchains)
+        avz_gdc = to_arviz_dict(
+            avz_vec_model, avz_vargs, avz_vcm, avz_vchains;
+            flatten_vectors=false,
+        )
+        avz_gcd = to_arviz_dict(
+            avz_vec_model, avz_vargs, avz_vcm, avz_vchains;
+            layout=:chain_draw, flatten_vectors=false,
+        )
+
+        # Default stays the flattened per-component convention with no
+        # coords/dims entries.
+        @test Set(keys(avz_flat["posterior"])) ==
+              Set(["mu"; ["theta[$i]" for i = 1:3]])
+        @test !haskey(avz_flat, "coords")
+        @test !haskey(avz_flat, "dims")
+
+        # Grouped posterior: scalar params keep their matrices, the vector
+        # param becomes one array with a trailing component dim in both
+        # layouts, matching the flattened columns exactly.
+        @test Set(keys(avz_gdc["posterior"])) == Set(["mu", "theta"])
+        @test avz_gdc["posterior"]["mu"] == avz_flat["posterior"]["mu"]
+        @test size(avz_gdc["posterior"]["theta"]) == (avz_S, avz_C, 3)
+        @test size(avz_gcd["posterior"]["theta"]) == (avz_C, avz_S, 3)
+        for avz_i = 1:3
+            @test avz_gdc["posterior"]["theta"][:, :, avz_i] ==
+                  avz_flat["posterior"]["theta[$avz_i]"]
+            @test avz_gcd["posterior"]["theta"][:, :, avz_i] ==
+                  permutedims(avz_flat["posterior"]["theta[$avz_i]"])
+        end
+
+        # Grouped log_likelihood: indexed observation addresses collapse into
+        # one array per base name, matching the flattened matrices.
+        @test Set(keys(avz_gdc["log_likelihood"])) == Set(["y"])
+        @test size(avz_gdc["log_likelihood"]["y"]) == (avz_S, avz_C, avz_vk)
+        @test size(avz_gcd["log_likelihood"]["y"]) == (avz_C, avz_S, avz_vk)
+        for avz_i = 1:avz_vk
+            @test avz_gdc["log_likelihood"]["y"][:, :, avz_i] ==
+                  avz_flat["log_likelihood"]["y[$avz_i]"]
+        end
+
+        # coords/dims follow the az.from_dict convention and are consistent
+        # with the emitted array shapes.
+        for avz_grouped in (avz_gdc, avz_gcd)
+            @test avz_grouped["dims"] ==
+                  Dict("theta" => ["theta_dim_0"], "y" => ["y_dim_0"])
+            @test avz_grouped["coords"] ==
+                  Dict("theta_dim_0" => collect(1:3), "y_dim_0" => collect(1:avz_vk))
+        end
+
+        # Scalar-only model: grouping is a no-op on the posterior keys, the
+        # observations still collapse, and the chains-only method carries
+        # (empty-parameter) coords/dims without a log_likelihood group.
+        avz_sgrouped = to_arviz_dict(
+            avz_model, avz_args, avz_cm, avz_chains;
+            flatten_vectors=false,
+        )
+        avz_sflat = to_arviz_dict(avz_model, avz_args, avz_cm, avz_chains)
+        @test avz_sgrouped["posterior"] == avz_sflat["posterior"]
+        @test Set(keys(avz_sgrouped["log_likelihood"])) == Set(["y"])
+        @test size(avz_sgrouped["log_likelihood"]["y"]) == (avz_S, avz_C, avz_n)
+        @test avz_sgrouped["dims"] == Dict("y" => ["y_dim_0"])
+        @test avz_sgrouped["coords"] == Dict("y_dim_0" => collect(1:avz_n))
+        avz_splain = to_arviz_dict(avz_chains; flatten_vectors=false)
+        @test avz_splain["posterior"] == avz_sflat["posterior"]
+        @test avz_splain["coords"] == Dict{String,Any}()
+        @test avz_splain["dims"] == Dict{String,Any}()
+        @test !haskey(avz_splain, "log_likelihood")
     end
 
     @testset "avz_loo_predict_arity_alignment" begin

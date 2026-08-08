@@ -72,16 +72,18 @@ docker run --rm -v "$(git rev-parse --show-toplevel)":/work \
   `poisson_glm` states the model in every framework's natural vectorized form
   (UncertainTea's broadcast `{:y} ~ poisson.(exp.(a .+ b .* x))`, Stan's
   `poisson_log`, a NumPyro plate) and rides the analytic broadcast gradient.
-  `schools_large` (J=32, P=34; centered, log-normal tau) is the
+  `schools_large` (J=32, P=34; noncentered, log-normal tau) is the
   reverse-mode leg: `julia/run.jl --adtype forward|reverse` pins the
   ForwardDiff vs Enzyme tier on the host batched path, labels the runs
   `batched-cpu-forward`/`batched-cpu-reverse`, and records
   `sampler.adtype`; Enzyme is loaded only for `reverse` runs so `auto` legs
-  keep their default tier. The model is centered with a log-normal tau —
-  originally forced (the noncentered `reparam` machinery and the truncated-t
-  tau used to fail Enzyme's type analysis and silently fall back to forward),
-  but since issue #326 both shapes engage the reverse tier, and an explicit
-  `adtype=:reverse` request now warns whenever it cannot engage.
+  keep their default tier. The model states the canonical noncentered form
+  (`reparam=:noncentered`, log-normal tau) — it was originally forced
+  centered because the noncentered `reparam` machinery and the truncated-t
+  tau used to fail Enzyme's type analysis and silently fall back to forward,
+  but issue #326 fixed that (an explicit `adtype=:reverse` request now warns
+  whenever it cannot engage), so the canonical shape measures the tiers
+  (issue #365).
 
 ## Sampler settings
 
