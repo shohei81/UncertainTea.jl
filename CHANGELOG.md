@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`to_arviz_dict` coord-dim arrays for vector variables** (#366): the new
+  `flatten_vectors::Bool=true` keyword (both methods) keeps the flattened
+  per-component `"v[1]"` keys by default; with `flatten_vectors=false` each
+  vector parameter — and each indexed observation family in the
+  `"log_likelihood"` group — is emitted as a single array with a trailing
+  component dimension (`(draw, chain, k)` for `:draw_chain`,
+  `(chain, draw, k)` for `:chain_draw`, matching Python `az.from_dict`'s
+  `(chain, draw, *shape)`), and the returned dictionary gains top-level
+  `"coords"` / `"dims"` entries following the ArviZ `from_dict` convention
+  (e.g. `dims["theta"] == ["theta_dim_0"]`,
+  `coords["theta_dim_0"] == collect(1:k)`).
+
 ## v0.2.0 (2026-08-08)
 
 ### Breaking
