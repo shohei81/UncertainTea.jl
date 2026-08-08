@@ -1121,5 +1121,6 @@ function _logjoint_unconstrained(
 end
 
 include("evaluator/noncentered_walk.jl")
+include("evaluator/runtime_dims.jl")
 
 include("evaluator/gradient_cache.jl")
