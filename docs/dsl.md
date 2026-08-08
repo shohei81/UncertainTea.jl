@@ -412,7 +412,9 @@ Requirements:
   because `Base` already defines a different `binomial`
 - `dirichlet` now supports static simplex sizes in both the CPU reference path
   and the current backend-native static subset, with unconstrained HMC/NUTS
-  flowing through a simplex transform
+  flowing through a simplex transform; a latent with a **runtime-length**
+  concentration vector (issue #289, e.g. a model argument `alpha`) resolves its
+  simplex size from the arguments at signature-resolution time on the CPU paths
 - `mvnormal` currently supports static diagonal vector sizes in the CPU
   reference path and unconstrained HMC/NUTS through a vector-valued identity
   transform, and restricted diagonal forms now lower to the backend-native
@@ -428,9 +430,11 @@ Requirements:
   device dimension at 8) when `scale_tril` is a model argument or a captured
   matrix; an inline literal factor is honestly reported unsupported by
   `backend_report` and takes the ForwardDiff fallback. As a
-  **latent** (parameter slot sampled by HMC/NUTS) the mean must have a
-  statically known length (vector literal/tuple), mirroring the diagonal
-  `mvnormal` rule; with a non-static mean it is observation-only (no slot).
+  **latent** (parameter slot sampled by HMC/NUTS) the mean fixes the value
+  dimension: a vector literal/tuple sizes the slot at macro time, and a
+  **runtime-length** mean (issue #289, e.g. `zeros(n)` with a model argument
+  `n`) resolves the size from the arguments at signature-resolution time —
+  the same rule as the diagonal `mvnormal`.
 - `mvstudentt(nu, mu, sigma)` and `mvstudenttdense(nu, mu, scale_tril)` are the
   heavy-tailed analogues of `mvnormal` / `mvnormaldense`: a multivariate
   Student-t with `nu` degrees of freedom whose `d` dimensions couple through one
@@ -441,7 +445,8 @@ Requirements:
   gradient uses the digamma degrees-of-freedom channel). Both are backend-native
   and device-lowered where `mvnormal` / `mvnormaldense` are (the device dense
   path caps `d` at 8, riding the same forward-substitution unroll). As latents
-  the mean must have a statically known length, mirroring the Gaussian rule.
+  the mean fixes the value dimension — literal/tuple or runtime-length (issue
+  #289) — mirroring the Gaussian rule.
 - `lkjcholesky(d, eta)` is the LKJ prior over the Cholesky factor of a `d`×`d`
   correlation matrix, scored on the column-major **packed** lower triangle
   (length `d*(d+1)/2`, diagonal included) so the value stays a flat vector. The
@@ -527,16 +532,17 @@ Requirements:
   factor `L` (`K = L L'`) as a deterministic binding (mirroring `scale_cholesky`),
   which feeds the GP prior into `mvnormaldense` so the function values
   `f ~ N(0, K)` are sampled directly. `noise` here is the diagonal jitter/nugget;
-  the observation noise lives in the likelihood. Because `f` is a **latent**
-  `mvnormaldense`, its zero mean must be a static-length literal/tuple (the same
-  rule as any dense-normal latent), which also fixes the number of function values:
+  the observation noise lives in the likelihood. The number of function values
+  may be a **runtime length** (issue #289): `zeros(n)` with a model argument `n`
+  sizes the latent from the arguments, so one model runs at any data size (a
+  static-length literal/tuple also works and fixes `N` at macro time):
 
   ```julia
-  @tea static function gp_classification(X)
+  @tea static function gp_classification(X, n)
       logl ~ normal(0.0, 1.0)
       L = gp_cholesky(X, exp(logl), 1.0, 1e-6)   # kernel Cholesky, deterministic binding
-      f ~ mvnormaldense((0.0, 0.0, 0.0, 0.0), L) # latent GP function values (N = 4)
-      for i in 1:4
+      f ~ mvnormaldense(zeros(n), L)             # latent GP function values (N = n)
+      for i in 1:n
           {:y => i} ~ bernoullilogit(f[i])       # non-Gaussian likelihood
       end
       return logl

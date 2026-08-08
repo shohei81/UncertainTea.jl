@@ -2,8 +2,11 @@
 # `gaussianprocess` scores the analytic zero-mean marginal `N(0, K)` (Gaussian
 # likelihood only), `gp_cholesky` returns the kernel Cholesky factor so the latent
 # function values `f ~ N(0, K)` are sampled directly through `mvnormaldense` and
-# can drive any likelihood. CPU-reference. Statistics is unavailable in the
-# harness, so use local helpers.
+# can drive any likelihood. As of issue #289 the zero mean no longer needs a
+# literal-length tuple: `f ~ mvnormaldense(zeros(n), L)` with a runtime `n`
+# resolves the latent's dimension from the model arguments, so ONE model runs
+# at any data size (tested below). CPU-reference. Statistics is unavailable in
+# the harness, so use local helpers.
 
 using LinearAlgebra
 
@@ -32,6 +35,18 @@ end
     L = gp_cholesky(X, exp(logl), 2.0, 1.0e-6)
     f ~ mvnormaldense((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), L)
     for i = 1:10
+        {:y => i} ~ bernoullilogit(f[i])
+    end
+    return logl
+end
+
+# GP classification with a RUNTIME-length latent f (issue #289): `n` is a model
+# argument, so the same model runs at any data size — no literal-length mean.
+@tea static function gpl_classification_rt(X, n)
+    logl ~ normal(0.0, 0.5)
+    L = gp_cholesky(X, exp(logl), 2.0, 1.0e-6)
+    f ~ mvnormaldense(zeros(n), L)
+    for i = 1:n
         {:y => i} ~ bernoullilogit(f[i])
     end
     return logl
@@ -96,5 +111,46 @@ end
         gpl_fpost = [gpl_mean(gpl_draws[1+i, :]) for i = 1:gpl_n]
         # the latent function must be larger where the label is 1
         @test gpl_mean(gpl_fpost[gpl_ys .== 1]) > gpl_mean(gpl_fpost[gpl_ys .== 0])
+    end
+
+    @testset "runtime-length latent f (issue #289): twin equality + two sizes in one session" begin
+        # twin equality: the runtime-length spelling scores bitwise identically
+        # to the literal-length spelling at n = 10
+        gpl_n = 10
+        gpl_Xs = collect(range(-3, 3; length=gpl_n))
+        gpl_X = reshape(gpl_Xs, 1, gpl_n)
+        gpl_rng = MersenneTwister(17)
+        gpl_ys = Float64[x > 0 ? 1.0 : 0.0 for x in gpl_Xs]
+        gpl_cm = choicemap([(:y => i, gpl_ys[i]) for i = 1:gpl_n])
+        gpl_params = vcat([0.1], 0.3 .* randn(gpl_rng, gpl_n))
+        @test logjoint_unconstrained(gpl_classification_rt, gpl_params, (gpl_X, gpl_n), gpl_cm) ==
+              logjoint_unconstrained(gpl_classification, gpl_params, (gpl_X,), gpl_cm)
+        @test logjoint_gradient_unconstrained(gpl_classification_rt, gpl_params, (gpl_X, gpl_n), gpl_cm) ==
+              logjoint_gradient_unconstrained(gpl_classification, gpl_params, (gpl_X,), gpl_cm)
+
+        # nuts smoke at TWO data sizes in one session: the plan re-specializes
+        # per (signature, dims) and both chains sample the right-sized latent
+        gpl_m = 6
+        gpl_Xs2 = collect(range(-3, 3; length=gpl_m))
+        gpl_X2 = reshape(gpl_Xs2, 1, gpl_m)
+        gpl_ys2 = Float64[x > 0 ? 1.0 : 0.0 for x in gpl_Xs2]
+        gpl_cm2 = choicemap([(:y => i, gpl_ys2[i]) for i = 1:gpl_m])
+        gpl_chain10 = first(nuts(
+            gpl_classification_rt, (gpl_X, gpl_n), gpl_cm;
+            num_samples=300, num_warmup=300, rng=MersenneTwister(7),
+        ))
+        gpl_chain6 = first(nuts(
+            gpl_classification_rt, (gpl_X2, gpl_m), gpl_cm2;
+            num_samples=300, num_warmup=300, rng=MersenneTwister(7),
+        ))
+        @test size(gpl_chain10.constrained_samples, 1) == 1 + gpl_n
+        @test size(gpl_chain6.constrained_samples, 1) == 1 + gpl_m
+        @test all(isfinite, gpl_chain10.constrained_samples)
+        @test all(isfinite, gpl_chain6.constrained_samples)
+        # class separation holds at both sizes (rows 2..n+1 are f)
+        for (chain, ys, count) in ((gpl_chain10, gpl_ys, gpl_n), (gpl_chain6, gpl_ys2, gpl_m))
+            fpost = [gpl_mean(chain.constrained_samples[1+i, :]) for i = 1:count]
+            @test gpl_mean(fpost[ys .== 1]) > gpl_mean(fpost[ys .== 0])
+        end
     end
 end

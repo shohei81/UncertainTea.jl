@@ -1273,10 +1273,29 @@ function _auto_marginalize_discrete_latents(steps::Vector{AbstractPlanStep}, obs
     return out
 end
 
+# The late-constructed transform of one runtime-dimension latent candidate
+# (issue #289): `dim` is the resolved VALUE length. The mv normal/Student-t
+# families unconstrain through a plain `VectorIdentityTransform(n)`; dirichlet
+# through a `SimplexTransform(n)` (parameter dimension n-1, exactly the static
+# dirichlet slot sizing in `_parameter_layout_sizes`).
+function _runtime_dim_transform(candidate::RuntimeDimCandidate, dim::Int)
+    if candidate.family === :dirichlet
+        dim >= 2 || throw(
+            ArgumentError(
+                "the runtime length of the latent `dirichlet` at address " *
+                "`$(candidate.address)` resolved to $(dim); a simplex latent needs a " *
+                "concentration vector of length >= 2",
+            ),
+        )
+        return SimplexTransform(dim)
+    end
+    return VectorIdentityTransform(dim)
+end
+
 # Late transforms for the runtime-dimension candidates that are LATENT under
 # `observed`, keyed by normalized address (issue #289): one
-# `VectorIdentityTransform(dims[k])` per latent candidate in plan order,
-# mirroring exactly how `_resolve_runtime_dims` produced `dims`. Returns
+# `_runtime_dim_transform(candidate, dims[k])` per latent candidate in plan
+# order, mirroring exactly how `_resolve_runtime_dims` produced `dims`. Returns
 # `nothing` when the plan has no candidates (the overwhelming majority) or all
 # candidates are observed.
 function _runtime_dim_signature_transforms(base_plan::ExecutionPlan, observed, dims::Tuple{Vararg{Int}})
@@ -1292,7 +1311,7 @@ function _runtime_dim_signature_transforms(base_plan::ExecutionPlan, observed, d
     isempty(latents) && return nothing
     transforms = Dict{Tuple,Any}()
     for (candidate, dim) in zip(latents, dims)
-        transforms[candidate.address] = VectorIdentityTransform(dim)
+        transforms[candidate.address] = _runtime_dim_transform(candidate, dim)
     end
     return transforms
 end
