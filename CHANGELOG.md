@@ -170,6 +170,16 @@
 
 ### Internal
 
+- The signature cache is re-keyed from the conditioning signature alone to
+  `(signature, dims)`, where `dims` is a runtime-dimension tuple resolved from
+  the model arguments (always `()` today), and the model arguments are now
+  threaded through signature resolution (#289, PR-1). Groundwork for
+  runtime-length vector latents; no behavior change for existing models,
+  except that a LATENT `mvnormal`/`mvstudentt`/`dirichlet`-family choice whose
+  length is not statically known now fails at resolution time with an
+  informative error naming the address and issue #289, instead of the late
+  missing-parameter-slot error. Observed choices with runtime-length arguments
+  are unaffected.
 - The per-family scoring, gradient, and lowering code paths are generated
   from a single family table with a consistency test (#331), 11 dead internal
   functions are deleted behind a new export smoke test (#334), and

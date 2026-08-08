@@ -406,7 +406,7 @@ function gibbs(
     # continuous latent layout is the same whether keyed on `constraints` or on
     # `merged`; size it from the conditioning signature (#95 PR-6) rather than
     # the syntactic default so a bound continuous observation drops its slot.
-    continuous_layout = _conditioned_parameter_layout(model, constraints)
+    continuous_layout = _conditioned_parameter_layout(model, constraints, args)
     num_params = parametercount(continuous_layout)
     constrained_num_params = parametervaluecount(continuous_layout)
     has_continuous = num_params > 0

@@ -653,7 +653,8 @@ function BatchedHMCWorkspace(
     batch_args = _validate_batched_args(model, args, num_chains)
     batch_constraints = _validate_batched_constraints(constraints, num_chains)
     # constrained-space width follows the conditioning signature (issue #95)
-    constrained_num_params = parametervaluecount(_batched_signature_layout(model, batch_constraints))
+    constrained_num_params =
+        parametervaluecount(_batched_signature_layout(model, batch_constraints, batch_args))
     length(inverse_mass_matrix) == num_params ||
         throw(DimensionMismatch("expected inverse mass matrix of length $num_params, got $(length(inverse_mass_matrix))"))
 
@@ -661,7 +662,7 @@ function BatchedHMCWorkspace(
     # invalid distribution parameters mid-trajectory score -Inf (per-chain
     # divergence) instead of killing the whole batched run
     return BatchedHMCWorkspace(
-        BatchedLogjointWorkspace(model, batch_constraints; reject_invalid_parameters=true),
+        BatchedLogjointWorkspace(model, batch_constraints; args=batch_args, reject_invalid_parameters=true),
         BatchedLogjointGradientCache(model, position, batch_args, batch_constraints; reject_invalid_parameters=true),
         Matrix{Float64}(undef, num_params, num_chains),
         Matrix{Float64}(undef, num_params, num_chains),
@@ -698,7 +699,8 @@ function BatchedNUTSWorkspace(
     # constrained-space width follows the conditioning signature (issue #95),
     # matching BatchedHMCWorkspace; the syntactic default layout would mis-size
     # the constrained-sample buffer under a bound-observation signature.
-    constrained_num_params = parametervaluecount(_batched_signature_layout(model, batch_constraints))
+    constrained_num_params =
+        parametervaluecount(_batched_signature_layout(model, batch_constraints, batch_args))
     # sampler-owned evaluation: Stan-style reject semantics (issue #157). `adtype`
     # selects the host gradient backend (issue #268, A2).
     gradient_cache = BatchedLogjointGradientCache(

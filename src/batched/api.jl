@@ -8,7 +8,7 @@ function _batched_backend_gradient_cache(
 )
     element_type = float(eltype(params))
     workspace = BatchedLogjointWorkspace(
-        model, batch_constraints; reject_invalid_parameters=reject_invalid_parameters,
+        model, batch_constraints; args=batch_args, reject_invalid_parameters=reject_invalid_parameters,
     )
     backend_plan = workspace.backend_plan
     isnothing(backend_plan) && return nothing
@@ -60,7 +60,10 @@ function _batched_gradient_column_cache(
 )
     column_constraints = _batched_constraints(batch_constraints, batch_index)
     workspace = BatchedLogjointWorkspace(
-        model, column_constraints; reject_invalid_parameters=reject_invalid_parameters,
+        model,
+        column_constraints;
+        args=_batched_args(batch_args, batch_index),
+        reject_invalid_parameters=reject_invalid_parameters,
     )
     objective = BatchedGradientObjective(
         model,
@@ -83,7 +86,7 @@ function _batched_flat_gradient_cache(
     reject_invalid_parameters::Bool=false,
 )
     workspace = BatchedLogjointWorkspace(
-        model, batch_constraints; reject_invalid_parameters=reject_invalid_parameters,
+        model, batch_constraints; args=batch_args, reject_invalid_parameters=reject_invalid_parameters,
     )
     objective = BatchedFlatGradientObjective(
         model,
@@ -314,7 +317,7 @@ function BatchedLogjointGradientCache(
 )
     adtype in (:auto, :forward, :reverse) ||
         throw(ArgumentError("adtype must be :auto, :forward, or :reverse, got $(adtype)"))
-    batch_size = _validate_batched_unconstrained_params(model, params, constraints)
+    batch_size = _validate_batched_unconstrained_params(model, params, constraints, args)
     batch_args = _validate_batched_args(model, args, batch_size)
     batch_constraints = _validate_batched_constraints(constraints, batch_size)
     parameter_count = size(params, 1)
@@ -853,7 +856,7 @@ function batched_logjoint(
     args=(),
     constraints=choicemap(),
 )
-    batch_size = _validate_batched_constrained_params(model, params, constraints)
+    batch_size = _validate_batched_constrained_params(model, params, constraints, args)
     batch_args = _validate_batched_args(model, args, batch_size)
     batch_constraints = _validate_batched_constraints(constraints, batch_size)
     batch_size == 0 && return float(eltype(params))[]
@@ -864,7 +867,7 @@ function batched_logjoint(
     # Promote silently so integer observation/parameter matrices just work.
     eltype(params) <: AbstractFloat || (params = float.(params))
 
-    workspace = BatchedLogjointWorkspace(model, batch_constraints)
+    workspace = BatchedLogjointWorkspace(model, batch_constraints; args=batch_args)
     # the backend plan for a dependent-transform model scores in z space, so
     # the CONSTRAINED entry point must use the per-column reference instead
     if !isnothing(workspace.backend_plan) && !_has_dependent_transforms(workspace.layout)
@@ -885,12 +888,12 @@ function batched_logjoint_unconstrained(
     args=(),
     constraints=choicemap(),
 )
-    batch_size = _validate_batched_unconstrained_params(model, params, constraints)
+    batch_size = _validate_batched_unconstrained_params(model, params, constraints, args)
     batch_args = _validate_batched_args(model, args, batch_size)
     batch_constraints = _validate_batched_constraints(constraints, batch_size)
     batch_size == 0 && return float(eltype(params))[]
 
-    workspace = BatchedLogjointWorkspace(model, batch_constraints)
+    workspace = BatchedLogjointWorkspace(model, batch_constraints; args=batch_args)
     values = Vector{float(eltype(params))}(undef, batch_size)
     return _batched_logjoint_unconstrained_with_workspace!(values, model, workspace, params, batch_args, batch_constraints)
 end

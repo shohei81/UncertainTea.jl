@@ -80,7 +80,7 @@ function hmc_chains(
     rng::AbstractRNG=Random.default_rng(),
 )
     _validate_hmc_chains_arguments(num_chains)
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     num_params = parametercount(layout)
     constrained_num_params = parametervaluecount(layout)
     seeds = rand(rng, UInt, num_chains)
@@ -151,7 +151,7 @@ function nuts_chains(
     rng::AbstractRNG=Random.default_rng(),
 )
     _validate_hmc_chains_arguments(num_chains, "NUTS")
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     num_params = parametercount(layout)
     constrained_num_params = parametervaluecount(layout)
     seeds = rand(rng, UInt, num_chains)

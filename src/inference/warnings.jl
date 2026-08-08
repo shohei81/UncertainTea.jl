@@ -51,7 +51,7 @@ function check_diagnostics(
     if length(chains) >= 1 && numsamples(chains) >= 4
         rhats = rhat(chains; space=space)
         ess_values = ess(chains; space=space)
-        layout = _conditioned_parameter_layout(chains.model, chains.constraints)
+        layout = _conditioned_parameter_layout(chains.model, chains.constraints, chains.args)
         entries = _summary_parameter_entries(layout, space)
         for (parameter_index, binding, address) in entries
             display_name = string(binding, " @ ", address)

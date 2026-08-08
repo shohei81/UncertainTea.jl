@@ -293,7 +293,7 @@ function batched_svgd(
         throw(ArgumentError("batched_svgd adtype must be :auto, :forward, or :reverse, got $(repr(adtype))"))
     !(adtype === :reverse && backend !== nothing) ||
         throw(ArgumentError("batched_svgd adtype=:reverse is a host-only path and cannot be combined with a device `backend`"))
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     parameter_total = parametercount(layout)
     constrained_total = parametervaluecount(layout)
     parameter_total > 0 ||

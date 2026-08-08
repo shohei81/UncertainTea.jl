@@ -77,7 +77,7 @@ function batched_hmc(
     # rows and constrained result width) follows the conditioning signature, not
     # the syntactic default layout. The batched workspaces are already
     # signature-aware (PR-4), so this keeps the API buffers consistent with them.
-    signature_layout = _batched_signature_layout(model, constraints)
+    signature_layout = _batched_signature_layout(model, constraints, args)
     num_params = parametercount(signature_layout)
     constrained_num_params = parametervaluecount(signature_layout)
     _validate_batched_hmc_arguments(

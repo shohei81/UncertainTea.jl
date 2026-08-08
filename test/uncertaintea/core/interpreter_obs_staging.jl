@@ -121,7 +121,7 @@ stg_reference_gradient(model, theta, args, cons) =
     end
 
     @testset "stg_stage_marking_and_snapshot" begin
-        resolved = UncertainTea._resolve_signature_plan(stg_gauss, stg_gauss_cons)
+        resolved = UncertainTea._resolve_signature_plan(stg_gauss, stg_gauss_cons, ())
         @test resolved.compiled.stage_count == 1
         theta = [0.1, -0.2]
         stage = UncertainTea._stage_observations(stg_gauss, resolved, theta, (stg_n,), stg_gauss_cons)
@@ -132,7 +132,7 @@ stg_reference_gradient(model, theta, args, cons) =
         # a broadcast (single static address) model now stages the WHOLE observed
         # vector as one static site (iterator slot -1, issue #288), which puts it
         # on the generated-scorer / reverse-mode path
-        bc_resolved = UncertainTea._resolve_signature_plan(stg_broadcast, stg_bc_cons)
+        bc_resolved = UncertainTea._resolve_signature_plan(stg_broadcast, stg_bc_cons, ())
         @test bc_resolved.compiled.stage_count == 1
         bc_stage = UncertainTea._stage_observations(stg_broadcast, bc_resolved, [0.1, -0.2], (stg_xs,), stg_bc_cons)
         @test bc_stage isa UncertainTea.ObservationStage
@@ -177,7 +177,7 @@ stg_reference_gradient(model, theta, args, cons) =
               stg_reference_gradient(stg_strided, [0.4], (9,), strided_cons)
 
         indirect_cons = choicemap((:y => 11, 0.3), (:y => 12, -0.6))
-        indirect_resolved = UncertainTea._resolve_signature_plan(stg_indirect, indirect_cons)
+        indirect_resolved = UncertainTea._resolve_signature_plan(stg_indirect, indirect_cons, ())
         @test indirect_resolved.compiled.stage_count == 0
         @test logjoint_gradient_unconstrained(stg_indirect, [0.1], ([11, 12], 2), indirect_cons) ==
               stg_reference_gradient(stg_indirect, [0.1], ([11, 12], 2), indirect_cons)
@@ -199,7 +199,7 @@ stg_reference_gradient(model, theta, args, cons) =
         @test logjoint(stg_logistic, theta, (stg_X, stg_ln), stg_logi_cons) ≈ expected rtol = 1e-12
 
         # the compiled tree really uses view/_sum_broadcast_multiply
-        resolved = UncertainTea._resolve_signature_plan(stg_logistic, stg_logi_cons)
+        resolved = UncertainTea._resolve_signature_plan(stg_logistic, stg_logi_cons, ())
         loop_step = nothing
         for step in resolved.compiled.steps
             step isa UncertainTea.CompiledLoopPlanStep && (loop_step = step)
@@ -233,7 +233,7 @@ stg_reference_gradient(model, theta, args, cons) =
     @testset "stg_public_gradient_config_memoized" begin
         theta = [0.25, -0.1]
         logjoint_gradient_unconstrained(stg_gauss, theta, (stg_n,), stg_gauss_cons)
-        resolved = UncertainTea._resolve_signature_plan(stg_gauss, stg_gauss_cons)
+        resolved = UncertainTea._resolve_signature_plan(stg_gauss, stg_gauss_cons, ())
         store = resolved.gradient_config_cache[]
         @test store isa Dict
         entries = length(store)

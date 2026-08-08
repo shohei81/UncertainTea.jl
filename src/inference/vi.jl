@@ -92,7 +92,7 @@ function _resolve_unconstrained_point(
         return _initial_hmc_position(model, args, constraints, nothing, rng)
     end
 
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     parameter_total = parametercount(layout)
     constrained_total = parametervaluecount(layout)
     if length(point) == parameter_total
@@ -283,7 +283,7 @@ function variational_samples(
     if space === :unconstrained
         return unconstrained
     elseif space === :constrained
-        layout = _conditioned_parameter_layout(result.model, result.constraints)
+        layout = _conditioned_parameter_layout(result.model, result.constraints, result.args)
         constrained = Matrix{Float64}(undef, parametervaluecount(layout), num_samples)
         _signature_batched_transform_to_constrained!(
             constrained,
@@ -389,7 +389,7 @@ function batched_advi(
         )
     end
 
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     parameter_total = parametercount(layout)
     parameter_total > 0 || throw(ArgumentError("batched_advi requires at least one parameterized latent choice"))
     num_iterations > 0 || throw(ArgumentError("batched_advi requires num_iterations > 0"))

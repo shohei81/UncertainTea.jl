@@ -22,10 +22,14 @@ struct TeaModel{M<:TeaMode,F,S}
     branchful::Bool
     evaluator_cache::Base.RefValue{Any}
     backend_cache::Base.RefValue{Any}
-    # Compiled scoring plans keyed by conditioning signature (the set of
-    # constrained observation addresses); see docs/constraint-driven-conditioning.md
-    # and `_resolve_signature_plan`. Lazily a `Dict`, so a model re-run with new
-    # data at the same observed addresses reuses its cached plan/layout.
+    # Compiled scoring plans keyed by `(signature, dims)`: the conditioning
+    # signature (the set of constrained observation addresses) plus the
+    # runtime-dims tuple resolved from the model arguments (issue #289; always
+    # `()` for dims-free models). See docs/constraint-driven-conditioning.md
+    # and `_resolve_signature_plan`. Lazily a
+    # `Dict{Tuple{Set{Address},Tuple{Vararg{Int}}},ResolvedSignaturePlan}`, so a
+    # model re-run with new data at the same observed addresses reuses its
+    # cached plan/layout.
     signature_cache::Base.RefValue{Any}
 end
 

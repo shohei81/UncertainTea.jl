@@ -16,6 +16,7 @@ core_test_files = [
     ("export_smoke.jl", "dsl"),
     ("dsl_static_model_semantics.jl", "dsl"),
     ("constraint_driven_conditioning.jl", "dsl"),
+    ("runtime_dim_signature_rekey.jl", "dsl"),
     ("misconditioning_warning.jl", "dsl"),
     ("nan_observation_guard.jl", "dsl"),
     ("dsl_contract_guards.jl", "dsl"),

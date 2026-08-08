@@ -53,7 +53,7 @@ function bip_reference_batched_positions(model, args, constraints, rng, num_para
     for chain_index = 1:num_chains
         chain_rng = MersenneTwister(seeds[chain_index])
         chain_constraints = constraints isa AbstractVector ? constraints[chain_index] : constraints
-        resolved = UncertainTea._resolve_signature_plan(model, chain_constraints)
+        resolved = UncertainTea._resolve_signature_plan(model, chain_constraints, ())
         constrained =
             bip_reference_signature_initial_parameters(model, args, resolved, chain_constraints, chain_rng)
         positions[:, chain_index] = transform_to_unconstrained(model, constrained, args, chain_constraints)
@@ -78,7 +78,7 @@ end
 
     for (bip_label, bip_model, bip_args, bip_constraints) in bip_cases
         @testset "$bip_label" begin
-            bip_resolved = UncertainTea._resolve_signature_plan(bip_model, bip_constraints)
+            bip_resolved = UncertainTea._resolve_signature_plan(bip_model, bip_constraints, ())
             bip_num_params = UncertainTea.parametercount(bip_resolved.plan.parameter_layout)
             bip_constrained_num_params = UncertainTea.parametervaluecount(bip_resolved.plan.parameter_layout)
             for bip_num_chains in (4, 64)
@@ -111,7 +111,7 @@ end
         bip_chain_constraints = [
             choicemap([(:y => i) => randn(MersenneTwister(100 + c)) for i = 1:bip_n]...) for c = 1:bip_num_chains
         ]
-        bip_resolved = UncertainTea._resolve_signature_plan(bip_gauss_model, bip_chain_constraints[1])
+        bip_resolved = UncertainTea._resolve_signature_plan(bip_gauss_model, bip_chain_constraints[1], ())
         bip_num_params = UncertainTea.parametercount(bip_resolved.plan.parameter_layout)
         bip_expected = bip_reference_batched_positions(
             bip_gauss_model,
@@ -135,7 +135,7 @@ end
     end
 
     @testset "single-chain prior draw matches the traced path" begin
-        bip_resolved = UncertainTea._resolve_signature_plan(bip_gauss_model, bip_gauss_constraints)
+        bip_resolved = UncertainTea._resolve_signature_plan(bip_gauss_model, bip_gauss_constraints, ())
         bip_expected = bip_reference_signature_initial_parameters(
             bip_gauss_model,
             (bip_n,),

@@ -74,7 +74,7 @@ function hmc(
     rng::AbstractRNG=Random.default_rng(),
 )
     metric in (:diag, :dense) || throw(ArgumentError("metric must be :diag or :dense, got :$metric"))
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     num_params = parametercount(layout)
     constrained_num_params = parametervaluecount(layout)
     _validate_hmc_arguments(
@@ -285,7 +285,7 @@ function nuts(
     rng::AbstractRNG=Random.default_rng(),
 )
     metric in (:diag, :dense) || throw(ArgumentError("metric must be :diag or :dense, got :$metric"))
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     num_params = parametercount(layout)
     constrained_num_params = parametervaluecount(layout)
     _validate_nuts_arguments(

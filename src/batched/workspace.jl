@@ -191,8 +191,15 @@ end
 # Stan-style reject mode (issue #157): invalid distribution parameters score
 # -Inf instead of throwing. Sampler-owned workspaces enable it; the public
 # batched logjoint/gradient APIs keep the throwing default.
-function BatchedLogjointWorkspace(model::TeaModel, constraints=choicemap(); reject_invalid_parameters::Bool=false)
-    resolved = _resolve_signature_plan(model, _representative_constraints(constraints))
+function BatchedLogjointWorkspace(
+    model::TeaModel,
+    constraints=choicemap();
+    args=(),
+    reject_invalid_parameters::Bool=false,
+)
+    resolved = _resolve_signature_plan(
+        model, _representative_constraints(constraints), _representative_args(args),
+    )
     plan = resolved.plan
     layout = plan.parameter_layout
     return BatchedLogjointWorkspace(
@@ -218,22 +225,28 @@ end
 # syntactic default layout (issue #95, PR-4): constraining a bound choice drops
 # its slot; leaving an unbound choice unconstrained adds one. (PR-5 owns naming
 # the signature in the message.)
-function _batched_signature_layout(model::TeaModel, constraints)
-    return _resolve_signature_plan(model, _representative_constraints(constraints)).plan.parameter_layout
+function _batched_signature_layout(model::TeaModel, constraints, args=())
+    return _resolve_signature_plan(
+        model, _representative_constraints(constraints), _representative_args(args),
+    ).plan.parameter_layout
 end
 
-function _validate_batched_unconstrained_params(model::TeaModel, params::AbstractMatrix, constraints=choicemap())
+function _validate_batched_unconstrained_params(
+    model::TeaModel, params::AbstractMatrix, constraints=choicemap(), args=(),
+)
     representative = _representative_constraints(constraints)
-    layout = _batched_signature_layout(model, constraints)
+    layout = _batched_signature_layout(model, constraints, args)
     expected = parametercount(layout)
     size(params, 1) == expected ||
         throw(_signature_length_error(model, layout, representative, expected, size(params, 1)))
     return size(params, 2)
 end
 
-function _validate_batched_constrained_params(model::TeaModel, params::AbstractMatrix, constraints=choicemap())
+function _validate_batched_constrained_params(
+    model::TeaModel, params::AbstractMatrix, constraints=choicemap(), args=(),
+)
     representative = _representative_constraints(constraints)
-    layout = _batched_signature_layout(model, constraints)
+    layout = _batched_signature_layout(model, constraints, args)
     expected = parametervaluecount(layout)
     size(params, 1) == expected || throw(
         _signature_length_error(

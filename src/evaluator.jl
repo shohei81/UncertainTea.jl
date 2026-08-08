@@ -1016,7 +1016,7 @@ function logjoint(
     args::Tuple=(),
     constraints::ChoiceMap=choicemap(),
 )
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     return _logjoint(model, resolved, params, args, constraints)
 end
 
@@ -1089,7 +1089,7 @@ function logjoint_unconstrained(
     constraints::ChoiceMap=choicemap();
     reject_invalid_parameters::Bool=false,
 )
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     return _logjoint_unconstrained(
         model, resolved, params, args, constraints, nothing;
         reject_invalid_parameters=reject_invalid_parameters,

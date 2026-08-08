@@ -10,8 +10,8 @@
 # Signature-aware naming (#95 PR-6): sampler output is sized by the conditioning
 # signature of the chain's constraints, so its display names must come from that
 # same layout, not the syntactic default `parameterlayout(model)`.
-function _export_parameter_names(model::TeaModel, constraints::ChoiceMap, space::Symbol)
-    return _export_parameter_names(_conditioned_parameter_layout(model, constraints), space)
+function _export_parameter_names(model::TeaModel, args, constraints::ChoiceMap, space::Symbol)
+    return _export_parameter_names(_conditioned_parameter_layout(model, constraints, args), space)
 end
 
 function _export_parameter_names(model::TeaModel, space::Symbol)
@@ -40,7 +40,7 @@ Return per-parameter display names in the requested `space` (`:constrained` or
 `:unconstrained`), ordered to match the third dimension of [`posterior_array`](@ref).
 """
 function parameter_names(chains::HMCChains; space::Symbol=:constrained)
-    return _export_parameter_names(chains.model, chains.constraints, space)
+    return _export_parameter_names(chains.model, chains.args, chains.constraints, space)
 end
 
 """

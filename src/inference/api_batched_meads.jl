@@ -210,7 +210,7 @@ function batched_meads(
         throw(ArgumentError("batched_meads `precision` requires a device backend, which is not yet supported"))
 
     # Signature-aware sizing (#95), mirroring batched_hmc/batched_nuts/batched_chees.
-    signature_layout = _batched_signature_layout(model, constraints)
+    signature_layout = _batched_signature_layout(model, constraints, args)
     num_params = parametercount(signature_layout)
     constrained_num_params = parametervaluecount(signature_layout)
     num_params > 0 || throw(ArgumentError("batched_meads requires a model with at least one latent parameter"))

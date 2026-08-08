@@ -68,7 +68,7 @@ end
 
         # signature {:y, :z}: only `mu` is a latent, so the compiled scoring
         # path takes a single parameter and reads y, z from the constraints.
-        layout = UncertainTea._resolve_signature_plan(cdc_chain, cons).plan.parameter_layout
+        layout = UncertainTea._resolve_signature_plan(cdc_chain, cons, ()).plan.parameter_layout
         @test parametervaluecount(layout) == 1
         @test length(layout.slots) == 1
         @test layout.slots[1].binding == :mu
@@ -106,7 +106,7 @@ end
     @testset "unbound choice left unconstrained is a slotted latent" begin
         # `{:y} ~ normal(mu, 1)` with no constraint: under the conditioning rule
         # `:y` is a latent, gets a parameter slot, and its prior is scored.
-        layout = UncertainTea._resolve_signature_plan(cdc_gaussian, choicemap()).plan.parameter_layout
+        layout = UncertainTea._resolve_signature_plan(cdc_gaussian, choicemap(), ()).plan.parameter_layout
         @test parametervaluecount(layout) == 2
         @test Set(slot.binding for slot in layout.slots) == Set([:mu, Symbol("")])
 
@@ -121,8 +121,8 @@ end
         v = 2.5
         # constrained: `:y` observed -> 1 latent (mu); unconstrained: `:y`
         # latent -> 2 latents (mu, y).
-        con_layout = UncertainTea._resolve_signature_plan(cdc_gaussian, choicemap(:y => v)).plan.parameter_layout
-        unc_layout = UncertainTea._resolve_signature_plan(cdc_gaussian, choicemap()).plan.parameter_layout
+        con_layout = UncertainTea._resolve_signature_plan(cdc_gaussian, choicemap(:y => v), ()).plan.parameter_layout
+        unc_layout = UncertainTea._resolve_signature_plan(cdc_gaussian, choicemap(), ()).plan.parameter_layout
         @test parametervaluecount(unc_layout) - parametervaluecount(con_layout) == 1
 
         l_con = logjoint(cdc_gaussian, [mu0], (), choicemap(:y => v))
@@ -144,9 +144,9 @@ end
         @test isnothing(cdc_memo.signature_cache[])
         # Two runs at the same observed address but different data reuse the plan.
         logjoint(cdc_memo, [0.1], (), choicemap(:y => 1.0))
-        first_resolved = UncertainTea._resolve_signature_plan(cdc_memo, choicemap(:y => 1.0))
+        first_resolved = UncertainTea._resolve_signature_plan(cdc_memo, choicemap(:y => 1.0), ())
         logjoint(cdc_memo, [0.1], (), choicemap(:y => 42.0))
-        second_resolved = UncertainTea._resolve_signature_plan(cdc_memo, choicemap(:y => 42.0))
+        second_resolved = UncertainTea._resolve_signature_plan(cdc_memo, choicemap(:y => 42.0), ())
         @test first_resolved === second_resolved
         @test length(cdc_memo.signature_cache[]) == 1
 
@@ -202,9 +202,9 @@ end
         # latent y set to the observed value the two agree, and `y` flows into
         # `w` in both roles (observation and prior draw).
         con_layout =
-            UncertainTea._resolve_signature_plan(cdc_downstream, choicemap(:y => yv, :z => zv)).plan.parameter_layout
+            UncertainTea._resolve_signature_plan(cdc_downstream, choicemap(:y => yv, :z => zv), ()).plan.parameter_layout
         unc_layout =
-            UncertainTea._resolve_signature_plan(cdc_downstream, choicemap(:z => zv)).plan.parameter_layout
+            UncertainTea._resolve_signature_plan(cdc_downstream, choicemap(:z => zv), ()).plan.parameter_layout
         @test parametervaluecount(con_layout) == 1
         @test parametervaluecount(unc_layout) == 2
 
@@ -306,7 +306,7 @@ end
 
         # signature {:y, :z}: exactly one latent (mu), so the sampler takes a
         # one-element state -- the count that made the old syntactic sizing throw.
-        layout = UncertainTea._resolve_signature_plan(cdc_chain, cons).plan.parameter_layout
+        layout = UncertainTea._resolve_signature_plan(cdc_chain, cons, ()).plan.parameter_layout
         @test parametervaluecount(layout) == 1
 
         sample_mean(v) = sum(v) / length(v)
@@ -326,7 +326,7 @@ end
     @testset "#95 same model with :y unconstrained samples the larger latent set" begin
         # Only `:z` observed: `:y` is now a latent, so [mu, y] are both sampled.
         cons = choicemap(:z => 0.5)
-        layout = UncertainTea._resolve_signature_plan(cdc_chain, cons).plan.parameter_layout
+        layout = UncertainTea._resolve_signature_plan(cdc_chain, cons, ()).plan.parameter_layout
         @test parametervaluecount(layout) == 2
 
         res = first(nuts(cdc_chain, (), cons; num_samples=800, num_warmup=800, rng=MersenneTwister(7)))
@@ -346,7 +346,7 @@ end
         post_mean = yobs / 2
         post_var = 0.5
 
-        layout = UncertainTea._conditioned_parameter_layout(cdc_chain, cons)
+        layout = UncertainTea._conditioned_parameter_layout(cdc_chain, cons, ())
         @test parametervaluecount(layout) == 1
 
         wmean(v, w) = sum(v .* w)
@@ -389,7 +389,7 @@ end
     @testset "#95 smc with :y unconstrained samples the larger latent set" begin
         # Only `:z` observed: `:y` becomes a latent, so SMC sizes [mu, y].
         cons = choicemap(:z => 0.5)
-        layout = UncertainTea._conditioned_parameter_layout(cdc_chain, cons)
+        layout = UncertainTea._conditioned_parameter_layout(cdc_chain, cons, ())
         @test parametervaluecount(layout) == 2
 
         smc = batched_smc(cdc_chain, (), cons; num_particles=2000, rng=MersenneTwister(7))

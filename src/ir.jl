@@ -244,12 +244,39 @@ function LoopPlanStep(iterator::Symbol, iterable::Any, body)
     return LoopPlanStep(iterator, nothing, iterable, normalized_body)
 end
 
+# A runtime-dimension candidate (issue #289): a static, unscoped choice whose
+# family sizes its parameter slot from an argument vector, but whose static
+# sizing came back `nothing` -- the slot dimension is only knowable from the
+# model ARGUMENTS at resolution time. `size_expr` is the size-bearing argument
+# expression (the mean vector for the mv families, the concentration vector
+# for dirichlet); PR-2 of #289 evaluates its dependency cone against `args` to
+# resolve the dims tuple. `address` is the normalized static choice address,
+# matching the conditioning-signature elements, so resolution can tell an
+# observed candidate (fine: dynamic-size observations need no slot) from a
+# latent one.
+struct RuntimeDimCandidate
+    address::Tuple
+    family::Symbol
+    size_expr::Any
+end
+
 struct ExecutionPlan
     model_name::Symbol
     steps::Vector{AbstractPlanStep}
     parameter_layout::ParameterLayout
     environment_layout::EnvironmentLayout
+    # Runtime-dimension candidates (issue #289), collected once at plan build.
+    # Empty for the overwhelming majority of models: `_resolve_runtime_dims`
+    # tests `isempty` and returns `()` without touching the args.
+    runtime_dim_candidates::Vector{RuntimeDimCandidate}
 end
+
+ExecutionPlan(
+    model_name::Symbol,
+    steps::Vector{AbstractPlanStep},
+    parameter_layout::ParameterLayout,
+    environment_layout::EnvironmentLayout,
+) = ExecutionPlan(model_name, steps, parameter_layout, environment_layout, RuntimeDimCandidate[])
 
 struct ModelSpec
     name::Symbol
@@ -861,6 +888,65 @@ function _wishart_static_size(arguments::Vector)
     return _matrix_literal_dim(arguments[2])
 end
 
+# --- runtime-dimension candidate detection (issue #289) ----------------------
+#
+# The size-bearing argument expression of a runtime-dimension candidate, or
+# `nothing` when the rhs is not one. A candidate is a choice in one of the
+# argument-sized families whose `_parameter_transform` returned `nothing`
+# SOLELY because the static size was `nothing` (non-literal mean/concentration
+# vectors): today such a choice silently gets no parameter slot and fails late
+# with a misleading error when it turns out to be a latent. Wrapped in `Some`
+# so a literal `nothing` argument can never masquerade as "not a candidate".
+function _runtime_dim_size_expr(rhs::DistributionSpec)
+    rhs.reparam === :noncentered && return nothing
+    arguments = rhs.arguments
+    if rhs.family === :mvnormal
+        length(arguments) == 2 || return nothing
+        isnothing(_mvnormal_static_size(arguments)) || return nothing
+        return Some(arguments[1])
+    elseif rhs.family === :mvnormaldense
+        length(arguments) == 2 || return nothing
+        isnothing(_mvnormaldense_static_size(arguments)) || return nothing
+        return Some(arguments[1])
+    elseif rhs.family === :mvstudentt
+        length(arguments) == 3 || return nothing
+        isnothing(_mvstudentt_static_size(arguments)) || return nothing
+        return Some(arguments[2])
+    elseif rhs.family === :mvstudenttdense
+        length(arguments) == 3 || return nothing
+        isnothing(_mvstudenttdense_static_size(arguments)) || return nothing
+        return Some(arguments[2])
+    elseif rhs.family === :dirichlet
+        length(arguments) == 1 || return nothing
+        isnothing(_dirichlet_static_size(arguments)) || return nothing
+        return Some(arguments[1])
+    end
+    return nothing
+end
+
+_runtime_dim_size_expr(::AbstractChoiceRhsSpec) = nothing
+
+# Collect the runtime-dimension candidates of a step list. Only static,
+# unscoped choices qualify: a scoped or templated-address choice never carries
+# a parameter slot under any signature, so a dynamic size there stays the
+# (supported) observation-only shape it is today.
+function _collect_runtime_dim_candidates!(candidates::Vector{RuntimeDimCandidate}, steps)
+    for step in steps
+        if step isa ChoicePlanStep
+            (isempty(step.scopes) && isstaticaddress(step.address)) || continue
+            size_expr = _runtime_dim_size_expr(step.rhs)
+            isnothing(size_expr) && continue
+            push!(
+                candidates,
+                RuntimeDimCandidate(_static_choice_address(step), step.rhs.family, something(size_expr)),
+            )
+        elseif step isa LoopPlanStep
+            _collect_runtime_dim_candidates!(candidates, step.body)
+        end
+    end
+    return candidates
+end
+
 function _parameterize_step(
     step::ChoicePlanStep,
     slots::Vector{ParameterSlotSpec},
@@ -1174,7 +1260,13 @@ function _signature_execution_plan(base_plan::ExecutionPlan, observed)
     reparameterized = _auto_marginalize_discrete_latents(reparameterized, observed)
     layout = ParameterLayout(slots, parameter_counter[] - 1, value_counter[] - 1)
     annotated = _annotate_environment_slots(reparameterized, base_plan.environment_layout)
-    return ExecutionPlan(base_plan.model_name, annotated, layout, base_plan.environment_layout)
+    return ExecutionPlan(
+        base_plan.model_name,
+        annotated,
+        layout,
+        base_plan.environment_layout,
+        base_plan.runtime_dim_candidates,
+    )
 end
 
 function _inline_plan_steps(steps::Vector{AbstractPlanStep})
@@ -1312,7 +1404,8 @@ function build_execution_plan(
     parameterized_steps, parameterized_layout = _assign_parameter_layout(steps)
     environment_layout = _build_environment_layout(arguments, parameterized_steps)
     annotated_steps = _annotate_environment_slots(parameterized_steps, environment_layout)
-    return ExecutionPlan(name, annotated_steps, parameterized_layout, environment_layout)
+    candidates = _collect_runtime_dim_candidates!(RuntimeDimCandidate[], annotated_steps)
+    return ExecutionPlan(name, annotated_steps, parameterized_layout, environment_layout, candidates)
 end
 
 function Base.show(io::IO, part::AddressLiteralPart)

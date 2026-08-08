@@ -69,7 +69,7 @@ end
     end
 
     @testset "the stage holds the whole observed vector" begin
-        resolved = UncertainTea._resolve_signature_plan(svo_gp, svo_gp_cm)
+        resolved = UncertainTea._resolve_signature_plan(svo_gp, svo_gp_cm, ())
         @test resolved.compiled.stage_count == 1
         stage = UncertainTea._stage_observations(svo_gp, resolved, [0.1, 0.2, -0.8], (svo_X,), svo_gp_cm)
         @test stage isa UncertainTea.ObservationStage

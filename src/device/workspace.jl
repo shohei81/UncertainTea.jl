@@ -85,7 +85,9 @@ function DeviceBatchedWorkspace(
     T = precision
     # Resolve the conditioning-signature plan once and derive the device plan,
     # observation staging, and parameter count from it (issue #95, PR-4).
-    resolved = _resolve_signature_plan(model, _representative_constraints(constraints))
+    resolved = _resolve_signature_plan(
+        model, _representative_constraints(constraints), _representative_args(args),
+    )
     issues, plan = _lower_device_plan(model, resolved, T)
     isnothing(plan) && throw(ArgumentError(_device_unsupported_message(model, issues)))
 

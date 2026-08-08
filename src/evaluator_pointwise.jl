@@ -268,7 +268,7 @@ function _combine_marginal_branches!(records, address, weights::Vector{Float64},
 end
 
 function _record_execution!(records, model::TeaModel, params::AbstractVector, args::Tuple, constraints::ChoiceMap)
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     plan = resolved.plan
     compiled_plan = resolved.compiled
     args = _complete_model_args(model, args)
@@ -320,7 +320,7 @@ choice is bound; binding is orthogonal. This order defines the column order of
 `pointwise_loglikelihood` and is deterministic across draws.
 """
 function observation_addresses(model::TeaModel, args::Tuple=(), constraints::ChoiceMap=choicemap())
-    resolved = _resolve_signature_plan(model, constraints)
+    resolved = _resolve_signature_plan(model, constraints, args)
     params = _signature_initial_parameters(model, args, resolved, constraints)
     records = Pair{Any,Float64}[]
     _record_execution!(records, model, params, args, constraints)

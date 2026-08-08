@@ -250,7 +250,7 @@ function pathfinder(
     num_paths > 0 || throw(ArgumentError("pathfinder requires num_paths > 0"))
     num_draws > 0 || throw(ArgumentError("pathfinder requires num_draws > 0"))
     num_elbo_draws > 0 || throw(ArgumentError("pathfinder requires num_elbo_draws > 0"))
-    parametercount(_conditioned_parameter_layout(model, constraints)) > 0 ||
+    parametercount(_conditioned_parameter_layout(model, constraints, args)) > 0 ||
         throw(ArgumentError("pathfinder requires at least one parameterized latent choice"))
 
     objective = theta -> logjoint_unconstrained(model, theta, args, constraints)

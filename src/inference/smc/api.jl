@@ -10,7 +10,7 @@ function batched_importance_sampling(
     # Signature-aware sizing (#95 PR-7): the latent set (and thus the particle
     # row count, proposal, and result columns) is a function of the conditioning
     # signature, not the syntactic default layout. Memoized in signature_cache.
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     parameter_total = parametercount(layout)
     parameter_total > 0 || throw(ArgumentError("batched_importance_sampling requires at least one parameterized latent choice"))
     num_particles > 0 || throw(ArgumentError("batched_importance_sampling requires num_particles > 0"))
@@ -120,7 +120,7 @@ function batched_smc(
     # Signature-aware sizing (#95 PR-7): particle rows, proposal, tempering move
     # scratch, and result columns all derive from the conditioned latent set, not
     # the syntactic default layout. Memoized in signature_cache.
-    layout = _conditioned_parameter_layout(model, constraints)
+    layout = _conditioned_parameter_layout(model, constraints, args)
     parameter_total = parametercount(layout)
     parameter_total > 0 || throw(ArgumentError("batched_smc requires at least one parameterized latent choice"))
     num_particles > 0 || throw(ArgumentError("batched_smc requires num_particles > 0"))
