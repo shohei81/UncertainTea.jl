@@ -4,6 +4,19 @@
 
 ### Added
 
+- **MCMCChains diagnostics generics** (#368): the MCMCChains package extension
+  now adds `HMCChains` methods to `MCMCDiagnosticTools.ess`/`rhat` and
+  `MCMCChains.summarize` (forwarding to UncertainTea's implementations with
+  UncertainTea's keywords — `space`, and `method` for `rhat`). After
+  `using UncertainTea.Diagnostics, MCMCChains` the bare names are ambiguous
+  (both modules export them); the recommended convention is one explicit
+  import, `using MCMCChains: ess, rhat, summarize`, after which the bare names
+  dispatch on both `HMCChains` and converted `Chains` objects. Keyword
+  vocabularies are deliberately not aliased (MCMCDiagnosticTools' `kind` is
+  rejected on `HMCChains`). `MCMCDiagnosticTools` joins the extension's
+  trigger packages as a weak dependency (it is always loaded whenever
+  `MCMCChains` is, so nothing changes for users). Qualified calls keep working
+  unchanged.
 - **`to_arviz_dict` coord-dim arrays for vector variables** (#366): the new
   `flatten_vectors::Bool=true` keyword (both methods) keeps the flattened
   per-component `"v[1]"` keys by default; with `flatten_vectors=false` each
@@ -15,6 +28,7 @@
   `"coords"` / `"dims"` entries following the ArviZ `from_dict` convention
   (e.g. `dims["theta"] == ["theta_dim_0"]`,
   `coords["theta_dim_0"] == collect(1:k)`).
+
 ### Fixed
 
 - **Exp-subnormal boundary extended to every log(x)/1/x positive-support

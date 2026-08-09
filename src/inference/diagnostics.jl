@@ -619,6 +619,11 @@ statistic; `method=:rank` is the rank-normalized split-R̂ of Vehtari et al.
 (2021) — the max of the bulk (rank-normalized) and folded (tail-sensitive)
 statistics, robust to heavy tails and nonlinear scale, now the standard in
 Stan/ArviZ.
+
+When `MCMCChains` is loaded its exported `rhat` (a re-export of the
+MCMCDiagnosticTools generic) also gains this `HMCChains` method, so
+`using MCMCChains: rhat` gives one bare name that works on both `HMCChains`
+and `MCMCChains.Chains`; see the name-clash note in [`to_mcmcchains`](@ref).
 """
 function rhat(chains::HMCChains; space::Symbol=:constrained, method::Symbol=:split)
     method in (:split, :rank) ||
@@ -639,6 +644,11 @@ Per-parameter (bulk) effective sample size from the split chains, using the
 paired-autocorrelation estimator of Vehtari et al. (2021). `space` selects
 `:constrained` (default) or `:unconstrained` draws. See also `rhat` and
 `summarize` (which additionally reports tail ESS).
+
+When `MCMCChains` is loaded its exported `ess` (a re-export of the
+MCMCDiagnosticTools generic) also gains this `HMCChains` method, so
+`using MCMCChains: ess` gives one bare name that works on both `HMCChains`
+and `MCMCChains.Chains`; see the name-clash note in [`to_mcmcchains`](@ref).
 """
 function ess(chains::HMCChains; space::Symbol=:constrained)
     num_params, _ = _validate_hmc_diagnostics(chains, space)
@@ -658,6 +668,11 @@ Carlo standard errors, together with run-level diagnostics and any sampler
 warnings. `space` selects `:constrained` (default) or `:unconstrained` draws;
 `per_chain=true` also reports per-chain means and standard deviations. See also
 `rhat`, `ess`, and `check_diagnostics`.
+
+When `MCMCChains` is loaded, `MCMCChains.summarize` also gains this
+`HMCChains` method, so `using MCMCChains: summarize` gives one bare name that
+works on both `HMCChains` and `MCMCChains.Chains`; see the name-clash note in
+[`to_mcmcchains`](@ref).
 """
 function summarize(chains::HMCChains; space::Symbol=:constrained, quantiles=(0.05, 0.5, 0.95), per_chain::Bool=false)
     num_params, _ = _validate_hmc_diagnostics(chains, space)

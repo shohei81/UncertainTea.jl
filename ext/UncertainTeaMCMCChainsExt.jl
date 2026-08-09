@@ -2,6 +2,7 @@ module UncertainTeaMCMCChainsExt
 
 using UncertainTea
 using MCMCChains
+using MCMCDiagnosticTools: MCMCDiagnosticTools
 
 # NUTS sampler statistics exported alongside the draws, matching the
 # `sample_stats` group of `to_arviz_dict`. Placed in the `:internals` section so
@@ -44,6 +45,43 @@ function UncertainTea.to_mcmcchains(chains::UncertainTea.HMCChains; space::Symbo
         vcat(parameter_names, internal_names),
         Dict(:internals => internal_names),
     )
+end
+
+# --- Diagnostics generics (issue #368) ---------------------------------------
+# `MCMCChains` re-exports `ess`/`rhat` from MCMCDiagnosticTools and owns
+# `summarize` itself. `UncertainTea.Diagnostics` exports functions with the same
+# names, so after `using UncertainTea.Diagnostics, MCMCChains` the bare names
+# are ambiguous in the user's namespace (an `UndefVarError` on access — a
+# name-resolution clash, not a dispatch problem, so it cannot be fixed by
+# adding methods alone). The methods below extend the MCMCChains-side generics
+# for `HMCChains`, so a single explicit import merges both worlds:
+#
+#     using UncertainTea, UncertainTea.Inference, UncertainTea.Diagnostics
+#     using MCMCChains
+#     using MCMCChains: ess, rhat, summarize   # resolve the clash
+#
+# After that one line, `rhat(hmcchains)` and `rhat(chns::Chains)` both work
+# through the same generic (explicit imports take priority over conflicting
+# `using` exports).
+#
+# Keyword compat is deliberately NOT aliased: on `HMCChains` these methods take
+# UncertainTea's keywords (`space`, and `method` for `rhat`), not
+# MCMCDiagnosticTools' (`kind`, `autocov_method`, ...). The vocabularies do not
+# map 1:1 — e.g. MCMCDiagnosticTools' `kind=:basic` is the non-split classic
+# R-hat, while UncertainTea's `method=:split` is the split-chain statistic —
+# so aliasing would silently change semantics. `method=:rank` matches
+# MCMCDiagnosticTools' default `kind=:rank` (both are the rank-normalized
+# split-R-hat of Vehtari et al. 2021, up to quantile-interpolation details).
+function MCMCDiagnosticTools.rhat(chains::UncertainTea.HMCChains; kwargs...)
+    return UncertainTea.rhat(chains; kwargs...)
+end
+
+function MCMCDiagnosticTools.ess(chains::UncertainTea.HMCChains; kwargs...)
+    return UncertainTea.ess(chains; kwargs...)
+end
+
+function MCMCChains.summarize(chains::UncertainTea.HMCChains; kwargs...)
+    return UncertainTea.summarize(chains; kwargs...)
 end
 
 end # module

@@ -228,9 +228,25 @@ model, alongside a posterior-fit plot built from [`posterior_array`](@ref).
 The `:internals` section of the converted object carries the per-draw sampler
 statistics (`:lp`, `:diverging`, `:energy`, `:tree_depth`,
 `:acceptance_rate`), so e.g. `plot(mc[:, [:lp], :])` shows the log-density
-trace. Note the qualified-call caveat in the [`to_mcmcchains`](@ref)
-docstring: `MCMCChains` also exports `summarize`/`ess`/`rhat`, so call the
-UncertainTea versions qualified once both packages are loaded.
+trace.
+
+`MCMCChains` also exports `summarize`/`ess`/`rhat`, so after
+`using UncertainTea.Diagnostics, MCMCChains` the bare names are ambiguous and
+error on use. The extension adds `HMCChains` methods to the MCMCChains-side
+generics, so one explicit import merges the two surfaces — this is the
+recommended convention when both packages are loaded:
+
+```julia
+using MCMCChains: ess, rhat, summarize   # resolve the name clash
+
+rhat(chains)                 # HMCChains — UncertainTea keywords (space, method)
+rhat(mc)                     # converted Chains — MCMCChains keywords
+summarize(chains)            # UncertainTea's HMCSummary
+```
+
+Qualified calls (`UncertainTea.summarize(chains)`, ...) keep working
+unchanged; see the name-clash note in the [`to_mcmcchains`](@ref) docstring
+for the keyword-compat details.
 
 ### Tabular access (Tables.jl / DataFrames.jl)
 
