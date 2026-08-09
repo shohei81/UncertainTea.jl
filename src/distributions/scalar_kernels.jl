@@ -57,6 +57,22 @@ end
 # few surviving mantissa bits make log(x) -- and hence the gamma density --
 # silently wrong by O(1) while the 1/x partials explode. Treat it as the same
 # boundary as exact 0.0. Branches on the primal value, so duals flow through.
+#
+# Issue #367 extends the same guard from gamma to every positive-support family
+# whose density carries a log(x) or 1/x value term (lognormal, inversegamma,
+# weibull, frechet, rayleigh, inversegaussian): in the subnormal band those
+# terms are built from the few surviving mantissa bits (silently wrong values)
+# while the 1/x partials overflow (Inf/NaN gradients that only ACCIDENTALLY
+# reject). Rejecting the band deliberately also closes the underflow gap on the
+# single ForwardDiff path: at exp(theta) == 0.0 the Dual partials underflow
+# WITH the value (so `_offsupport_neginf` cannot poison, rejection rests on the
+# -Inf value guard alone), but in the subnormal band the partials are still
+# nonzero, so a trajectory moving toward underflow now hits poisoned (-Inf,
+# NaN) evaluations before the partials vanish -- mirroring the batched path,
+# which poisons at both boundaries. Exponential, halfnormal, halfcauchy, and
+# pareto need no guard: their densities have no log(x)/1/x value term (pareto's
+# lower-bounded transform maps the boundary INTO the support), so the kernels
+# are exact through the band and at 0.0 (audited in issue #367).
 _positive_subnormal(x::AbstractFloat) = issubnormal(x)
 _positive_subnormal(x::Real) = issubnormal(float(x))
 _positive_subnormal(x::ForwardDiff.Dual) = _positive_subnormal(ForwardDiff.value(x))
@@ -74,6 +90,8 @@ function _backend_lognormal_logpdf(mu, sigma, x)
     xx, mu_, sigma_ = promote(x, mu, sigma)
     _primal(sigma_) > zero(_primal(sigma_)) || return oftype(xx, NaN)
     _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
+    # exp-subnormal boundary (issues #345/#367): see _positive_subnormal
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     return _backend_normal_logpdf(mu_, sigma_, log(xx)) - log(xx)
 end
 
@@ -116,6 +134,8 @@ function _backend_inversegamma_logpdf(shape, scale, x)
     _primal(shape_) > zero(_primal(shape_)) || return oftype(xx, NaN)
     _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
     _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
+    # exp-subnormal boundary (issues #345/#367): see _positive_subnormal
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     return shape_ * log(scale_) - loggamma(shape_) -
            (shape_ + one(shape_)) * log(xx) -
            scale_ / xx
@@ -134,6 +154,9 @@ function _backend_weibull_logpdf(shape, scale, x)
         end
         return _offsupport_neginf(xx)
     end
+    # exp-subnormal boundary (issues #345/#367): see _positive_subnormal. Sits
+    # AFTER the x == 0 branch, so the issue-#86 exact-zero shape channels stay.
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     log_ratio = log(xx) - log(scale_)
     return log(shape_) + (shape_ - one(shape_)) * log(xx) -
            shape_ * log(scale_) - exp(shape_ * log_ratio)
@@ -205,6 +228,8 @@ function _backend_frechet_logpdf(shape, scale, x)
     xx, shape_, scale_ = promote(x, shape, scale)
     (_primal(shape_) > zero(_primal(shape_)) && _primal(scale_) > zero(_primal(scale_))) || return oftype(xx, NaN)
     _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
+    # exp-subnormal boundary (issues #345/#367): see _positive_subnormal
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     logz = log(xx) - log(scale_)
     return log(shape_) - log(scale_) - (one(shape_) + shape_) * logz - exp(-shape_ * logz)
 end
@@ -213,6 +238,8 @@ function _backend_rayleigh_logpdf(scale, x)
     xx, scale_ = promote(x, scale)
     _primal(scale_) > zero(_primal(scale_)) || return oftype(xx, NaN)
     _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
+    # exp-subnormal boundary (issues #345/#367): see _positive_subnormal
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     return log(xx) - 2 * log(scale_) - xx * xx / (2 * scale_ * scale_)
 end
 
@@ -220,6 +247,8 @@ function _backend_inversegaussian_logpdf(mu, lambda, x)
     xx, mu_, lambda_ = promote(x, mu, lambda)
     (_primal(mu_) > zero(_primal(mu_)) && _primal(lambda_) > zero(_primal(lambda_))) || return oftype(xx, NaN)
     _primal(xx) > zero(_primal(xx)) || return _offsupport_neginf(xx)
+    # exp-subnormal boundary (issues #345/#367): see _positive_subnormal
+    _positive_subnormal(xx) && return _offsupport_neginf(xx)
     d = xx - mu_
     return log(lambda_) / 2 - log(2 * oftype(xx, pi)) / 2 - 3 * log(xx) / 2 -
            lambda_ * d * d / (2 * mu_ * mu_ * xx)

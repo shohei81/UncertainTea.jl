@@ -123,3 +123,120 @@ end
     bls_gamma_bg = batched_logjoint_gradient_unconstrained(bls_gamma_model, reshape([-800.0], 1, 1), ())
     @test !isfinite(bls_gamma_bg[1, 1])
 end
+
+# Issue #367 item 2: the exp-subnormal boundary (issue #345, gamma) extended to
+# every positive-support family whose density carries a log(x) or 1/x value
+# term. In the band theta in ~(-745.1, -708.4) the value exp(theta) is
+# subnormal: the density built from its few mantissa bits is silently wrong
+# while the 1/x partials overflow. The kernels now score the band -Inf with
+# POISONED partials on both paths -- and because the Dual partials there are
+# still nonzero (unlike at exact 0.0, where they underflow with the value),
+# this gives the single ForwardDiff path a non-finite-gradient rejection band
+# in front of the underflow boundary, mirroring the batched semantics as far
+# as the kernel API allows. Families with no log(x)/1/x value term
+# (exponential, halfnormal, halfcauchy; pareto's lower-bounded transform maps
+# the boundary INTO the support) are exact through the band and stay finite.
+@testset "positive_support_subnormal_boundary" begin
+    @tea static function pss_lognormal()
+        x ~ lognormal(0.0, 1.0)
+    end
+    @tea static function pss_inversegamma()
+        x ~ inversegamma(3.0, 2.0)
+    end
+    @tea static function pss_weibull()
+        x ~ weibull(2.0, 1.5)
+    end
+    @tea static function pss_weibull_shape1()
+        x ~ weibull(1.0, 1.5)
+    end
+    @tea static function pss_frechet()
+        x ~ frechet(2.0, 1.5)
+    end
+    @tea static function pss_rayleigh()
+        x ~ rayleigh(1.5)
+    end
+    @tea static function pss_inversegaussian()
+        x ~ inversegaussian(1.0, 2.0)
+    end
+    @tea static function pss_exponential()
+        x ~ exponential(1.5)
+    end
+    @tea static function pss_halfnormal()
+        x ~ halfnormal(1.0)
+    end
+
+    guarded = (
+        pss_lognormal,
+        pss_inversegamma,
+        pss_weibull,
+        pss_weibull_shape1, # rejected like gamma(1, r): band uniformity beats the exact corner
+        pss_frechet,
+        pss_rayleigh,
+        pss_inversegaussian,
+    )
+    for pss_model in guarded, pss_theta in (-720.0, -740.0)
+        @test issubnormal(exp(pss_theta)) # the band premise
+        @test logjoint_unconstrained(pss_model, [pss_theta], ()) == -Inf
+        pss_g = logjoint_gradient_unconstrained(pss_model, [pss_theta], ())
+        @test !isfinite(pss_g[1])
+        pss_bv = batched_logjoint_unconstrained(pss_model, reshape([pss_theta], 1, 1), ())
+        @test pss_bv[1] == -Inf
+        pss_bg = batched_logjoint_gradient_unconstrained(pss_model, reshape([pss_theta], 1, 1), ())
+        @test !isfinite(pss_bg[1, 1])
+    end
+
+    # At exact underflow (exp(theta) == 0.0) the value guard still rejects on
+    # both paths and the batched gradient poisons; the single-path gradient
+    # stays the finite Jacobian-only 1.0 (documented residual: the Dual
+    # partials underflowed with the value, so there is nothing to poison).
+    for pss_model in (pss_lognormal, pss_weibull, pss_rayleigh)
+        @test logjoint_unconstrained(pss_model, [-800.0], ()) == -Inf
+        @test logjoint_gradient_unconstrained(pss_model, [-800.0], ())[1] == 1.0
+        pss_bg = batched_logjoint_gradient_unconstrained(pss_model, reshape([-800.0], 1, 1), ())
+        @test !isfinite(pss_bg[1, 1])
+    end
+
+    # Audited no-guard families: exact through the band and at the underflow
+    # boundary (their composites are well-conditioned there), so values stay
+    # finite and both gradients keep the exact composite derivative.
+    for pss_model in (pss_exponential, pss_halfnormal), pss_theta in (-720.0, -800.0)
+        pss_v = logjoint_unconstrained(pss_model, [pss_theta], ())
+        @test isfinite(pss_v)
+        @test logjoint_gradient_unconstrained(pss_model, [pss_theta], ())[1] ≈ 1.0 atol = 1e-12
+        pss_bg = batched_logjoint_gradient_unconstrained(pss_model, reshape([pss_theta], 1, 1), ())
+        @test pss_bg[1, 1] ≈ 1.0 atol = 1e-12
+    end
+
+    # A poisoned subnormal column must not leak NaN into batch neighbors.
+    pss_batch = reshape([0.4, -720.0, -1.3], 1, 3)
+    pss_batch_values = batched_logjoint_unconstrained(pss_lognormal, pss_batch, ())
+    pss_batch_gradient = batched_logjoint_gradient_unconstrained(pss_lognormal, pss_batch, ())
+    @test isfinite(pss_batch_values[1]) && isfinite(pss_batch_values[3])
+    @test pss_batch_values[2] == -Inf
+    @test isfinite(pss_batch_gradient[1, 1]) && isfinite(pss_batch_gradient[1, 3])
+    @test !isfinite(pss_batch_gradient[1, 2])
+
+    # OBSERVED subnormal values score -Inf (boundary semantics) with an
+    # all-zero seed: unrelated latents keep finite gradients on both paths.
+    @tea static function pss_observed_model()
+        mu ~ normal(0.0, 1.0)
+        {:x} ~ lognormal(0.0, 1.0)
+    end
+    pss_obs_cm = choicemap(:x => 1.0e-315)
+    @test logjoint_unconstrained(pss_observed_model, [0.7], (), pss_obs_cm) == -Inf
+    @test logjoint_gradient_unconstrained(pss_observed_model, [0.7], (), pss_obs_cm)[1] ≈ -0.7 atol = 1e-12
+    pss_obs_bg =
+        batched_logjoint_gradient_unconstrained(pss_observed_model, reshape([0.7], 1, 1), (), pss_obs_cm)
+    @test pss_obs_bg[1, 1] ≈ -0.7 atol = 1e-12
+
+    # Just outside the band (exp(theta) still a NORMAL float) the guarded
+    # families keep their previous finite scoring -- the guard is the
+    # subnormal boundary, not a blanket small-value rejection.
+    for pss_model in guarded
+        pss_theta = -700.0
+        @test !issubnormal(exp(pss_theta))
+        pss_v = logjoint_unconstrained(pss_model, [pss_theta], ())
+        pss_bv = batched_logjoint_unconstrained(pss_model, reshape([pss_theta], 1, 1), ())
+        @test pss_v == pss_bv[1]
+    end
+end

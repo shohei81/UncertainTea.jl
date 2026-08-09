@@ -82,6 +82,7 @@ core_test_files = [
     ("device_marginalize_lowering.jl", "device"),
     ("signature_batched_device_parity.jl", "device"),
     ("device_gradient_dual.jl", "device"),
+    ("device_float32_saturation.jl", "device"),
     ("device_tiled_post_loop_obs.jl", "device"),
     ("device_hmc_advi.jl", "device"),
     ("device_masked_nuts.jl", "device"),

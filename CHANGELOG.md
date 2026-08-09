@@ -17,6 +17,45 @@
   trigger packages as a weak dependency (it is always loaded whenever
   `MCMCChains` is, so nothing changes for users). Qualified calls keep working
   unchanged.
+- **`to_arviz_dict` coord-dim arrays for vector variables** (#366): the new
+  `flatten_vectors::Bool=true` keyword (both methods) keeps the flattened
+  per-component `"v[1]"` keys by default; with `flatten_vectors=false` each
+  vector parameter — and each indexed observation family in the
+  `"log_likelihood"` group — is emitted as a single array with a trailing
+  component dimension (`(draw, chain, k)` for `:draw_chain`,
+  `(chain, draw, k)` for `:chain_draw`, matching Python `az.from_dict`'s
+  `(chain, draw, *shape)`), and the returned dictionary gains top-level
+  `"coords"` / `"dims"` entries following the ArviZ `from_dict` convention
+  (e.g. `dims["theta"] == ["theta_dim_0"]`,
+  `coords["theta_dim_0"] == collect(1:k)`).
+
+### Fixed
+
+- **Exp-subnormal boundary extended to every log(x)/1/x positive-support
+  family** (#367, extending #345): `lognormal`, `inversegamma`, `weibull`,
+  `frechet`, `rayleigh`, and `inversegaussian` now score positive subnormal
+  values as the off-support boundary (`-Inf` with poisoned partials), exactly
+  like `gamma` has since #345. In the band `exp(theta)` traverses before
+  underflowing (theta in ~(-745.1, -708.4) at Float64) the density was built
+  from a few surviving mantissa bits (silently wrong values) while the `1/x`
+  partials overflowed; rejecting the band also gives the single ForwardDiff
+  path a non-finite-gradient rejection zone in front of the underflow
+  boundary, where its Dual partials still carry the seed — mirroring the
+  batched path's poison semantics as far as the kernel API allows.
+  `exponential`, `halfnormal`, `halfcauchy`, and `pareto` were audited exact
+  through the band and are unchanged.
+- **Device Float32 exp-subnormal band scored silently wrong finite values**
+  (#367): at Float32 the subnormal band sits at theta in ~(-104, -87.3), and
+  the branchless device kernels scored it finite-but-wrong (up to O(30) nats
+  for `lognormal`) with finite gradients, so device integrators never
+  rejected. The seven guarded families' device kernels now treat
+  positive-subnormal values as off-support via a branchless
+  `>= floatmin` support test in the value precision; the band scores `-Inf`
+  and rejection is value-driven. Past-boundary `-Inf` points keep their
+  finite Jacobian-only gradient (documented: the value guard rejects), and
+  the Float32 logit pre-cliff band (theta ~ 13..17) remains the documented
+  `eps32 * exp(theta)` residual, analogous to the host theta = 30..36.7 band
+  (#343/#354, exact fix tracked as the fused unconstrained-space density).
 
 ## v0.2.0 (2026-08-08)
 
