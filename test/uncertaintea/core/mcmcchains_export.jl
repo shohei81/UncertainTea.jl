@@ -153,12 +153,13 @@ end
     # MCMCDiagnosticTools' default `kind=:rank` on the converted chains. Both
     # implement Vehtari et al. (2021); tiny differences remain from
     # quantile-interpolation details in the folded statistic's median, so the
-    # comparison uses atol=1e-3 (observed ~1e-5 on this seed).
+    # comparison uses atol=5e-3 (observed ~1e-5 on this seed with current MDT;
+    # ~1.2e-3 on Julia 1.10's older resolved MCMCDiagnosticTools).
     mcxgc_ut_rank = UncertainTea.rhat(mcxgc_chains; method=:rank)
     for (index, name) in enumerate(Symbol.(UncertainTea.parameter_names(mcxgc_chains)))
         row = findfirst(==(name), mcxgc_mc_rhat[:, :parameters])
         @test row !== nothing
-        @test isapprox(mcxgc_ut_rank[index], mcxgc_mc_rhat[row, :rhat]; atol=1e-3)
+        @test isapprox(mcxgc_ut_rank[index], mcxgc_mc_rhat[row, :rhat]; atol=5e-3)
     end
 
     # Bulk ESS uses a different estimator on each side (UncertainTea: paired
