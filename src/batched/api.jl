@@ -431,8 +431,9 @@ end
 # trial gradient actually compiles -- so it can never make the gradient path fail
 # where forward mode would have worked (the user asked for automatic + stable):
 #
-#   * adtype selects it (:reverse forces it; :auto uses it above a size threshold;
-#     :forward never does);
+#   * adtype selects it (:reverse forces it; :auto uses it above a size threshold
+#     AND only when the resolved plan has no noncentered dependent-transform
+#     steps, issue #379; :forward never does);
 #   * the batch shares ONE `args`/`constraints` (multi-chain on the same posterior),
 #     so a single generated objective serves every column;
 #   * the model is on the type-stable generated-scorer path (else no
@@ -452,6 +453,27 @@ end
 # mode where the absolute run cost is small and the compile would not amortize; any
 # repeated or longer run past the threshold amortizes the compile many times over.
 const _REVERSE_MODE_AUTO_MIN_PARAMS = 24
+
+# Structural :auto gate (issue #379). The #277 threshold above was tuned on
+# plain-iid/coupled shapes; a plan with noncentered dependent-transform steps
+# (reparam=:noncentered) compiles to a much slower reverse objective — the
+# schools_large benchmark (#365, P=34) measured reverse ~2.7x SLOWER than
+# forward once noncentered (ESS/s 58.2 vs 159) where the centered variant had
+# reverse ~4.5x FASTER — so :auto must not engage the reverse tier for those
+# plans regardless of parameter count. Explicit adtype=:reverse still forces
+# the tier (user override; the #326 fallback-warning machinery is untouched).
+# The predicate walks the resolved COMPILED plan (memoized per signature), so
+# it costs one tuple walk at cache construction.
+_compiled_steps_have_noncentered(steps::Tuple) = any(_compiled_step_has_noncentered, steps)
+_compiled_step_has_noncentered(@nospecialize(step)) = false
+_compiled_step_has_noncentered(step::CompiledChoicePlanStep) = !isnothing(step.noncentered)
+_compiled_step_has_noncentered(step::CompiledLoopPlanStep) =
+    _compiled_steps_have_noncentered(step.body)
+
+_resolved_plan_has_noncentered(model, args::Tuple, constraints::ChoiceMap) =
+    _compiled_steps_have_noncentered(
+        _resolve_signature_plan(model, constraints, args).compiled.steps,
+    )
 
 # A silent fallback to forward mode is fine under adtype=:auto, but when the
 # caller EXPLICITLY requested :reverse it must not silently measure a different
@@ -479,6 +501,11 @@ function _maybe_batched_reverse_gradient_cache(model, params, args, constraints,
         model, adtype, "per-column args/constraints vectors do not share one objective",
     )
     if adtype === :auto && parameter_count < _REVERSE_MODE_AUTO_MIN_PARAMS
+        return nothing
+    end
+    # noncentered plans compile to a slower reverse objective (issue #379):
+    # :auto stays on the analytic/forward tiers; :reverse still forces reverse.
+    if adtype === :auto && _resolved_plan_has_noncentered(model, args, constraints)
         return nothing
     end
     seed = collect(view(params, :, 1))

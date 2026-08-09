@@ -94,11 +94,13 @@ fits.
 
 The batched samplers accept `adtype=:auto | :forward | :reverse` to choose how
 log-joint gradients are computed when no analytic backend gradient applies:
-`:auto` (default) picks Enzyme reverse-mode for models with a generated scorer
-and ≥ 24 parameters and ForwardDiff otherwise, `:reverse` prefers reverse-mode
-whenever the model supports it (host-only), and `:forward` forces ForwardDiff.
-The reverse tier covers non-centered (`reparam=:noncentered`) and truncated-t
-latents; if an explicitly requested `:reverse` cannot engage (Enzyme not
+`:auto` (default) picks Enzyme reverse-mode for models with a generated scorer,
+≥ 24 parameters, and no non-centered (`reparam=:noncentered`) latents — the
+non-centered transform walk compiles to a reverse objective measurably slower
+than forward, so `:auto` keeps those models on the forward tiers — and
+ForwardDiff otherwise; `:reverse` prefers reverse-mode whenever the model
+supports it (host-only, including non-centered models), and `:forward` forces
+ForwardDiff. If an explicitly requested `:reverse` cannot engage (Enzyme not
 loaded, interpreter-path model, ...), the sampler warns once and falls back to
 forward mode, while `:auto` falls back silently. See
 [Modeling — Gradients and AD selection](modeling.md#gradients-and-ad-selection)

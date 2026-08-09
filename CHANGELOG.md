@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`adtype=:auto` no longer auto-engages the Enzyme reverse tier for
+  non-centered models** (#379): the ≥ 24-parameter heuristic (#278) was tuned
+  on plain-iid shapes, but a plan with `reparam=:noncentered`
+  dependent-transform steps compiles to a reverse objective measured 2–4x
+  *slower* warm than forward (P=34: 714 vs 165 µs/eval; P=66: 1311 vs
+  629 µs/eval; the #365 schools_large run saw 2.7x lower ESS/s plus ~115 s of
+  Enzyme compile). `:auto` now inspects the resolved signature plan and stays
+  on the analytic/forward tiers whenever it contains a non-centered step;
+  centered models keep the existing threshold behavior, and an explicit
+  `adtype=:reverse` still forces the reverse tier (with the #326 fallback
+  warning machinery unchanged).
+
 ## v0.2.1 (2026-08-09)
 
 ### Added

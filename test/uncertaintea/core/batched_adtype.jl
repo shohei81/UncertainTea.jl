@@ -78,6 +78,33 @@ end
         )
     end
 
+    @testset "noncentered plan predicate gates :auto (issue #379)" begin
+        # the resolved-plan predicate behind the :auto exclusion runs without
+        # Enzyme; the engagement behavior itself is covered in test/enzyme.
+        @tea static function adtype_noncentered()
+            mu ~ normal(0.0, 5.0)
+            log_tau ~ normal(0.0, 1.0)
+            theta ~ iid(normal(mu, exp(log_tau)), 32; reparam=:noncentered)
+            for j = 1:32
+                {:y => j} ~ normal(theta[j], 1.0)
+            end
+            return mu
+        end
+        nc_cm = choicemap([(:y => j, 0.1 * j) for j = 1:32])
+        @test UncertainTea._resolved_plan_has_noncentered(adtype_noncentered, (), nc_cm)
+        # a centered plan (with loop steps the walk must recurse through) is negative
+        @test !UncertainTea._resolved_plan_has_noncentered(adtype_coupled, (), adtype_cm)
+
+        # without Enzyme the cache behavior is unchanged: forward tiers for every adtype
+        nc_params = 0.1 .* reshape(collect(range(-1.0, 1.0; length=34 * 3)), 34, 3)
+        for adtype in (:auto, :forward)
+            cache = UncertainTea.BatchedLogjointGradientCache(
+                adtype_noncentered, nc_params, (), nc_cm; adtype=adtype,
+            )
+            @test cache.reverse_cache === nothing
+        end
+    end
+
     @testset "advi/svgd/smc accept and validate adtype (issue #275)" begin
         # a small model, no Enzyme -> every adtype falls back to forward and runs.
         @tea static function adtype_small()

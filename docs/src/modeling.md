@@ -251,7 +251,9 @@ and conditioning signature:
 2. **Reverse-mode AD (Enzyme)** — models with a generated scorer and many
    parameters use Enzyme reverse-mode, whose cost is independent of parameter
    count. Loading `Enzyme` activates the extension. Non-centered
-   (`reparam=:noncentered`) and truncated-t latents are covered.
+   (`reparam=:noncentered`) and truncated-t latents are covered, but
+   non-centered models only reach this tier on an explicit `adtype=:reverse`
+   (see below).
 3. **Forward-mode AD (ForwardDiff)** — the default fallback; cost grows with
    parameter count.
 
@@ -259,12 +261,18 @@ The batched samplers accept `adtype`:
 
 - `:auto` (default) — analytic when available; otherwise reverse-mode when
   the model supports it **and** has ≥ 24 parameters (below that, forward mode
-  wins on constant factors); otherwise forward.
+  wins on constant factors) **and** the resolved plan has no non-centered
+  (`reparam=:noncentered`) latents; otherwise forward. The threshold was tuned
+  on plain-iid shapes — the non-centered dependent-transform walk compiles to
+  a reverse objective that is 2–4x *slower* than forward per gradient (measured
+  at P=34 and P=66), so `:auto` keeps those models on the analytic/forward
+  tiers regardless of parameter count.
 - `:reverse` — prefer reverse-mode whenever the model supports it
-  (host-only; cannot be combined with a device `backend`). If the model
-  cannot engage reverse mode (Enzyme not loaded, interpreter-path model,
-  ...), an explicit `:reverse` warns once and falls back to forward mode —
-  it never fails silently.
+  (host-only; cannot be combined with a device `backend`), including for
+  non-centered models where `:auto` declines. If the model cannot engage
+  reverse mode (Enzyme not loaded, interpreter-path model, ...), an explicit
+  `:reverse` warns once and falls back to forward mode — it never fails
+  silently.
 - `:forward` — force forward-mode.
 
 ```julia

@@ -335,6 +335,54 @@ using Enzyme   # activates UncertainTeaEnzymeExt
         end
     end
 
+    @testset "noncentered plans stay off the reverse tier under :auto (issue #379)" begin
+        # The #277 threshold was tuned on plain-iid shapes; a noncentered
+        # dependent-transform plan compiles to a much slower reverse objective
+        # (schools_large P=34 in #365: reverse ~2.7x slower ESS/s; the warm
+        # per-eval gradient is ~4x slower at P=34 and ~2x at P=66). :auto must
+        # therefore not engage reverse for noncentered plans regardless of P,
+        # while explicit :reverse stays a user override and the centered twin
+        # keeps auto-engaging above the threshold.
+        @tea static function nc379()
+            mu ~ normal(0.0, 5.0)
+            log_tau ~ normal(0.0, 1.0)
+            theta ~ iid(normal(mu, exp(log_tau)), 32; reparam=:noncentered)
+            for j = 1:32
+                {:y => j} ~ normal(theta[j], 1.0)
+            end
+            return mu
+        end
+        @tea static function c379()
+            mu ~ normal(0.0, 5.0)
+            log_tau ~ normal(0.0, 1.0)
+            theta ~ iid(normal(mu, exp(log_tau)), 32)
+            for j = 1:32
+                {:y => j} ~ normal(theta[j], 1.0)
+            end
+            return mu
+        end
+        rng379 = MersenneTwister(379)
+        cm379 = UT.choicemap([(:y => j, randn(rng379)) for j = 1:32])
+        params379 = randn(MersenneTwister(2), 34, 4)
+
+        # :auto on the noncentered plan: reverse must NOT engage (P=34 >= 24)
+        ca = UT.BatchedLogjointGradientCache(nc379, params379, (), cm379; adtype=:auto)
+        @test ca.reverse_cache === nothing
+        # explicit :reverse still forces the tier and matches forward
+        cr = UT.BatchedLogjointGradientCache(nc379, params379, (), cm379; adtype=:reverse)
+        @test cr.reverse_cache !== nothing
+        fwd379 = copy(
+            UT.batched_logjoint_gradient_unconstrained!(
+                UT.BatchedLogjointGradientCache(nc379, params379, (), cm379; adtype=:forward),
+                params379,
+            ),
+        )
+        @test UT.batched_logjoint_gradient_unconstrained!(cr, params379) ≈ fwd379 rtol = 1e-10
+        # the centered twin (same size, same conditioning) still auto-engages
+        cc = UT.BatchedLogjointGradientCache(c379, params379, (), cm379; adtype=:auto)
+        @test cc.reverse_cache !== nothing
+    end
+
     @testset "explicit :reverse fallback warns when the probe declines (issue #326)" begin
         # a scalar (non-loop) observation stays off the generated-scorer path even
         # with Enzyme loaded, so an explicit :reverse request cannot engage and
