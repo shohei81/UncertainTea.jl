@@ -85,3 +85,94 @@ mcx_mean(x) = sum(x) / length(x)
     @test collect(MCMCChains.names(mcx_chn_unconstrained, :parameters)) ==
           Symbol.(UncertainTea.parameter_names(mcx_chains; space=:unconstrained))
 end
+
+# Issue #368: the extension extends the MCMCChains-side diagnostics generics
+# (`MCMCDiagnosticTools.ess`/`rhat`, `MCMCChains.summarize`) for `HMCChains`.
+# The sandbox module below reproduces a real user session — the full facade
+# `using` plus `using MCMCChains` (which makes the bare names ambiguous) plus
+# the ONE documented disambiguation line — in an isolated namespace, so the
+# explicit imports cannot leak into the shared test process and change how
+# later test files resolve `summarize`/`ess`/`rhat`.
+module MCXGenericsConvention
+
+using Test
+using Random
+using UncertainTea, UncertainTea.Inference, UncertainTea.Diagnostics
+using MCMCChains
+# The documented convention: one explicit import resolves the export clash
+# toward the MCMCChains-side generics, whose HMCChains methods (added by the
+# extension) forward to UncertainTea's implementations.
+using MCMCChains: ess, rhat, summarize
+
+@tea static function mcxgc_model()
+    a ~ normal(0.0f0, 1.0f0)
+    b ~ normal(0.0f0, 1.0f0)
+    {:y1} ~ normal(a, 1.0f0)
+    {:y2} ~ normal(b, 1.0f0)
+end
+
+@testset "mcmcchains_generics_convention" begin
+    mcxgc_constraints = UncertainTea.choicemap((:y1, 1.5f0), (:y2, -0.5f0))
+    # Even num_samples so UncertainTea's and MCMCDiagnosticTools' chain
+    # splitting see identical halves in the round-trip comparison below.
+    mcxgc_chains = nuts_chains(
+        mcxgc_model,
+        (),
+        mcxgc_constraints;
+        num_chains=4,
+        num_samples=40,
+        num_warmup=40,
+        rng=MersenneTwister(368),
+    )
+
+    # Bare names work on HMCChains and accept UncertainTea's keywords.
+    @test rhat(mcxgc_chains) == UncertainTea.rhat(mcxgc_chains)
+    @test rhat(mcxgc_chains; method=:rank, space=:unconstrained) ==
+          UncertainTea.rhat(mcxgc_chains; method=:rank, space=:unconstrained)
+    @test ess(mcxgc_chains) == UncertainTea.ess(mcxgc_chains)
+    @test ess(mcxgc_chains; space=:unconstrained) ==
+          UncertainTea.ess(mcxgc_chains; space=:unconstrained)
+    @test summarize(mcxgc_chains) isa UncertainTea.HMCSummary
+    @test summarize(mcxgc_chains; per_chain=true, quantiles=(0.25, 0.75)) isa
+          UncertainTea.HMCSummary
+
+    # Keyword vocabularies are deliberately NOT aliased: MCMCDiagnosticTools'
+    # `kind` keyword is rejected on HMCChains (its `kind=:basic` is the
+    # non-split classic R-hat, which has no UncertainTea counterpart).
+    @test_throws MethodError rhat(mcxgc_chains; kind=:rank)
+
+    # The same (now unambiguous) generics still serve converted Chains objects
+    # with the MCMCChains/MCMCDiagnosticTools behavior and keywords.
+    mcxgc_chn = to_mcmcchains(mcxgc_chains)
+    @test mcxgc_chn isa Chains
+    mcxgc_mc_rhat = rhat(mcxgc_chn)                 # default kind=:rank
+    mcxgc_mc_ess = ess(mcxgc_chn)
+    @test summarize(mcxgc_chn) isa MCMCChains.ChainDataFrame
+
+    # Round-trip agreement: UncertainTea's rank-normalized split-Rhat vs
+    # MCMCDiagnosticTools' default `kind=:rank` on the converted chains. Both
+    # implement Vehtari et al. (2021); tiny differences remain from
+    # quantile-interpolation details in the folded statistic's median, so the
+    # comparison uses atol=1e-3 (observed ~1e-5 on this seed).
+    mcxgc_ut_rank = UncertainTea.rhat(mcxgc_chains; method=:rank)
+    for (index, name) in enumerate(Symbol.(UncertainTea.parameter_names(mcxgc_chains)))
+        row = findfirst(==(name), mcxgc_mc_rhat[:, :parameters])
+        @test row !== nothing
+        @test isapprox(mcxgc_ut_rank[index], mcxgc_mc_rhat[row, :rhat]; atol=1e-3)
+    end
+
+    # Bulk ESS uses a different estimator on each side (UncertainTea: paired
+    # autocorrelation sums; MCMCDiagnosticTools: rank-normalized FFT autocov),
+    # so only loose agreement is expected — same order of magnitude.
+    mcxgc_ut_ess = UncertainTea.ess(mcxgc_chains)
+    for (index, name) in enumerate(Symbol.(UncertainTea.parameter_names(mcxgc_chains)))
+        row = findfirst(==(name), mcxgc_mc_ess[:, :parameters])
+        @test row !== nothing
+        @test isapprox(mcxgc_ut_ess[index], mcxgc_mc_ess[row, :ess]; rtol=0.5)
+    end
+
+    # Qualified calls keep working unchanged alongside the merged generic.
+    @test UncertainTea.rhat(mcxgc_chains) == rhat(mcxgc_chains)
+end
+
+end # module MCXGenericsConvention

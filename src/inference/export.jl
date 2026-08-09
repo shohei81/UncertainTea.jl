@@ -228,12 +228,26 @@ per-draw sampler statistics `:lp`, `:diverging`, `:energy`, `:tree_depth`, and
 [`to_arviz_dict`](@ref)).
 
 !!! note "Name collisions with MCMCChains"
-    `MCMCChains` also exports `summarize`, `ess`, and `rhat`, so after
-    `using UncertainTea, MCMCChains` the unqualified names are ambiguous and
-    raise an error. Call the UncertainTea versions qualified when both
-    packages are loaded, e.g. `UncertainTea.summarize(chains)`,
-    `UncertainTea.ess(chains)`, `UncertainTea.rhat(chains)` — or use the
-    MCMCChains versions on the converted `Chains` object.
+    `MCMCChains` also exports `summarize`, `ess`, and `rhat` (the latter two
+    re-exported from MCMCDiagnosticTools), so after
+    `using UncertainTea.Diagnostics, MCMCChains` the unqualified names are
+    ambiguous and error on use. The extension adds `HMCChains` methods to the
+    MCMCChains-side generics, so one explicit import merges the two surfaces:
+
+    ```julia
+    using UncertainTea, UncertainTea.Inference, UncertainTea.Diagnostics
+    using MCMCChains
+    using MCMCChains: ess, rhat, summarize   # resolve the name clash
+    ```
+
+    After that line the bare names dispatch on both `HMCChains` (with
+    UncertainTea's keywords — `space`, and `method` for `rhat`) and converted
+    `Chains` objects (with MCMCChains'/MCMCDiagnosticTools' keywords). The
+    keyword vocabularies are deliberately not aliased: MCMCDiagnosticTools'
+    `kind` is rejected on `HMCChains` because its values do not map 1:1 onto
+    UncertainTea's `method` (e.g. `kind=:basic` is the non-split classic
+    R-hat). Qualified calls (`UncertainTea.summarize(chains)`, ...) keep
+    working unchanged.
 """
 function to_mcmcchains end
 

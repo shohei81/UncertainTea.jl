@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **MCMCChains diagnostics generics** (#368): the MCMCChains package extension
+  now adds `HMCChains` methods to `MCMCDiagnosticTools.ess`/`rhat` and
+  `MCMCChains.summarize` (forwarding to UncertainTea's implementations with
+  UncertainTea's keywords — `space`, and `method` for `rhat`). After
+  `using UncertainTea.Diagnostics, MCMCChains` the bare names are ambiguous
+  (both modules export them); the recommended convention is one explicit
+  import, `using MCMCChains: ess, rhat, summarize`, after which the bare names
+  dispatch on both `HMCChains` and converted `Chains` objects. Keyword
+  vocabularies are deliberately not aliased (MCMCDiagnosticTools' `kind` is
+  rejected on `HMCChains`). `MCMCDiagnosticTools` joins the extension's
+  trigger packages as a weak dependency (it is always loaded whenever
+  `MCMCChains` is, so nothing changes for users). Qualified calls keep working
+  unchanged.
+
 ## v0.2.0 (2026-08-08)
 
 ### Breaking
