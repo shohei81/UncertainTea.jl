@@ -54,9 +54,11 @@ function batched_nuts(
     # Host reverse-mode AD gradient selection (issue #268, A2). `:auto` uses
     # reverse mode when it is safe and beneficial (Enzyme loaded, the model is on
     # the generated-scorer path, the batch shares one posterior, the parameter
-    # count clears the threshold, and a trial gradient compiles) and forward mode
-    # otherwise; `:forward`/`:reverse` override. Reverse mode is host-only, so it
-    # does not apply to the device (`backend`) path.
+    # count clears the threshold, the plan has no noncentered dependent-transform
+    # steps — those compile to a slower reverse objective, issue #379 — and a
+    # trial gradient compiles) and forward mode otherwise; `:forward`/`:reverse`
+    # override. Reverse mode is host-only, so it does not apply to the device
+    # (`backend`) path.
     adtype in (:auto, :forward, :reverse) ||
         throw(ArgumentError("batched_nuts adtype must be :auto, :forward, or :reverse, got $(repr(adtype))"))
     !(adtype === :reverse && backend !== nothing) ||
